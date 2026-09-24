@@ -1,3 +1,7 @@
+mod disks;
+
+use disks::list_volumes;
+
 #[tauri::command]
 fn ping() -> &'static str {
     "pong"
@@ -13,7 +17,7 @@ pub fn run() {
             Some(vec!["--autostart"]),
         ))
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![ping])
+        .invoke_handler(tauri::generate_handler![ping, list_volumes])
         .run(tauri::generate_context!())
         .expect("error while running Sift");
 }
