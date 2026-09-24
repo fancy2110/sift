@@ -1,6 +1,8 @@
 mod disks;
+mod scanner;
 
 use disks::list_volumes;
+use scanner::{cancel_scan, set_scan_focus, start_scan, ScanManager};
 
 #[tauri::command]
 fn ping() -> &'static str {
@@ -17,7 +19,14 @@ pub fn run() {
             Some(vec!["--autostart"]),
         ))
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![ping, list_volumes])
+        .manage(ScanManager::new())
+        .invoke_handler(tauri::generate_handler![
+            ping,
+            list_volumes,
+            start_scan,
+            cancel_scan,
+            set_scan_focus
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Sift");
 }
