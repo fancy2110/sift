@@ -1,7 +1,21 @@
 export type Risk = 'safe' | 'review' | 'keep';
 export type AutoMode = 'approve' | 'auto';
 
-export interface Insight {
+/** A live filesystem node streamed in by the backend scanner. */
+export interface FileNode {
+  id: string;
+  parentId: string | null;
+  name: string;
+  path: string;
+  isDir: boolean;
+  size: number;
+  modifiedMs: number | null;
+  deletable: boolean;
+  /** Directory whose subtree scan hasn't finished. */
+  pending: boolean;
+}
+
+export interface Finding {
   id: string;
   title: string;
   /** One-line AI conclusion: why this is here and what happens on clean. */
@@ -12,10 +26,8 @@ export interface Insight {
   confidence: number; // 0..1
   /** learned from the user's repeated decisions */
   learned?: boolean;
-  /** added ad-hoc by the user via the tile context menu */
+  /** added ad-hoc by the user via the context menu */
   manual?: boolean;
-  /** scope this insight belongs to */
-  locId: string;
 }
 
 export interface Routine {
@@ -26,54 +38,12 @@ export interface Routine {
   autoMode: AutoMode;
 }
 
-export interface FileNode {
-  name: string;
-  size: number;
-  note?: string;
-  children?: FileNode[];
-  /** Links this node to an AI insight when it represents an actionable item. */
-  insightId?: string;
-  /** AI verdict for this node; drives the judgment overlay on the map. */
-  risk?: Risk;
-  /** File extension (leaf files only). */
-  ext?: string;
-  /** Last-modified epoch ms (leaf files only). */
-  lastModified?: number;
-  /** Whether the current user is allowed to delete this item. */
-  deletable?: boolean;
-}
-
-export type LocationIcon =
-  | 'drive'
-  | 'externalDrive'
-  | 'home'
-  | 'download'
-  | 'desktop'
-  | 'film'
-  | 'trash'
-  | 'folder';
-
-export interface ScanLocation {
+export interface VolumeInfo {
   id: string;
   name: string;
-  /** Absolute-ish display path. */
-  path: string;
-  icon: LocationIcon;
-  /** Menu grouping: physical disks vs quick folders. */
-  group: 'disk' | 'places';
-  /** Owning volume id; drives capacity readout and tree lookup. */
-  diskId: string;
-  /** Path of the subtree inside the disk tree; undefined = whole tree. */
-  subtreePath?: string[];
-  /** User-picked folders are generated, not seeded. */
-  custom?: boolean;
-}
-
-export interface Volume {
-  /** Matches the disk-location id. */
-  id: string;
-  name: string;
-  capacity: number;
-  used: number;
-  external?: boolean;
+  mountPoint: string;
+  totalBytes: number;
+  availableBytes: number;
+  isRemovable: boolean;
+  fileSystem: string;
 }
