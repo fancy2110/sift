@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "sift/index.html",
+  "entry": "sift/index.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-09-20T14:24:20.925Z",
+  "updatedAt": "2026-09-23T09:20:09.131Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}
