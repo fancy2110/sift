@@ -11,7 +11,8 @@
     pending = false,
     focusNodeId = null,
     onHoverId,
-    onDrill
+    onDrill,
+    onContextNode
   }: {
     entries: FileNode[];
     totalSize?: number;
@@ -19,6 +20,7 @@
     focusNodeId?: string | null;
     onHoverId?: (id: string | null) => void;
     onDrill?: (id: string) => void;
+    onContextNode?: (node: FileNode, clientX: number, clientY: number) => void;
   } = $props();
 
   const OTHER_ID = '__other__';
@@ -380,6 +382,12 @@
         tabindex="0"
         aria-label={t.other ? `其他 ${t.count} 项` : t.node!.name}
         onclick={() => clickTile(t)}
+        oncontextmenu={(e: MouseEvent) => {
+          if (!t.other && t.node) {
+            e.preventDefault();
+            onContextNode?.(t.node, e.clientX, e.clientY);
+          }
+        }}
         onkeydown={(e) => onTileKey(t, e)}
         onmouseenter={() => {
           hoverKey = t.key;

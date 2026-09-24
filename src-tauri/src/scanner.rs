@@ -203,10 +203,6 @@ impl Pending {
             }
         }
     }
-
-    fn len(&self) -> usize {
-        self.queued.len()
-    }
 }
 
 // ---- per-directory accounting ----------------------------------------------

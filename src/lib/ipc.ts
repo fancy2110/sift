@@ -20,6 +20,20 @@ export function setScanFocus(focus: string): Promise<void> {
   return invoke('set_scan_focus', { focus });
 }
 
+export interface DeleteResultItem {
+  path: string;
+  ok: boolean;
+  error: string | null;
+}
+
+export function moveToTrash(paths: string[]): Promise<DeleteResultItem[]> {
+  return invoke('move_to_trash', { paths });
+}
+
+export function watchFs(root: string): Promise<void> {
+  return invoke('watch_fs', { root });
+}
+
 // ---- streamed events -------------------------------------------------------
 
 export interface SizedEvent {
@@ -53,4 +67,13 @@ export function onProgress(cb: (e: ProgressEvent) => void): Promise<UnlistenFn> 
 
 export function onScanDone(cb: (e: ScanDoneEvent) => void): Promise<UnlistenFn> {
   return listen<ScanDoneEvent>('scan://done', (e) => cb(e.payload));
+}
+
+export interface DeletedEvent {
+  id: string;
+  path: string;
+}
+
+export function onFsDeleted(cb: (e: DeletedEvent) => void): Promise<UnlistenFn> {
+  return listen<DeletedEvent>('fs://deleted', (e) => cb(e.payload));
 }

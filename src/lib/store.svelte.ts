@@ -1,11 +1,15 @@
 import {
   listVolumes,
+  moveToTrash,
   onDiscovered,
+  onFsDeleted,
   onProgress,
   onScanDone,
   onSized,
   setScanFocus,
-  startScan
+  startScan,
+  watchFs,
+  type DeleteResultItem
 } from './ipc';
 import type { FileNode, Routine, VolumeInfo } from './types';
 
@@ -25,9 +29,7 @@ class AppStore {
 
   /** All discovered nodes keyed by stable id (per active scan). */
   nodes = $state<Map<string, FileNode>>(new Map());
-  /** Root directory id of the active scan. */
   rootId = $state<string | null>(null);
-  /** Directory the user is currently viewing. */
   currentNodeId = $state<string | null>(null);
 
   scanning = $state(false);
@@ -37,12 +39,14 @@ class AppStore {
   toasts = $state<Toast[]>([]);
   autoOn = $state(true);
 
-  /** Routines (populated by the routines backend later). */
   routines = $state<Routine[]>([]);
   runningRoutineId = $state<string | null>(null);
   cleanedBytes = $state(0);
 
-  /** Drawer visibility + cross-pane focus. */
+  /** Deletion candidate node ids. */
+  selectedIds = $state<Set<string>>(new Set());
+  cleaning = $state(false);
+
   drawerOpen = $state(false);
   focusNodeId = $state<string | null>(null);
 
@@ -57,7 +61,6 @@ class AppStore {
     return this.currentNodeId ? (this.nodes.get(this.currentNodeId) ?? null) : null;
   }
 
-  /** Root → current breadcrumb chain. */
   get breadcrumbs(): FileNode[] {
     const chain: FileNode[] = [];
     let cur = this.currentNode;
@@ -68,7 +71,6 @@ class AppStore {
     return chain;
   }
 
-  /** Children of the current directory: folders first, then by size. */
   get listEntries(): FileNode[] {
     const pid = this.currentNodeId;
     if (!pid) return [];
@@ -82,7 +84,6 @@ class AppStore {
     });
   }
 
-  /** Children carrying known sizes, used by the Treemap. */
   get tileEntries(): FileNode[] {
     return this.listEntries;
   }
@@ -91,37 +92,41 @@ class AppStore {
     return this.currentNode?.size ?? 0;
   }
 
+  get candidateNodes(): FileNode[] {
+    const out: FileNode[] = [];
+    for (const id of this.selectedIds) {
+      const n = this.nodes.get(id);
+      if (n) out.push(n);
+    }
+    return out.sort((a, b) => b.size - a.size);
+  }
+
+  get selectedBytes(): number {
+    return this.candidateNodes.reduce((s, n) => s + n.size, 0);
+  }
+
   // ---- lifecycle -----------------------------------------------------------
 
-  /** Initialise volumes and start the first scan exactly once. */
   async init() {
     if (this.started) return;
     this.started = true;
 
-    const unlisten = await Promise.all([
+    await Promise.all([
       onDiscovered((n) => this.handleDiscovered(n)),
       onSized((e) => this.handleSized(e.id, e.size, e.pending)),
       onProgress((p) => {
         this.scannedFiles = p.files;
         this.scannedDirs = p.dirs;
       }),
-      onScanDone((e) => {
+      onScanDone(() => {
         this.scanning = false;
-        if (this.currentNode) {
-          this.nodes.get(this.currentNode.id)!.pending = false;
-        }
-        if (this.autoOn && !e.cancelled) {
-          // Automatic cleanup is wired in a later milestone.
-        }
-      })
+      }),
+      onFsDeleted((e) => this.handleExternalDelete(e.id))
     ]);
 
     this.volumes = await listVolumes();
-    const preferred =
-      this.volumes.find((v) => !v.isRemovable) ?? this.volumes[0];
+    const preferred = this.volumes.find((v) => !v.isRemovable) ?? this.volumes[0];
     if (preferred) await this.selectVolume(preferred.id);
-
-    return unlisten;
   }
 
   // ---- event handling ------------------------------------------------------
@@ -143,6 +148,39 @@ class AppStore {
     }
   }
 
+  /** A node vanished outside the app (or after our own trash call). */
+  private handleExternalDelete(id: string) {
+    if (!this.nodes.has(id)) return;
+    this.pruneId(id);
+  }
+
+  private pruneId(id: string) {
+    // Collect the whole subtree for removal.
+    const remove = new Set<string>([id]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const n of this.nodes.values()) {
+        if (n.parentId && remove.has(n.parentId) && !remove.has(n.id)) {
+          remove.add(n.id);
+          grew = true;
+        }
+      }
+    }
+    const next = new Map<string, FileNode>();
+    for (const [k, v] of this.nodes) {
+      if (!remove.has(k)) next.set(k, v);
+    }
+    this.nodes = next;
+    const sel = new Set(this.selectedIds);
+    for (const r of remove) sel.delete(r);
+    this.selectedIds = sel;
+    if (remove.has(this.currentNodeId ?? '')) {
+      const parent = this.nodes.get(id)?.parentId ?? null;
+      this.currentNodeId = parent;
+    }
+  }
+
   // ---- volume selection ----------------------------------------------------
 
   async selectVolume(id: string) {
@@ -154,10 +192,13 @@ class AppStore {
     this.nodes = new Map();
     this.rootId = null;
     this.currentNodeId = null;
+    this.selectedIds = new Set();
     this.scanning = true;
     this.scannedFiles = 0;
     this.scannedDirs = 0;
     await startScan(vol.mountPoint, vol.mountPoint);
+    // Watch for external deletions; non-fatal where the backend lacks rights.
+    watchFs(vol.mountPoint).catch(() => undefined);
   }
 
   // ---- navigation ----------------------------------------------------------
@@ -169,21 +210,57 @@ class AppStore {
   }
 
   jumpCrumb(index: number) {
-    const chain = this.breadcrumbs;
-    const target = chain[index];
+    const target = this.breadcrumbs[index];
     if (target) {
       this.currentNodeId = target.id;
       setScanFocus(target.path);
     }
   }
 
-  goUp() {
-    const cur = this.currentNode;
-    if (cur?.parentId) {
-      this.currentNodeId = cur.parentId;
-      const p = this.nodes.get(cur.parentId);
-      if (p) setScanFocus(p.path);
+  // ---- candidates ----------------------------------------------------------
+
+  toggleSelected(id: string) {
+    const n = this.nodes.get(id);
+    if (!n || !n.deletable) return;
+    const next = new Set(this.selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    this.selectedIds = next;
+  }
+
+  async clean(): Promise<void> {
+    const targets = this.candidateNodes;
+    if (this.cleaning || targets.length === 0) return;
+    this.cleaning = true;
+    const paths = targets.map((n) => n.path);
+    let results: DeleteResultItem[] = [];
+    try {
+      results = await moveToTrash(paths);
+    } catch (e) {
+      this.toast(`删除失败：${String(e)}`);
+      this.cleaning = false;
+      return;
     }
+
+    const okPaths = results.filter((r) => r.ok).map((r) => r.path);
+    const bytes = okPaths.reduce((s, p) => {
+      const id = [...this.selectedIds].find((sid) => this.nodes.get(sid)?.path === p);
+      return s + (id ? (this.nodes.get(id)?.size ?? 0) : 0);
+    }, 0);
+
+    for (const r of results) {
+      if (!r.ok) this.toast(`无法删除「${r.path}」：${r.error ?? ''}`);
+    }
+    for (const p of okPaths) {
+      const sid = targets.find((t) => t.path === p)?.id;
+      if (sid) this.pruneId(sid);
+    }
+
+    this.cleanedBytes += bytes;
+    this.selectedIds = new Set();
+    this.cleaning = false;
+    this.drawerOpen = false;
+    this.toast(`已释放 ${gb(bytes)}（文件在回收站，可恢复）`);
   }
 
   toggleAuto() {
@@ -199,6 +276,10 @@ class AppStore {
       this.toasts = this.toasts.filter((t) => t.id !== id);
     }, 3200);
   }
+}
+
+function gb(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
 export const store = new AppStore();
