@@ -3,16 +3,26 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Sift — AI-native disk space manager for macOS (high-fidelity Svelte prototype)",
+  "description": "Sift — AI-native cross-platform disk space manager",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-autostart": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-notification": "^2",
+    "@tauri-apps/plugin-opener": "^2"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tailwindcss/vite": "^4.0.6",
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^26.6.2",
     "svelte": "^5.20.4",
     "svelte-check": "^4.1.4",
     "tailwindcss": "^4.0.6",
