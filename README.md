@@ -38,7 +38,7 @@ cargo run --release -p sift-scan --example scan_bench -- / --workers 8
 ### 常用校验
 
 ```bash
-cargo test                      # 全部 crate 的单元 + 集成测试
+cargo test                      # 278 项：单元 + 集成 + GPUI 交互级 UI 测试
 cargo clippy --all-targets
 pnpm check                      # Svelte 类型检查
 cargo run --release -p sift-scan --example scan_bench -- <path>

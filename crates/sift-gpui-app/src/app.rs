@@ -56,6 +56,20 @@ impl AppView {
         // The store is opened before the first frame so its file I/O never
         // competes with rendering; load problems surface as notifications.
         let (store, warnings) = Store::open_default();
+        Self::with_store(store, warnings, window, cx)
+    }
+
+    /// Build the view on an explicit store.
+    ///
+    /// The entry point for tests, and for a future "open a specific workspace"
+    /// flow: the store decides where conclusions live, so it belongs to the
+    /// caller rather than being discovered inside the view.
+    pub fn with_store(
+        store: Store,
+        warnings: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let model = cx.new(|_| WorkspaceModel::new());
         let focus_handle = cx.focus_handle();
         let services = Services::new(model.clone(), Arc::new(store), warnings, cx);
@@ -109,9 +123,21 @@ impl AppView {
         }
     }
 
-    fn on_dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        // Escape clears the queue first (the lighter commitment), then the
-        // highlight; it never closes the window.
+    fn on_dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        // Escape dismisses the topmost layer first: a dialog, then a sheet, and
+        // only then the in-window state. Without this the sheet swallowed the
+        // key while the queue was cleared behind it — a UI integration test
+        // caught exactly that.
+        if window.has_active_dialog(cx) {
+            window.close_dialog(cx);
+            return;
+        }
+        if window.has_active_sheet(cx) {
+            window.close_sheet(cx);
+            return;
+        }
+        // Nothing to dismiss: clear the queue (the lighter commitment), then the
+        // highlight. Escape never closes the window.
         self.model.update(cx, |model, cx| {
             if model.selection().is_empty() {
                 model.set_focus(None);

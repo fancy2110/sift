@@ -7,6 +7,10 @@ license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 
+[lib]
+name = "sift_gpui_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sift-gpui-app"
 path = "src/main.rs"
@@ -21,3 +25,9 @@ sift-monitor = { workspace = true }
 serde = { workspace = true }
 dirs = "6"
 gpui-kit = { workspace = true }
+
+[dev-dependencies]
+# The same crate and version as the dependency above, plus the headless test
+# support the UI integration tests need.
+gpui-kit = { version = "0.6.6", features = ["test-support"] }
+tempfile = "3"

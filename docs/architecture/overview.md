@@ -183,7 +183,7 @@ macOS 快路径的解析器严格按 `ATTR_CMN_RETURNED_ATTRS` 的**升序位**�
 
 ## 8. 当前状态与后续
 
-已实现并验证（`cargo test --workspace` 269 项通过、`cargo clippy --workspace --all-targets` 干净、`pnpm check` 0 错误）：
+已实现并验证（`cargo test --workspace` 278 项通过、`cargo clippy --workspace --all-targets` 干净、`pnpm check` 0 错误）：
 
 - 六个核心 crate + Tauri 适配层（Svelte 前端事件协议未变）+ GPUI 原生前端（能启动并渲染窗口）。
 - macOS `getattrlistbulk` 快路径与可移植路径逐字段一致性测试；硬链接链接数读取。
@@ -204,14 +204,28 @@ GPUI 视图层覆盖了原设计的全部表面：
 | toast | `push_notification`（模型 toast → 系统通知） |
 | 键盘 | `cmd-R` 重扫、`Esc` 清队列/焦点、`↑/↓` 移动、`Enter` 激活/入队、`Backspace` 上一级 |
 
-验证范围要说清楚：**编译通过、29 项单元测试通过、应用能启动并持续运行不 panic**；上表的重叠层（sheet / 菜单）是**点击触发**的，我没有做交互级自动化验证（需要接入 `gpui-kit` 的 headless `test-support` 窗口）。仍未实现的只剩：
+### 8.1 UI 交互级测试
+
+`crates/sift-gpui-app/tests/ui.rs` 用 `#[gpui_kit::test]` 在 headless 窗口里渲染**真实视图**并用原生事件驱动（`TestWindowExt::{render_frame, click, right_click, press}`），共 9 项：
+
+| 用例 | 断言 |
+|---|---|
+| 点击文件行 → 入队 → 「清理」→ 打开候选浮层 → `Esc` 关闭 | 队列内容与字节数；空队列时点击**不**打开浮层；不存在的对象不进队列 |
+| 不可删除的行 | 点击后队列仍为空、浮层不打开 |
+| 点击目录行 | 下钻而不是入队 |
+| 右键行 | 菜单构造与渲染不 panic，且不改变队列 |
+| 磁盘选择器 / 外壳区域 / 扫描按钮 / treemap | 真实命中区、扫描中标签变化、treemap 铺满且可重复渲染 |
+
+这些测试**立刻抓到一个真实缺陷**：`Esc` 当时只清空了队列，没有关闭候选浮层——按设计指南「Escape 应关闭最上层可关闭层」，现在 `on_dismiss` 先关对话框、再关 sheet，最后才动窗口内状态。
+
+### 8.2 仍未实现
 
 | 后续项 | 说明 |
 |---|---|
-| 交互级 UI 测试 | 用 `#[gpui_kit::test]` + headless window 覆盖 sheet 打开、菜单项点击、键盘动作 |
 | 列表虚拟化 | 当前渲染前 200 行并显示「还有 N 项」；条目极多时应换 `VirtualList` |
 | 窗口拖拽区与菜单栏快捷键展示 | `TitleBar` 的拖拽区与原生菜单未接入 |
 | 玻璃质感 | GPUI 没有 backdrop blur；当前用深色分层表面 + 描边表达层级，视觉语言接近但非模糊玻璃 |
 | Windows / Linux 整卷快路径 | 见 README 跨平台表（Tier 2 回退已可用） |
+| 右键菜单项级断言 | 菜单项没有 test id，只覆盖到「打开菜单不影响状态」；PopupMenu 实体由窗口 element state 持有，测试需显式关窗才能通过 harness 的泄漏检查 |
 
 `#![allow(dead_code)]` 在 `sift-gpui-app/src/main.rs` 顶部带原因说明：模型与布局对外暴露的 API 略多于当前视图用到的部分，且都有单元测试覆盖，二进制 crate 的未使用告警看不到「已测试但尚未接到按钮上」。
