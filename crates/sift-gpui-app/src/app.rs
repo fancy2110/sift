@@ -9,15 +9,17 @@
 //! analyze, or decide what is deletable — [`crate::model::WorkspaceModel`] holds
 //! every display decision, and the `sift-*` crates hold every product rule.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{Disableable as _, WindowExt as _};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Selectable as _, Sizable as _, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, FocusHandle, KeyBinding, Render, Window, div};
-use sift_core::NodeKey;
+use sift_core::{NodeKey, Volume};
 use sift_store::Store;
 
 use crate::model::{ToastLevel, WorkspaceModel};
@@ -263,24 +265,59 @@ impl AppView {
             (model.volumes().to_vec(), model.current_volume_id())
         };
 
-        let mut row = h_flex().flex_shrink_0().items_center().gap_1().px_3().pb_2();
-        for volume in volumes {
-            let is_current = Some(volume.id) == current;
-            let id = volume.id;
-            row = row.child(
-                Button::new(format!("volume-{}", volume.id.raw()))
-                    .label(format!(
-                        "{} · {}",
-                        volume.name,
-                        sift_core::format_bytes(volume.available_bytes)
-                    ))
-                    .xsmall()
-                    .when(is_current, |button| button.selected(true))
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.services.select_volume(id, cx);
-                    })),
-            );
-        }
+        // One control, not a row of buttons: a machine can mount many volumes,
+        // and a picker is the desktop pattern for "choose one of N".
+        let volumes_for_menu: Rc<Vec<Volume>> = Rc::new(volumes);
+        let this = cx.entity();
+        let current_label = current
+            .and_then(|id| {
+                volumes_for_menu
+                    .iter()
+                    .find(|volume| volume.id == id)
+                    .map(|volume| {
+                        format!(
+                            "{} · {} 可用",
+                            volume.name,
+                            sift_core::format_bytes(volume.available_bytes)
+                        )
+                    })
+            })
+            .unwrap_or_else(|| "选择磁盘".to_string());
+        let current_for_menu = current;
+        let volumes_menu = volumes_for_menu.clone();
+
+        let row = h_flex().flex_shrink_0().items_center().gap_2().px_3().pb_2().child(
+            Button::new("volume-picker")
+                .label(current_label)
+                .xsmall()
+                .dropdown_menu(move |mut menu, _window, _cx| {
+                    for volume in volumes_for_menu.iter() {
+                        let id = volume.id;
+                        let selected = Some(id) == current_for_menu;
+                        let label = format!(
+                            "{} · {} / {}",
+                            volume.name,
+                            sift_core::format_bytes(volume.available_bytes),
+                            sift_core::format_bytes(volume.total_bytes)
+                        );
+                        let this = this.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(label)
+                                .checked(selected)
+                                .on_click(move |_, _window, cx| {
+                                    this.update(cx, |view, cx| view.services.select_volume(id, cx));
+                                }),
+                        );
+                    }
+                    let this = this.clone();
+                    menu.separator().item(
+                        PopupMenuItem::new("所有磁盘").on_click(move |_, _window, cx| {
+                            this.update(cx, |view, cx| view.services.show_all_volumes(cx));
+                        }),
+                    )
+                }),
+        );
+        let _ = volumes_menu;
 
         // Breadcrumbs navigate inside the app, so they are Buttons, never Links.
         let crumbs: Vec<(NodeKey, String)> = {
@@ -404,8 +441,59 @@ impl AppView {
         let mut list = v_flex().flex_1().min_h_0().p_1();
         for (key, name, size, is_dir, selected) in rows {
             let label = format!("{name}   {size}");
+            // The row offers its object-scoped commands on right-click. The
+            // same commands stay reachable without a pointer: clicking selects,
+            // and the findings panel carries the approval toggle.
+            let approval = {
+                let model = self.model.read(cx);
+                model
+                    .findings()
+                    .iter()
+                    .find(|finding| finding.key == key)
+                    .map(|finding| finding.approved_for_auto)
+            };
+            let this = cx.entity();
+            let row_menu = move |mut menu: gpui_kit::component::menu::PopupMenu,
+                                 _window: &mut Window,
+                                 _cx: &mut gpui_kit::Context<gpui_kit::component::menu::PopupMenu>| {
+                let toggler = this.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(if selected {
+                        "从删除队列移除"
+                    } else {
+                        "加入删除队列"
+                    })
+                    .on_click(move |_, _, cx| {
+                        toggler.update(cx, |view, cx| {
+                            view.model.update(cx, |model, cx| {
+                                model.toggle_selected(key);
+                                cx.notify();
+                            });
+                        });
+                    }),
+                );
+                if let Some(approved) = approval {
+                    let approver = this.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(if approved {
+                            "取消允许自动清理"
+                        } else {
+                            "允许自动清理"
+                        })
+                        .on_click(move |_, _, cx| {
+                            approver.update(cx, |view, cx| {
+                                view.services.set_auto_approval(key, !approved, cx);
+                            });
+                        }),
+                    );
+                }
+                menu
+            };
+
             list = list.child(
                 h_flex()
+                    .id(format!("row-wrapper-{}", key.raw()))
+                    .context_menu(row_menu)
                     .w_full()
                     .gap_2()
                     .items_center()
@@ -570,6 +658,110 @@ impl AppView {
             .child(list)
     }
 
+    /// The cleanup candidate sheet: what is queued, and the one action that
+    /// moves it.
+    ///
+    /// A sheet rather than an inline commit because the queue can be long and
+    /// the user should see exactly what is about to leave before it does. The
+    /// commit still only moves items to the trash.
+    fn open_candidate_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let items: Vec<(String, String, u64, bool)> = self
+            .model
+            .read(cx)
+            .selected_items()
+            .iter()
+            .map(|node| {
+                (
+                    node.name.clone(),
+                    node.path.to_string_lossy().into_owned(),
+                    node.size.reclaimable(),
+                    node.is_dir,
+                )
+            })
+            .collect();
+        if items.is_empty() {
+            return;
+        }
+        let count = items.len();
+        let total: u64 = items.iter().map(|(_, _, size, _)| *size).sum();
+        let this = cx.entity();
+
+        window.open_sheet(cx, move |sheet, _window, _cx| {
+            let mut list = v_flex().gap_1().p_2();
+            for (name, path, size, is_dir) in items.clone() {
+                list = list.child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_sm()
+                                .child(if is_dir {
+                                    format!("{name}/")
+                                } else {
+                                    name
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(_cx.theme().muted_foreground)
+                                .child(sift_core::format_bytes(size)),
+                        ),
+                );
+                list = list.child(
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(_cx.theme().muted_foreground)
+                        .child(path),
+                );
+            }
+
+            let commit = {
+                let this = this.clone();
+                Button::new("candidate-commit")
+                    .label(format!(
+                        "清理 {} 项 · {}",
+                        count,
+                        sift_core::format_bytes(total)
+                    ))
+                    .danger()
+                    .on_click(move |_, window, cx| {
+                        this.update(cx, |view, cx| view.services.trash_selection(cx));
+                        window.close_sheet(cx);
+                    })
+            };
+            let cancel = Button::new("candidate-cancel")
+                .label("取消")
+                .ghost()
+                .on_click(|_, window, cx| window.close_sheet(cx));
+
+            sheet
+                .title(format!("清理候选 · {count} 项"))
+                .child(list)
+                .footer(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_xs()
+                                .text_color(_cx.theme().muted_foreground)
+                                .child("移入回收站，可恢复"),
+                        )
+                        .child(cancel)
+                        .child(commit),
+                )
+        });
+    }
+
     fn render_footer(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Copy the colours out of the theme: `cx.theme()` borrows the app, and
         // the builder chains below also call `cx.listener`, which needs `cx`
@@ -625,7 +817,9 @@ impl AppView {
                     // than a modal.
                     .danger()
                     .disabled(selected_count == 0)
-                    .on_click(cx.listener(|view, _, _, cx| view.services.trash_selection(cx))),
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.open_candidate_sheet(window, cx);
+                    })),
             )
     }
 
