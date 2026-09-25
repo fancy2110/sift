@@ -10,7 +10,7 @@ use sift_gpui_app::app::AppView;
 use sift_gpui_app::theme;
 
 fn main() {
-    gpui_kit::application().run(|cx| {
+    gpui_kit::application().with_assets(sift_gpui_app::assets::SiftAssets).run(|cx| {
         gpui_kit::init(cx);
         theme::install(cx);
 

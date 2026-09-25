@@ -93,7 +93,8 @@ mod macos {
     fn context() -> HeadlessAppContext {
         let mut cx = HeadlessAppContext::with_platform(
             gpui_kit::platform::current_platform(true).text_system(),
-            Arc::new(gpui_kit::assets::Assets),
+            // The design's own icons, so a screenshot shows the real glyphs.
+            Arc::new(sift_gpui_app::assets::SiftAssets),
             gpui_kit::platform::current_headless_renderer,
         );
         cx.update(gpui_kit::init);
@@ -101,14 +102,12 @@ mod macos {
         cx
     }
 
-    fn seed(view: &gpui_kit::Entity<AppView>, cx: &mut gpui_kit::App, dir: &str, entries: Vec<DirectoryEntry>) {
+    /// Put a disk in the window, as the platform enumeration does at launch.
+    fn seed_volume(view: &gpui_kit::Entity<AppView>, cx: &mut gpui_kit::App) {
         view.update(cx, |view, cx| {
             view.model().update(cx, |model, cx| {
-                // The nav and the summary capsule read a volume, so a screenshot
-                // without one would show a screen a user never sees.
-                let id = VolumeId::from_mount_point(std::path::Path::new("/"));
-                model.set_volumes(vec![Volume::new(
-                    id,
+                model.adopt_volumes(vec![Volume::new(
+                    VolumeId::from_mount_point(std::path::Path::new("/")),
                     "Macintosh HD",
                     "/",
                     1_941_354_332_160,
@@ -116,7 +115,14 @@ mod macos {
                     false,
                     "APFS",
                 )]);
-                model.select_volume(id);
+                cx.notify();
+            });
+        });
+    }
+
+    fn seed(view: &gpui_kit::Entity<AppView>, cx: &mut gpui_kit::App, dir: &str, entries: Vec<DirectoryEntry>) {
+        view.update(cx, |view, cx| {
+            view.model().update(cx, |model, cx| {
                 model.begin_scan();
                 model.apply_scan_event(ScanEvent::DirectoryListed {
                     scan: ScanId(1),
@@ -142,6 +148,7 @@ mod macos {
     /// Render one scenario and write it to `target/ui-shots/<name>.png`.
     fn shoot(
         name: &str,
+        seed_scan: bool,
         prepare: impl FnOnce(&mut HeadlessAppContext, &gpui_kit::Entity<AppView>),
     ) {
         let mut cx = context();
@@ -149,7 +156,12 @@ mod macos {
         let handle = cx
             .open_window(size(px(W), px(H)), |window: &mut Window, cx| {
                 let view = cx.new(|cx| AppView::with_store(temp_store(), Vec::new(), window, cx));
-                seed(&view, cx, "/Users/dev", home_listing());
+                // Every scenario has a disk: the window shows which one it is on
+                // from the moment it opens, and only the walk waits for a click.
+                seed_volume(&view, cx);
+                if seed_scan {
+                    seed(&view, cx, "/Users/dev", home_listing());
+                }
                 captured = Some(view.clone());
                 cx.new(|cx| Root::new(view, window, cx))
             })
@@ -174,8 +186,10 @@ mod macos {
     }
 
     pub fn run() {
-        shoot("shell", |_, _| {});
-        shoot("popup", |cx, view| {
+        shoot("shell", true, |_, _| {});
+        // Before the user asks: no walk, and the window has to say so.
+        shoot("idle", false, |_, _| {});
+        shoot("popup", true, |cx, view| {
             // Queue three rows the way a user would, then open the popup through
             // the same seam the capsule calls.
             view.update(cx, |view, cx| {
@@ -192,7 +206,7 @@ mod macos {
                 view.open_candidates(cx);
             });
         });
-        shoot("scanning", |cx, view| {
+        shoot("scanning", true, |cx, view| {
             view.update(cx, |view, cx| {
                 view.model().update(cx, |model, cx| {
                     model.begin_scan();

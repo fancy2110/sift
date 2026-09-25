@@ -25,9 +25,6 @@ sift-monitor = { workspace = true }
 serde = { workspace = true }
 dirs = "6"
 gpui-kit = { workspace = true }
-# The full Lucide icon catalog. GPUI Kit re-exports a small subset on its
-# components; the design uses names outside it (Layers, HardDrive, RefreshCw).
-gpui-kit-assets = "0.6.6"
 
 [dev-dependencies]
 # `Window::render_to_image` hands back an `image::RgbaImage`; the rendering

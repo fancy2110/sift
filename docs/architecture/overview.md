@@ -255,7 +255,34 @@ python3 tools/png_sample.py <png> X Y ...      # 读任意像素/区域均值
 
 **这一轮从截图上抓到的缺陷**：方块标签只显示首字母、整图平移、行高 27px（应 32px）、`Photos Library.photoslibrary` 把大小列挤出面板（缺 `truncate`）、列表不能滚动、候选弹层高度随内容塌缩（设计稿是固定高）、页脚主按钮没靠右、文件行多了一个设计稿没有的高亮底色（设计稿只用 `row-dim` 压暗其余项）。
 
-### 8.3 仍未实现
+### 8.3 三个逻辑错误的根因（第二轮返工）
+
+截图对得上了，但用起来还是错的。三条反馈都追到了具体代码：
+
+**1. 「磁盘目录的数据错误，逻辑关系异常」——选中的磁盘没有写进模型。**
+
+`accept_volumes` 把选中的卷存进 `Services` 自己的字段，然后直接开始扫描，**从未调用 `model.select_volume(..)`**。于是模型里 `current_volume` 是 `None`：选择器只能显示「—」，底部胶囊拿不到可用空间——而同一时刻正在扫这块盘。这是"两个地方各存一份真相"的典型后果。
+
+修法不是补一次调用，而是把选择策略搬到状态所在的模型里：新增 `WorkspaceModel::adopt_volumes(volumes) -> Option<Volume>`，由它决定「保留当前盘还是选系统盘」，并保证「同一份列表刷新时不丢掉正在看的树」。Services 只剩remember 答案。
+
+回归测试 `the_window_knows_its_disk_and_waits_to_be_asked` 走**真实卷枚举**（`sift_platform::volume::list_volumes()` → `Services::refresh_volumes` → 模型），断言模型知道盘名且没有开扫。`refresh_volumes` 不是测试专用口子：UI 的磁盘刷新本来就需要一个同步重列入口（启动路径那条走后台线程 + 泵）。
+
+**2. 「文件夹的样式错误，与 tauri 差距巨大」——图标不是同一套。**
+
+设计稿**没有用图标库**：`src/lib/components/Icon.svelte` 里是一张手写的 24×24 路径表，`fill="none" stroke="currentColor" stroke-width="1.7"` 圆角端点。我这边用的是 GPUI Kit 的 Lucide 目录（线宽 2、几何不同）。文件夹的折角、硬盘的圆角矩形因此明显不是一个东西。
+
+现在 `assets/sift-icons/*.svg` 逐条誊写设计稿的 `d` 属性（folder / hard-drive / external-drive / check / x / chevron-* / refresh / spark / layers / search / trash / alert / info / home / lock / clock / bolt / file，共 20 个），由 `assets::SiftAssets` 以 `sift-icons/<name>.svg` 提供，`stroke="currentColor"` 让颜色跟随主题令牌；非本命名空间的路径回落到 GPUI Kit 自己的目录，组件图标照常。`gpui-kit-assets` 依赖随之删除。
+
+**3. 「不是启动就开始检索，需要点击触发开关才开始」——启动不再自动扫描。**
+
+设计稿的 `store.init()` 其实是 `listVolumes()` → `selectVolume()` → `startScan()`，即**启动即扫**；按你的要求改成显式触发，这是**有意偏离设计稿**，已在 §8.3 表里记明：
+
+- 启动只做「列盘 + 选盘」，不扫；
+- 唯一开扫入口是标题栏的「智能扫描」按钮（`Services::restart_scan`）；
+- 从选择器换盘也只切表面、不开扫——换盘看一眼不该付出几分钟的扫描代价；
+- 模型新增 `has_started()`，让界面能区分「还没扫」与「扫过但是没有内容」。此前未扫描的空窗口会显示「此文件夹没有可显示的内容」——那是一句对磁盘的错误陈述；现在是「点击「智能扫描」开始」/「尚未扫描」。
+
+### 8.4 仍未实现
 
 | 后续项 | 说明 |
 |---|---|
@@ -267,6 +294,7 @@ python3 tools/png_sample.py <png> X Y ...      # 读任意像素/区域均值
 | 按钮字重 550 | 组件 `Button` 的 label 没有字重入口（`content_style` 是 `pub(crate)`）。保留了可访问性 `label`，字重留默认 |
 | treemap 标签描边 | 设计稿给标签加 2.5px 深色描边保证在浅色方块上可读；GPUI 文本管线无描边 |
 | 列表文件行可点击 | 设计稿里文件行是 `disabled`（只能右键/由 AI 建议入队）；这里保留可点击入队，因为分析闭环需要一个直接入口 |
+| 启动不自动扫描 | **有意偏离设计稿**。设计稿 `store.init()` 启动即 `selectVolume()` → `startScan()`；这里要求用户点「智能扫描」（§8.3）。
 | Windows / Linux 整卷快路径 | 见 README 跨平台表（Tier 2 回退已可用） |
 | 右键菜单项级断言 | 菜单项没有 test id，只覆盖到「打开菜单不影响状态」；PopupMenu 实体由窗口 element state 持有，测试需显式关窗才能通过 harness 的泄漏检查 |
 

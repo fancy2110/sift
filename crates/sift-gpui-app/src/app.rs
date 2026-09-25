@@ -29,7 +29,6 @@ use gpui_kit::component::{
     Disableable as _, Selectable as _, Sizable as _, WindowExt as _, h_flex,
     v_flex,
 };
-use gpui_kit_assets::IconName;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     App, AnyElement, BoxShadow, Context, Entity, FocusHandle, FontWeight, Hsla, KeyBinding, Render,
@@ -84,8 +83,6 @@ pub struct AppView {
     model: Entity<WorkspaceModel>,
     services: Services,
     focus_handle: FocusHandle,
-    /// The design's `drawerOpen`: the cleanup candidate popup.
-    candidates_open: bool,
     /// The newest toast already surfaced as a notification.
     notified_toast: u64,
 }
@@ -128,7 +125,6 @@ impl AppView {
             model,
             services,
             focus_handle,
-            candidates_open: false,
             notified_toast: 0,
         }
     }
@@ -142,24 +138,29 @@ impl AppView {
     }
 
     /// Whether the cleanup candidate popup is open (the design's `drawerOpen`).
-    pub fn candidates_open(&self) -> bool {
-        self.candidates_open
+    ///
+    /// The state lives in the model, which already owns it: two copies of a
+    /// drawer flag is how a window ends up with a popup that is open in one place
+    /// and closed in another.
+    pub fn candidates_open(&self, cx: &App) -> bool {
+        self.model.read(cx).drawer_open()
     }
 
     /// Open the cleanup candidate popup (the design's `drawerOpen = true`).
-    ///
-    /// The capsule, the keyboard and any future entry point all call this, so
-    /// "what opens the popup" has one implementation.
     pub fn open_candidates(&mut self, cx: &mut Context<Self>) {
-        self.candidates_open = true;
-        cx.notify();
+        self.model.update(cx, |model, cx| {
+            model.set_drawer_open(true);
+            cx.notify();
+        });
     }
 
     /// Close the popup. Escape, the scrim, the close control and a committed
     /// cleanup all call this.
     pub fn close_candidates(&mut self, cx: &mut Context<Self>) {
-        self.candidates_open = false;
-        cx.notify();
+        self.model.update(cx, |model, cx| {
+            model.set_drawer_open(false);
+            cx.notify();
+        });
     }
 
     pub fn services_mut(&mut self) -> &mut Services {
@@ -187,7 +188,7 @@ impl AppView {
         // Escape dismisses the topmost layer first: the candidate popup, then the
         // window's own overlays, and only then the in-window state. It never
         // closes the window.
-        if self.candidates_open {
+        if self.model.read(cx).drawer_open() {
             self.close_candidates(cx);
             return;
         }
@@ -315,7 +316,7 @@ impl AppView {
                                 inset: false,
                             }])
                             .child(
-                                icon(IconName::Layers, 13., p.accent_contrast),
+                                icon("layers", 13., p.accent_contrast),
                             ),
                     )
                     .child(
@@ -334,7 +335,14 @@ impl AppView {
                 // accessibility client reads, and the component exposes no way to
                 // set a label's weight, so the design's 550 stays the one
                 // approximation here.
+                // The design's button carries an icon before its label: a spark
+                // when idle, a spinner while walking (`Icon name="spark"` /
+                // `name="refresh"` in TitleBar.svelte).
                 gpui_kit::component::button::Button::new("scan")
+                    .icon(
+                        gpui_kit::component::Icon::default()
+                            .path(crate::assets::path(if scanning { "refresh" } else { "spark" })),
+                    )
                     .label(if scanning { "正在扫描" } else { "智能扫描" })
                     .small()
                     .primary()
@@ -429,7 +437,7 @@ impl AppView {
                 let removable = current_volume.as_ref().is_some_and(|v| v.is_removable);
                 let mut label: Vec<AnyElement> = Vec::new();
                 label.push(
-                    icon(IconName::HardDrive, 14., if removable { p.accent_hi } else { p.fg })
+                    icon("hard-drive", 14., if removable { p.accent_hi } else { p.fg })
                         .into_any_element(),
                 );
                 label.push(
@@ -455,7 +463,7 @@ impl AppView {
                     );
                 }
                 label.push(
-                    icon(IconName::ChevronDown, 12., p.muted)
+                    icon("chevron-down", 12., p.muted)
                         .into_any_element(),
                 );
 
@@ -508,7 +516,7 @@ impl AppView {
                     let key = *key;
                     if index > 0 {
                         trail = trail.child(
-                            icon(IconName::ChevronRight, 11., p.faint),
+                            icon("chevron-right", 11., p.faint),
                         );
                     }
                     let is_last = index + 1 == crumbs.len();
@@ -536,6 +544,7 @@ impl AppView {
     fn render_body(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
         let pending = self.model.read(cx).is_scanning();
+        let started = self.model.read(cx).has_started();
 
         h_flex()
             .flex_1()
@@ -559,6 +568,25 @@ impl AppView {
                             .min_w_0()
                             .min_h_0()
                             .child(self.render_treemap(cx))
+                            // Nothing has been walked yet: say so instead of
+                            // showing an empty map, which reads as an empty disk.
+                            .when(!started, |stage| {
+                                stage.child(
+                                    v_flex()
+                                        .absolute()
+                                        .inset_0()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_2()
+                                        .child(icon("spark", 26., p.faint))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.5))
+                                                .text_color(p.muted)
+                                                .child("点击「智能扫描」开始"),
+                                        ),
+                                )
+                            })
                             .when(pending, |stage| {
                                 stage.child(
                                     h_flex()
@@ -570,7 +598,7 @@ impl AppView {
                                         .text_size(px(10.5))
                                         .text_color(p.faint)
                                         .child(
-                                            icon(IconName::RefreshCw, 11., p.faint),
+                                            icon("refresh", 11., p.faint),
                                         )
                                         .child("正在扫描…"),
                                 )
@@ -641,6 +669,7 @@ impl AppView {
             .px(px(metrics::LIST_PAD_X))
             .pb(px(metrics::LIST_PAD_BOTTOM));
         if rows.is_empty() {
+            let started = self.model.read(cx).has_started();
             list = list.child(
                 v_flex()
                     .flex_1()
@@ -649,8 +678,19 @@ impl AppView {
                     .gap_2()
                     .text_size(px(12.))
                     .text_color(p.muted)
-                    .child(icon(IconName::Check, 20., p.ok))
-                    .child("此文件夹没有可显示的内容"),
+                    .child(if started {
+                        icon("check", 20., p.ok)
+                    } else {
+                        icon("spark", 20., p.faint)
+                    })
+                    // "Scanned and found nothing" and "never scanned" are
+                    // different claims about the disk; only one of them is true
+                    // before the user presses the control.
+                    .child(if started {
+                        "此文件夹没有可显示的内容"
+                    } else {
+                        "尚未扫描"
+                    }),
             );
         }
         for row in rows {
@@ -817,11 +857,9 @@ impl AppView {
                     .justify_center()
                     .text_color(p.faint)
                     .child(icon(
-                        if row.is_dir {
-                            IconName::Folder
-                        } else {
-                            IconName::HardDrive
-                        },
+                        // The design's pair: a folder for a directory, a disk for
+                        // a file (`entry.isDir ? 'folder' : 'hardDrive'`).
+                        if row.is_dir { "folder" } else { "hard-drive" },
                         metrics::ROW_ICON,
                         p.faint,
                     )),
@@ -856,7 +894,7 @@ impl AppView {
                                     div()
                                         .ml_auto()
                                         .flex_shrink_0()
-                                        .child(icon(IconName::ChevronRight, 12., p.faint)),
+                                        .child(icon("chevron-right", 12., p.faint)),
                                 )
                             }),
                     )
@@ -874,7 +912,7 @@ impl AppView {
                     })
                     .when(selected, |el| {
                         el.child(
-                            icon(IconName::Check, 12., p.accent),
+                            icon("check", 12., p.accent),
                         )
                     })
                     .child(
@@ -977,15 +1015,15 @@ impl AppView {
                     .rounded(px(metrics::CAPSULE_ICON_RADIUS))
                     .bg(p.accent.opacity(0.22))
                     .child(
-                        icon(IconName::Layers, 15., p.accent_hi),
+                        icon("layers", 15., p.accent_hi),
                     ),
             )
             .child(summary)
             .child(
-                icon(IconName::ChevronRight, 14., p.faint),
+                icon("chevron-right", 14., p.faint),
             )
             .on_click(cx.listener(|view, _, _, cx| {
-                if view.candidates_open {
+                if view.model.read(cx).drawer_open() {
                     view.close_candidates(cx);
                 } else {
                     view.open_candidates(cx);
@@ -995,7 +1033,7 @@ impl AppView {
 
     /// The design's backdrop: a scrim over the workspace that closes the popup.
     fn render_scrim(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.candidates_open {
+        if !self.model.read(cx).drawer_open() {
             return None;
         }
         Some(
@@ -1014,7 +1052,7 @@ impl AppView {
     /// The design's candidate popup: anchored above the capsule, 520 × 560 max,
     /// with a header, the candidate rows and a footer that commits.
     fn render_candidates(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.candidates_open {
+        if !self.model.read(cx).drawer_open() {
             return None;
         }
         let p = palette(cx);
@@ -1082,7 +1120,7 @@ impl AppView {
                             .rounded(px(5.))
                             .bg(p.accent)
                             .child(
-                                icon(IconName::Check, 12., p.accent_contrast),
+                                icon("check", 12., p.accent_contrast),
                             )
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 view.model.update(cx, |model, cx| {
@@ -1169,7 +1207,7 @@ impl AppView {
                                 .border_1()
                                 .border_color(p.border_strong)
                                 .child(
-                                    icon(IconName::Plus, 11., p.muted),
+                                    icon("check", 11., p.muted),
                                 )
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     view.model.update(cx, |model, cx| {
@@ -1268,7 +1306,7 @@ impl AppView {
                                 .justify_center()
                                 .rounded(px(metrics::BTN_ICON_RADIUS))
                                 .text_color(p.muted)
-                                .child(icon(IconName::X, 15., p.muted))
+                                .child(icon("x", 15., p.muted))
                                 .on_click(cx.listener(|view, _, _, cx| view.close_candidates(cx))),
                         ),
                 )
@@ -1335,19 +1373,18 @@ impl AppView {
     }
 }
 
-/// An icon at an exact size and colour.
+/// An icon from the design's own set, at an exact size and colour.
 ///
-/// The shared catalog renders itself from the inherited text style, so size and
-/// colour go on a wrapper: that keeps every icon on the same text style as the
-/// label beside it, and lets an icon size differ from the body font without a
-/// second style object.
-fn icon(name: IconName, size: f32, color: Hsla) -> impl IntoElement {
-    div()
-        .flex()
+/// `sift-icons/*.svg` carries the design's paths (24x24, stroked at 1.7 with
+/// round caps) and `stroke="currentColor"`, so the colour is the element's text
+/// colour — which is also what makes an icon follow the same theme token as the
+/// label beside it.
+fn icon(name: &str, size: f32, color: Hsla) -> impl IntoElement {
+    gpui_kit::svg()
+        .path(crate::assets::path(name))
         .flex_shrink_0()
-        .text_size(px(size))
+        .size(px(size))
         .text_color(color)
-        .child(name)
 }
 
 /// One file-list row, resolved from the model before rendering.

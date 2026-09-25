@@ -185,6 +185,10 @@ pub struct WorkspaceModel {
     current_dir: Option<NodeKey>,
 
     scanning: bool,
+    /// Set once the user has started a scan for the current selection. The
+    /// design稿 starts one on launch; this application waits to be asked, so the
+    /// views must tell "not asked yet" from "scanned and empty".
+    started: bool,
     progress: Progress,
     outcome: Option<ScanOutcome>,
 
@@ -237,6 +241,35 @@ impl WorkspaceModel {
         self.clear_tree();
     }
 
+    /// Adopt an enumerated volume list and choose which one to show.
+    ///
+    /// Returns the chosen volume so the caller knows which disk it may walk.
+    /// This is the whole "which disk am I on" decision, kept here rather than in
+    /// the service layer: a selection that only the service knows about leaves
+    /// the window rendering "—" while a scan of that same disk runs, which is
+    /// exactly what happened before.
+    ///
+    /// Adopting a list never scans. A refresh of the same list also keeps the
+    /// tree, so volumes arriving late cannot throw away a scan in progress.
+    pub fn adopt_volumes(&mut self, volumes: Vec<Volume>) -> Option<Volume> {
+        let keep = self
+            .current_volume
+            .and_then(|id| volumes.iter().find(|volume| volume.id == id).cloned());
+        let chosen = keep
+            .or_else(|| sift_platform::volume::system_volume(&volumes).cloned())
+            .or_else(|| volumes.first().cloned());
+
+        self.volumes = volumes;
+        if let Some(volume) = chosen.as_ref() {
+            if self.current_volume != Some(volume.id) {
+                self.select_volume(volume.id);
+            } else {
+                self.surface = Some(Surface::Volume);
+            }
+        }
+        chosen
+    }
+
     /// Show every mounted volume.
     pub fn show_all_volumes(&mut self) {
         self.surface = Some(Surface::AllVolumes);
@@ -245,6 +278,9 @@ impl WorkspaceModel {
     }
 
     fn clear_tree(&mut self) {
+        // A new selection returns the window to "nothing scanned yet" rather
+        // than to a folder that looks empty.
+        self.started = false;
         self.nodes.clear();
         self.children.clear();
         self.root = None;
@@ -261,7 +297,13 @@ impl WorkspaceModel {
     /// Mark a scan as started for the current volume.
     pub fn begin_scan(&mut self) {
         self.clear_tree();
+        self.started = true;
         self.scanning = true;
+    }
+
+    /// Whether the user has started a scan for the current selection.
+    pub fn has_started(&self) -> bool {
+        self.started
     }
 
     pub fn is_scanning(&self) -> bool {
@@ -1373,5 +1415,65 @@ mod tests {
         assert_eq!(live.len(), 2);
         assert!(live.contains(&key("/")));
         assert!(live.contains(&key("/a")));
+    }
+}
+
+#[cfg(test)]
+mod scan_state_tests {
+    use super::*;
+
+    fn volume() -> Volume {
+        Volume::new(
+            VolumeId::from_mount_point(std::path::Path::new("/")),
+            "Macintosh HD",
+            "/",
+            1_000,
+            400,
+            false,
+            "apfs",
+        )
+    }
+
+    #[test]
+    fn a_fresh_model_has_scanned_nothing() {
+        let model = WorkspaceModel::new();
+        assert!(!model.has_started());
+        assert!(!model.is_scanning());
+        assert!(model.current_volume_id().is_none());
+    }
+
+    #[test]
+    fn selecting_a_volume_waits_to_be_asked() {
+        let mut model = WorkspaceModel::new();
+        model.set_volumes(vec![volume()]);
+        model.select_volume(volume().id);
+        assert!(model.current_volume_id().is_some(), "the disk is known");
+        assert!(!model.has_started(), "but nothing is walked yet");
+        assert!(!model.is_scanning());
+    }
+
+    #[test]
+    fn only_an_explicit_scan_starts_one() {
+        let mut model = WorkspaceModel::new();
+        model.set_volumes(vec![volume()]);
+        model.select_volume(volume().id);
+        model.begin_scan();
+        assert!(model.has_started());
+        assert!(model.is_scanning());
+    }
+
+    #[test]
+    fn switching_disks_returns_to_the_prompt() {
+        let mut model = WorkspaceModel::new();
+        model.set_volumes(vec![volume()]);
+        model.select_volume(volume().id);
+        model.begin_scan();
+        // A different selection must not leave the previous disk's state behind,
+        // and must not silently start walking the new one.
+        let other = VolumeId::from_mount_point(std::path::Path::new("/Volumes/Backup"));
+        model.select_volume(other);
+        assert!(!model.has_started(), "a new disk is not scanned on sight");
+        assert_eq!(model.current_volume_id(), Some(other));
+        assert_eq!(model.visible_entries().len(), 0, "the old tree is gone");
     }
 }

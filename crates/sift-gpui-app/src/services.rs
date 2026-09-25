@@ -272,21 +272,19 @@ impl Services {
             return;
         }
 
-        let system = sift_platform::volume::system_volume(&volumes)
-            .cloned()
-            .unwrap_or_else(|| volumes[0].clone());
-        let already_chosen = self.volume.is_some();
-
-        self.model.update(cx, |model, cx| {
-            model.set_volumes(volumes);
+        // The choice itself belongs to the model; this only remembers the answer
+        // so `restart_scan` knows which disk it was asked to walk.
+        let chosen = self.model.update(cx, |model, cx| {
+            let chosen = model.adopt_volumes(volumes);
             cx.notify();
+            chosen
         });
-
-        if already_chosen {
-            return;
+        if self.volume.is_none() {
+            self.volume = chosen;
         }
-        self.volume = Some(system);
-        self.restart_scan(cx);
+        // Deliberately no scan here. The design稿 starts one on launch; this
+        // application scans when the user asks, so opening a window does not
+        // begin a multi-minute walk of the whole disk on its own.
     }
 
     fn accept_analysis(&mut self, report: &AnalysisReport, cx: &mut Context<AppView>) {
@@ -370,6 +368,17 @@ impl Services {
     // ---- volumes and scanning ---------------------------------------------
 
     /// Switch to a volume and scan it.
+    /// Re-list the mounted volumes now, on the caller's thread.
+    ///
+    /// The startup path enumerates on its own thread and delivers the list
+    /// through the pump; this is the synchronous equivalent for a refresh the
+    /// user asked for, and the entry point a test can drive without waiting on a
+    /// background timer.
+    pub fn refresh_volumes(&mut self, cx: &mut Context<AppView>) {
+        let volumes = sift_platform::volume::list_volumes();
+        self.accept_volumes(volumes, cx);
+    }
+
     pub fn select_volume(&mut self, id: VolumeId, cx: &mut Context<AppView>) {
         let selected = self
             .model
@@ -386,7 +395,9 @@ impl Services {
             model.select_volume(id);
             cx.notify();
         });
-        self.restart_scan(cx);
+        // Choosing a disk is not the same as asking for a walk of it: the scan
+        // control is the one way to start one, so a user who only wants to look
+        // at another disk is not charged a multi-minute scan for it.
     }
 
     /// Show every mounted volume as one summary surface.

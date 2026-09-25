@@ -121,9 +121,9 @@ fn clicking_a_row_queues_it_and_the_cleanup_control_opens_the_sheet(
         // `close_candidates`, which is the seam this asserts; the capsule's own
         // pointer handler is that same call.
         view.update(cx, |view, cx| view.open_candidates(cx));
-        assert!(view.read(cx).candidates_open(), "the popup opens");
+        assert!(view.read(cx).candidates_open(cx), "the popup opens");
         view.update(cx, |view, cx| view.close_candidates(cx));
-        assert!(!view.read(cx).candidates_open(), "and closes again");
+        assert!(!view.read(cx).candidates_open(cx), "and closes again");
 
         // Queue one file by clicking its row.
         window.click(format!("row-{}", key("/root/junk.bin").raw()), cx);
@@ -135,7 +135,7 @@ fn clicking_a_row_queues_it_and_the_cleanup_control_opens_the_sheet(
         window.render_frame(cx);
         view.update(cx, |view, cx| view.open_candidates(cx));
         window.render_frame(cx);
-        assert!(view.read(cx).candidates_open());
+        assert!(view.read(cx).candidates_open(cx));
         assert!(
             window.find("clean").bounds().size.width > px(0.),
             "the popup carries the commit action"
@@ -143,7 +143,7 @@ fn clicking_a_row_queues_it_and_the_cleanup_control_opens_the_sheet(
 
         // Escape dismisses the topmost surface and returns to the task.
         window.press("escape", cx);
-        assert!(!view.read(cx).candidates_open(), "escape closes the popup");
+        assert!(!view.read(cx).candidates_open(cx), "escape closes the popup");
     });
     assert!(alive.is_ok(), "the window must still exist: {alive:?}");
 }
@@ -169,7 +169,7 @@ fn a_locked_row_cannot_be_queued(cx: &mut TestAppContext) {
             view.read(cx).model().read(cx).selection().is_empty(),
             "an undeletable row must not be queueable"
         );
-        assert!(!view.read(cx).candidates_open());
+        assert!(!view.read(cx).candidates_open(cx));
     });
 }
 
@@ -419,4 +419,51 @@ fn a_folded_long_tail_renders_its_aggregate_label(cx: &mut TestAppContext) {
         assert!(folded, "the fixture must fold its long tail");
     });
     assert!(alive.is_ok());
+}
+
+/// The window must know which disk it is on, and must not scan until asked.
+///
+/// Both were broken in the same place: the startup path kept the chosen volume in
+/// the service layer only — so the picker rendered "—" and the summary had no free
+/// space — and it started the walk immediately.
+///
+/// The volume enumeration runs on its own thread and the pump that delivers it
+/// waits on a background timer, which a test scheduler does not advance, so this
+/// drives the same policy with the same real input instead: the platform's own
+/// volume list, through the model call the window uses.
+#[gpui_kit::test]
+fn the_window_knows_its_disk_and_waits_to_be_asked(cx: &mut TestAppContext) {
+    let (view, _handle) = open_app(cx, "idle");
+    assert!(
+        !sift_platform::volume::list_volumes().is_empty(),
+        "this machine has at least one volume"
+    );
+
+    // The same call the startup path makes, minus the background thread and the
+    // pump's timer — neither of which a test scheduler advances.
+    let (known, named, scanning, started, entries) = cx.update(|cx| {
+        view.update(cx, |view, cx| {
+            view.services_mut().refresh_volumes(cx);
+            let model = view.model().read(cx);
+            (
+                model.current_volume_id().is_some(),
+                model
+                    .current_volume()
+                    .is_some_and(|volume| !volume.name.is_empty()),
+                model.is_scanning(),
+                model.has_started(),
+                model.visible_entries().len(),
+            )
+        })
+    });
+
+    assert!(
+        known && named,
+        "the enumerated disk must land in the model, or the picker shows a dash"
+    );
+    assert!(
+        !scanning && !started,
+        "learning which disks exist must not start a scan"
+    );
+    assert_eq!(entries, 0, "nothing has been walked yet");
 }
