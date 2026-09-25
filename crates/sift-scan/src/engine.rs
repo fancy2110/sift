@@ -993,6 +993,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// Hardlinked files must be counted once, through the real walk: the
+    /// platform reports the link count, the engine only offers multiply-linked
+    /// files to the dedupe table, and the tree sums the bytes once.
+    #[cfg(unix)]
+    #[test]
+    fn a_hardlinked_file_is_counted_once_end_to_end() {
+        let base = temp_tree("hardlink");
+        // Two names, one inode, 4096 bytes of payload.
+        let original = base.join("a/original.bin");
+        std::fs::write(&original, vec![3u8; 4096]).unwrap();
+        std::fs::hard_link(&original, base.join("a/linked.bin")).unwrap();
+        let extra = base.join("x/other.bin");
+        std::fs::write(&extra, vec![4u8; 1024]).unwrap();
+
+        let engine = ScanEngine::with_workers(2);
+        let handle = engine
+            .scan(ScanRequest::new(ScanId(9), base.clone()).with_policy(ScanPolicy::thorough()))
+            .unwrap();
+        let events = drain(&handle);
+        handle.join();
+
+        let progress = events
+            .iter()
+            .find_map(|event| match event {
+                ScanEvent::Finished { progress, .. } => Some(*progress),
+                _ => None,
+            })
+            .expect("a Finished event");
+
+        // The fixture's files (100 + 200 + 300 + 400) plus 4096 for the hardlink
+        // pair and 1024 for the extra file. Were the second name counted too, the
+        // total would be 10216.
+        let expected = 100 + 200 + 300 + 400 + 4096 + 1024;
+        assert_eq!(expected, 6120, "the fixture arithmetic is the point of the test");
+        let tree = handle.tree.lock().unwrap();
+        assert_eq!(tree.total().logical, expected);
+        assert!(
+            progress.hardlinks_skipped >= 1,
+            "the second name of a hardlinked file must be skipped, got {progress:?}"
+        );
+        assert_eq!(tree.stats().hardlink_entries, 1, "one inode remembered");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn set_focus_repopulates_priority() {
         // Focus-priority ordering is a pure function tested in priority.rs;
