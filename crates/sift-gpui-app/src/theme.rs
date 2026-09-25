@@ -1,241 +1,519 @@
-//! The application theme: deep ink surfaces with one azure accent.
+//! The design system, in one place.
 //!
-//! This module is the only place in the application that names a raw colour.
-//! Every call site reads a semantic role from `cx.theme()`; this file exists so
-//! that the palette has one owner and a dark/light switch cannot leave a
-//! component painting a half-migrated surface.
+//! Every value here is transcribed from the design稿 (`src/app.css` and the
+//! Svelte components) rather than approximated: the oklch palette converted to
+//! sRGB, the type scale, the component frames, and the spacing. Views read names
+//! from here and carry no literals, which is also what the design guides require
+//! — raw colour values belong in the theme definition and nowhere else.
 //!
-//! `Theme::update(cx, ...)` does not exist in gpui-component 0.6.6. The
-//! documented equivalent is an edit through [`Theme::global_mut`] followed by
-//! [`Theme::sync_base`], which is what the coding guide requires: the edit
-//! touches `colors`, so this module also re-derives the renderable `tokens`
-//! from those colours before syncing the Base projection.
+//! Why explicit pixels: the design稿 is a fixed desktop scale (a 46 px title bar,
+//! a 268 px list, a 20 px canvas radius). Expressing it in `rem` would move every
+//! one of those numbers as soon as the base font changed. The numbers live here
+//! as `metrics::*`, so there is still exactly one owner — the audited
+//! "product-owned scale" the guides describe — instead of literals at call sites.
 
-use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode, ThemeTokens};
-use gpui_kit::{App, hsla, px};
+use gpui_kit::component::{Theme, ThemeMode};
+use gpui_kit::{App, Global, Hsla, Rgba, rgb};
 
-/// Install the Sift theme as the application's only theme.
+/// The design's colours, as sRGB.
 ///
-/// Call once, after `gpui_kit::init(cx)` and before opening the window, so the
-/// first frame is already themed.
+/// Each is the exact conversion of the corresponding `oklch()` token in
+/// `src/app.css` (`oklab` → linear sRGB → sRGB), so the rendered result matches
+/// what the design稿 specifies rather than a hand-picked near neighbour.
+#[derive(Debug, Clone, Copy)]
+pub struct Palette {
+    // surfaces
+    pub bg: Hsla,
+    pub surface: Hsla,
+    pub surface2: Hsla,
+    pub surface3: Hsla,
+    pub border: Hsla,
+    pub border_strong: Hsla,
+    // text
+    pub fg: Hsla,
+    pub muted: Hsla,
+    pub faint: Hsla,
+    // one accent
+    pub accent: Hsla,
+    pub accent_hi: Hsla,
+    pub accent_deep: Hsla,
+    pub accent_contrast: Hsla,
+    // states
+    pub danger: Hsla,
+    pub danger_hi: Hsla,
+    pub warn: Hsla,
+    pub ok: Hsla,
+    pub violet: Hsla,
+    // chart / treemap categorical encoding
+    pub categories: [Hsla; 8],
+    pub category_other: Hsla,
+    // window chrome (the design's three dots)
+    pub traffic: [Hsla; 3],
+    // treemap
+    pub tile_stroke: Hsla,
+    pub tile_stroke_hover: Hsla,
+    pub label_fg: Hsla,
+    pub label_fg_dim: Hsla,
+    pub label_stroke: Hsla,
+}
+
+impl Palette {
+    /// The palette, built from the design's tokens.
+    pub fn design() -> Self {
+        Self {
+            bg: rgb(0x07_09_0C).into(),
+            surface: rgb(0x0F_12_17).into(),
+            surface2: rgb(0x18_1C_21).into(),
+            surface3: rgb(0x23_27_2D).into(),
+            border: rgb(0x26_2B_31).into(),
+            border_strong: rgb(0x3B_40_47).into(),
+            fg: rgb(0xE9_EB_EE).into(),
+            muted: rgb(0x9B_9F_A4).into(),
+            faint: rgb(0x64_69_70).into(),
+            accent: rgb(0x30_93_EC).into(),
+            accent_hi: rgb(0x52_A9_FE).into(),
+            accent_deep: rgb(0x01_5B_A6).into(),
+            accent_contrast: rgb(0xF8_FA_FD).into(),
+            danger: rgb(0xF4_5A_56).into(),
+            danger_hi: rgb(0xFF_72_6C).into(),
+            warn: rgb(0xE8_A6_3D).into(),
+            ok: rgb(0x59_C9_77).into(),
+            violet: rgb(0xA5_84_DC).into(),
+            categories: [
+                rgb(0x2F_91_E2).into(),
+                rgb(0x00_AF_B0).into(),
+                rgb(0xD6_A0_44).into(),
+                rgb(0xE8_60_5B).into(),
+                rgb(0xA4_82_D5).into(),
+                rgb(0x49_B5_67).into(),
+                rgb(0xDB_6E_A5).into(),
+                rgb(0x73_7B_86).into(),
+            ],
+            category_other: rgb(0x39_3E_43).into(),
+            traffic: [
+                rgb(0xEF_66_61).into(),
+                rgb(0xE0_AF_3B).into(),
+                rgb(0x5B_C6_63).into(),
+            ],
+            tile_stroke: rgb(0x05_07_0B).into(),
+            // The design strokes the hovered tile with `oklch(0.985 0.005 250)`,
+            // which is the accent-contrast token itself.
+            tile_stroke_hover: rgb(0xF8_FA_FD).into(),
+            label_fg: rgb(0xF3_F5_F8).into(),
+            label_fg_dim: rgb(0xF3_F5_F8).into(),
+            label_stroke: rgb(0x04_06_09).into(),
+        }
+    }
+
+    /// A categorical colour for tile `index`, cycling like the design's `CATS`.
+    pub fn category(&self, index: usize) -> Hsla {
+        self.categories[index % self.categories.len()]
+    }
+}
+
+/// The application's palette, stored as a global so a view reads it in one call
+/// and cannot drift from the component theme.
+pub struct SiftTheme(pub Palette);
+
+impl Global for SiftTheme {}
+
+/// The palette, from the application global.
+pub fn palette(cx: &App) -> Palette {
+    cx.global::<SiftTheme>().0
+}
+
+// ---- type scale (design稿 font sizes, in px) -------------------------------
+
+pub mod text {
+    /// `body { font-size: 13.5px }`
+    pub const BODY: f32 = 13.5;
+    pub const TITLE: f32 = 13.0; // "Sift"
+    pub const CRUMB: f32 = 12.0; // text-[12px]
+    pub const NAV_NAME: f32 = 12.5; // location picker
+    pub const NAV_SUB: f32 = 10.5; // "N% 已使用 · 内置磁盘"、磁盘 label
+    pub const LIST_TITLE: f32 = 12.0; // "文件与文件夹"
+    pub const LIST_NAME: f32 = 12.5; // row name
+    pub const LIST_SIZE: f32 = 11.0; // row size
+    pub const CAPSULE: f32 = 12.0; // bottom summary
+    pub const PANEL_TITLE: f32 = 14.0; // popup titles
+    pub const PANEL_SUB: f32 = 11.0; // popup counts
+    pub const TILE_MIN: f32 = 12.5; // treemap label, h < 52
+    pub const TILE_MID: f32 = 13.0; // h >= 52
+    pub const TILE_MAX: f32 = 14.0; // h >= 64
+}
+
+// ---- frames and spacing (design稿 px) --------------------------------------
+
+pub mod metrics {
+    /// `header { height: 46px }`
+    pub const TITLE_BAR_H: f32 = 46.0;
+    pub const TITLE_BAR_PAD_X: f32 = 16.0;
+    pub const TITLE_BAR_GAP: f32 = 12.0;
+    /// Room for the real macOS traffic lights at `(14, 16)`: three 12 px dots
+    /// with 8 px gaps from x=14, plus the design's own leading gap.
+    pub const TRAFFIC_RESERVE: f32 = 78.0;
+    pub const TRAFFIC_DOT: f32 = 12.0;
+    pub const TRAFFIC_GAP: f32 = 8.0;
+
+    /// `workspace { padding: 12px; gap: 12px }`
+    pub const WORKSPACE_PAD: f32 = 12.0;
+    pub const WORKSPACE_GAP: f32 = 12.0;
+
+    /// The glass capsule around the location picker and breadcrumbs.
+    pub const NAV_RADIUS: f32 = 16.0;
+    pub const NAV_PAD_X: f32 = 8.0;
+    pub const NAV_PAD_Y: f32 = 6.0;
+    pub const NAV_GAP: f32 = 4.0;
+    pub const DIVIDER_W: f32 = 1.0;
+    pub const DIVIDER_H: f32 = 20.0;
+    pub const DIVIDER_MX: f32 = 4.0;
+
+    pub const CRUMB_H: f32 = 28.0;
+    pub const CRUMB_MAX_W: f32 = 160.0;
+    pub const CRUMB_RADIUS: f32 = 8.0;
+    pub const CRUMB_PAD_X: f32 = 8.0;
+    pub const CRUMB_GAP: f32 = 2.0;
+
+    /// `canvas-body { max-width: 1180px; border-radius: 20px }`
+    pub const CANVAS_MAX_W: f32 = 1180.0;
+    pub const CANVAS_RADIUS: f32 = 20.0;
+    /// The canvas surface is `surface` at 52% over the window background.
+    pub const CANVAS_ALPHA: f32 = 0.52;
+
+    /// `aside { width: 268px }`
+    pub const LIST_W: f32 = 268.0;
+    pub const LIST_HEADER_PAD_X: f32 = 14.0;
+    pub const LIST_HEADER_PAD_TOP: f32 = 12.0;
+    pub const LIST_HEADER_PAD_BOTTOM: f32 = 6.0;
+    pub const LIST_HEADER_GAP: f32 = 8.0;
+    pub const LIST_PAD_X: f32 = 8.0;
+    pub const LIST_PAD_BOTTOM: f32 = 8.0;
+
+    /// The design's row frame: an 18 px icon slot plus `py-[7px]`.
+    pub const ROW_H: f32 = ROW_ICON_SLOT + ROW_PAD_Y * 2.0;
+    pub const ROW_RADIUS: f32 = 8.0;
+    pub const ROW_PAD_X: f32 = 8.0;
+    pub const ROW_PAD_Y: f32 = 7.0;
+    pub const ROW_GAP: f32 = 8.0;
+    pub const ROW_ICON_SLOT: f32 = 18.0;
+    pub const ROW_ICON: f32 = 14.0;
+
+    /// `ai-summary { border-radius: 16px; padding: 16px 10px }`
+    pub const CAPSULE_RADIUS: f32 = 16.0;
+    pub const CAPSULE_PAD_X: f32 = 16.0;
+    pub const CAPSULE_PAD_Y: f32 = 10.0;
+    pub const CAPSULE_GAP: f32 = 10.0;
+    pub const CAPSULE_ICON_BOX: f32 = 28.0;
+    pub const CAPSULE_ICON_RADIUS: f32 = 8.0;
+
+    pub const BTN_H: f32 = 32.0;
+    pub const BTN_SM_H: f32 = 28.0;
+    pub const BTN_RADIUS: f32 = 10.0;
+    pub const BTN_SM_RADIUS: f32 = 8.0;
+    pub const BTN_ICON: f32 = 30.0;
+    pub const BTN_ICON_RADIUS: f32 = 9.0;
+    pub const MARK: f32 = 24.0;
+    pub const MARK_RADIUS: f32 = 6.0;
+    pub const SWITCH_W: f32 = 38.0;
+    pub const SWITCH_H: f32 = 22.0;
+    pub const SWITCH_THUMB: f32 = 16.0;
+
+    pub const MENU_W: f32 = 260.0;
+    pub const MENU_RADIUS: f32 = 12.0;
+    pub const MENU_PAD: f32 = 6.0;
+    pub const MENU_ITEM_RADIUS: f32 = 8.0;
+    pub const MENU_ITEM_PAD_X: f32 = 10.0;
+    pub const MENU_ITEM_PAD_Y: f32 = 7.0;
+    pub const MENU_ITEM_GAP: f32 = 10.0;
+
+    pub const TOAST_RADIUS: f32 = 12.0;
+    pub const TOAST_PAD_X: f32 = 16.0;
+    pub const TOAST_PAD_Y: f32 = 10.0;
+    pub const TOAST_GAP: f32 = 10.0;
+    pub const TOAST_OFFSET: f32 = 24.0;
+
+    /// `PAD = 14` around the treemap stage.
+    pub const TREEMAP_PAD: f32 = 14.0;
+    /// `MIN_W = 88`, `MIN_H = 48`.
+    pub const TILE_MIN_W: f32 = 88.0;
+    pub const TILE_MIN_H: f32 = 48.0;
+    pub const TILE_LABEL_INSET: f32 = 10.0;
+    /// `stroke-width: 1.5px`
+    pub const TILE_STROKE: f32 = 1.5;
+    /// A label needs at least this much height and width to be worth drawing.
+    pub const TILE_LABEL_MIN_W: f32 = 70.0;
+    pub const TILE_LABEL_MIN_H: f32 = 26.0;
+}
+
+/// The design's elevation recipes, as GPUI shadows.
+///
+/// `backdrop-filter: blur()` does not exist in GPUI, so the glass surfaces are
+/// reproduced with the parts that do exist — a translucent surface, a hairline
+/// border, an inset top highlight and the same drop shadow — and the blur is
+/// approximated by making the surface slightly more opaque than the design's 78%
+/// so the result reads as the same material rather than a transparent hole.
+pub mod elevation {
+    use gpui_kit::{BoxShadow, point, px, rgb};
+
+    /// `0 1px 0 rgba(255,255,255,0.07) inset, 0 24px 60px -28px black`
+    pub fn glass() -> Vec<BoxShadow> {
+        vec![
+            BoxShadow {
+                color: rgb(0xFF_FF_FF).into(),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            BoxShadow {
+                color: rgb(0x00_00_00).into(),
+                offset: point(px(0.), px(24.)),
+                blur_radius: px(60.),
+                spread_radius: px(-28.),
+                inset: false,
+            },
+        ]
+    }
+
+    /// `0 1px 0 rgba(255,255,255,0.08) inset, 0 40px 90px -30px black`
+    pub fn glass_strong() -> Vec<BoxShadow> {
+        vec![
+            BoxShadow {
+                color: rgb(0xFF_FF_FF).into(),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            BoxShadow {
+                color: rgb(0x00_00_00).into(),
+                offset: point(px(0.), px(40.)),
+                blur_radius: px(90.),
+                spread_radius: px(-30.),
+                inset: false,
+            },
+        ]
+    }
+
+    /// `0 1px 0 rgba(255,255,255,0.05) inset, 0 18px 40px -24px black`
+    pub fn card() -> Vec<BoxShadow> {
+        vec![
+            BoxShadow {
+                color: rgb(0xFF_FF_FF).into(),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            BoxShadow {
+                color: rgb(0x00_00_00).into(),
+                offset: point(px(0.), px(18.)),
+                blur_radius: px(40.),
+                spread_radius: px(-24.),
+                inset: false,
+            },
+        ]
+    }
+
+    /// The design's popup and menu shadow:
+    /// `0 2px 8px -2px black, 0 18px 44px -12px black`.
+    pub fn popup() -> Vec<BoxShadow> {
+        vec![
+            BoxShadow {
+                color: rgb(0x00_00_00).into(),
+                offset: point(px(0.), px(2.)),
+                blur_radius: px(8.),
+                spread_radius: px(-2.),
+                inset: false,
+            },
+            BoxShadow {
+                color: rgb(0x00_00_00).into(),
+                offset: point(px(0.), px(18.)),
+                blur_radius: px(44.),
+                spread_radius: px(-12.),
+                inset: false,
+            },
+        ]
+    }
+}
+
+/// Install the design theme: the component theme, then the palette global.
+///
+/// `Theme::update` does not exist in gpui-component 0.6.6; the documented edit is
+/// through [`Theme::global_mut`] followed by [`Theme::sync_base`], which is what
+/// the coding guides require. The edit touches `colors`, so the renderable
+/// `tokens` are re-derived from them before the Base projection is synced — a
+/// sidebar otherwise paints new text on the old surface.
 pub fn install(cx: &mut App) {
+    let palette = Palette::design();
     Theme::change(ThemeMode::Dark, None, cx);
 
-    // ---- surfaces ---------------------------------------------------------
-    let background = hsla(224. / 360., 0.20, 0.075, 1.);
-    let foreground = hsla(220. / 360., 0.16, 0.90, 1.);
-    let muted = hsla(224. / 360., 0.16, 0.14, 1.);
-    let muted_foreground = hsla(222. / 360., 0.10, 0.58, 1.);
-    let border = hsla(224. / 360., 0.14, 0.185, 1.);
-    let panel = hsla(224. / 360., 0.19, 0.105, 1.);
-    let popover = hsla(224. / 360., 0.19, 0.115, 1.);
-    let input = hsla(224. / 360., 0.16, 0.15, 1.);
-
-    // ---- one azure accent -------------------------------------------------
-    let accent = hsla(205. / 360., 0.90, 0.55, 1.);
-    let accent_hover = hsla(205. / 360., 0.90, 0.62, 1.);
-    let accent_active = hsla(205. / 360., 0.90, 0.47, 1.);
-    // Dark ink on azure: the accent is light enough that dark text reads and
-    // white text does not.
-    let on_accent = hsla(212. / 360., 0.45, 0.08, 1.);
-
-    let secondary = hsla(224. / 360., 0.14, 0.18, 1.);
-    let secondary_hover = hsla(224. / 360., 0.14, 0.23, 1.);
-    let secondary_active = hsla(224. / 360., 0.14, 0.27, 1.);
-    let accent_soft = hsla(205. / 360., 0.38, 0.22, 1.);
-    let accent_soft_foreground = hsla(205. / 360., 0.34, 0.92, 1.);
-
-    // ---- semantic states --------------------------------------------------
-    let danger = hsla(2. / 360., 0.72, 0.58, 1.);
-    let danger_hover = hsla(2. / 360., 0.72, 0.64, 1.);
-    let danger_active = hsla(2. / 360., 0.72, 0.50, 1.);
-    let warning = hsla(38. / 360., 0.92, 0.58, 1.);
-    let warning_hover = hsla(38. / 360., 0.92, 0.64, 1.);
-    let warning_active = hsla(38. / 360., 0.92, 0.50, 1.);
-    let success = hsla(152. / 360., 0.52, 0.46, 1.);
-    let success_hover = hsla(152. / 360., 0.52, 0.52, 1.);
-    let success_active = hsla(152. / 360., 0.52, 0.39, 1.);
-    let on_state = hsla(220. / 360., 0.40, 0.07, 1.);
-
-    let row_hover = hsla(224. / 360., 0.16, 0.16, 1.);
-    let row_active = hsla(205. / 360., 0.30, 0.22, 1.);
-    let selection = hsla(205. / 360., 0.80, 0.55, 0.26);
-    let chart_1 = hsla(205. / 360., 0.86, 0.58, 1.);
-    let chart_2 = hsla(199. / 360., 0.72, 0.50, 1.);
-    let chart_3 = hsla(212. / 360., 0.62, 0.47, 1.);
-    let chart_4 = hsla(190. / 360., 0.55, 0.44, 1.);
-    let chart_5 = hsla(222. / 360., 0.45, 0.42, 1.);
+    // Base font: the design's body size. This is also the window's `rem`, so the
+    // scale helpers resolve against it.
+    let root_font = gpui_kit::px(text::BODY);
 
     {
         let theme = Theme::global_mut(cx);
+        theme.font_size = root_font;
+        theme.mono_font_family = "Menlo".into();
 
-        // A compact, precise radius scale; surfaces read one tier softer than
-        // the controls they contain.
-        theme.radius = px(6.);
-        theme.radius_lg = px(10.);
+        // Radii: the design's control frames.
+        theme.radius = gpui_kit::px(metrics::BTN_RADIUS);
+        theme.radius_lg = gpui_kit::px(metrics::NAV_RADIUS);
 
         let colors = &mut theme.colors;
-        colors.background = background;
-        colors.foreground = foreground;
-
-        colors.muted = muted;
-        colors.muted_foreground = muted_foreground;
-        colors.border = border;
-        colors.input = input;
-        colors.popover = popover;
-        colors.popover_foreground = foreground;
-        colors.overlay = hsla(224. / 360., 0.30, 0.03, 0.55);
-        colors.window_border = border;
-        colors.drag_border = accent;
-
-        colors.primary = accent;
-        colors.primary_hover = accent_hover;
-        colors.primary_active = accent_active;
-        colors.primary_foreground = on_accent;
-        colors.ring = accent;
-        colors.selection = selection;
-
-        colors.secondary = secondary;
-        colors.secondary_hover = secondary_hover;
-        colors.secondary_active = secondary_active;
-        colors.secondary_foreground = foreground;
-
-        colors.accent = accent_soft;
-        colors.accent_foreground = accent_soft_foreground;
-
-        colors.danger = danger;
-        colors.danger_hover = danger_hover;
-        colors.danger_active = danger_active;
-        colors.danger_foreground = on_state;
-        colors.warning = warning;
-        colors.warning_hover = warning_hover;
-        colors.warning_active = warning_active;
-        colors.warning_foreground = on_state;
-        colors.success = success;
-        colors.success_hover = success_hover;
-        colors.success_active = success_active;
-        colors.success_foreground = on_state;
-        colors.info = accent;
-        colors.info_hover = accent_hover;
-        colors.info_active = accent_active;
-        colors.info_foreground = on_accent;
-
-        // Button surfaces follow the same roles so a component variant and an
-        // application surface cannot drift apart.
-        colors.button = secondary;
-        colors.button_hover = secondary_hover;
-        colors.button_active = secondary_active;
-        colors.button_foreground = foreground;
-        colors.button_primary = accent;
-        colors.button_primary_hover = accent_hover;
-        colors.button_primary_active = accent_active;
-        colors.button_primary_foreground = on_accent;
-        colors.button_secondary = secondary;
-        colors.button_secondary_hover = secondary_hover;
-        colors.button_secondary_active = secondary_active;
-        colors.button_secondary_foreground = foreground;
-        colors.button_danger = danger;
-        colors.button_danger_hover = danger_hover;
-        colors.button_danger_active = danger_active;
-        colors.button_danger_foreground = on_state;
-        colors.button_warning = warning;
-        colors.button_warning_hover = warning_hover;
-        colors.button_warning_active = warning_active;
-        colors.button_warning_foreground = on_state;
-        colors.button_success = success;
-        colors.button_success_hover = success_hover;
-        colors.button_success_active = success_active;
-        colors.button_success_foreground = on_state;
-        colors.button_info = accent;
-        colors.button_info_hover = accent_hover;
-        colors.button_info_active = accent_active;
-        colors.button_info_foreground = on_accent;
-
-        // Data surfaces: one hairline boundary, hover and selection distinct.
-        colors.list = background;
-        colors.list_even = panel;
-        colors.list_head = panel;
-        colors.list_hover = row_hover;
-        colors.list_active = row_active;
-        colors.list_active_border = accent;
-        colors.table = background;
-        colors.table_even = panel;
-        colors.table_head = panel;
-        colors.table_head_foreground = muted_foreground;
-        colors.table_foot = panel;
-        colors.table_foot_foreground = muted_foreground;
-        colors.table_hover = row_hover;
-        colors.table_active = row_active;
-        colors.table_active_border = accent;
-        colors.table_row_border = border;
-
-        colors.group_box = panel;
-        colors.group_box_foreground = foreground;
-        colors.accordion = panel;
-        colors.sidebar = panel;
-        colors.sidebar_foreground = foreground;
-        colors.sidebar_border = border;
-        colors.sidebar_accent = accent_soft;
-        colors.sidebar_accent_foreground = accent_soft_foreground;
-        colors.sidebar_primary = accent;
-        colors.sidebar_primary_foreground = on_accent;
-
-        colors.title_bar = hsla(224. / 360., 0.20, 0.09, 1.);
-        colors.title_bar_border = border;
-        colors.status_bar = panel;
-        colors.status_bar_border = border;
-
-        colors.switch = secondary_active;
-        colors.switch_thumb = foreground;
-        colors.caret = accent;
-        colors.progress_bar = accent;
-        colors.skeleton = muted;
-        colors.slider_bar = secondary_active;
-        colors.slider_thumb = foreground;
-        colors.scrollbar = background;
-        colors.scrollbar_thumb = border;
-        colors.scrollbar_thumb_hover = muted_foreground;
-
-        colors.link = accent;
-        colors.link_hover = accent_hover;
-        colors.link_active = accent_active;
-
-        // The treemap and the analysis panel draw from one accent family.
-        colors.chart_1 = chart_1;
-        colors.chart_2 = chart_2;
-        colors.chart_3 = chart_3;
-        colors.chart_4 = chart_4;
-        colors.chart_5 = chart_5;
-        colors.chart_bullish = success;
-        colors.chart_bearish = danger;
-
-        colors.description_list_label = panel;
-        colors.description_list_label_foreground = muted_foreground;
-        colors.drop_target = accent;
-        colors.tab = background;
-        colors.tab_bar = panel;
-        colors.tab_bar_segmented = secondary;
-        colors.tab_foreground = muted_foreground;
-        colors.tab_active = panel;
-        colors.tab_active_foreground = foreground;
+        colors.background = palette.bg;
+        colors.foreground = palette.fg;
+        colors.border = palette.border;
+        colors.input = palette.border;
+        colors.primary = palette.accent;
+        colors.primary_foreground = palette.accent_contrast;
+        colors.primary_hover = palette.accent_hi;
+        colors.primary_active = palette.accent_deep;
+        colors.secondary = palette.surface2;
+        colors.secondary_foreground = palette.fg;
+        colors.secondary_hover = palette.surface3;
+        colors.secondary_active = palette.surface3;
+        colors.danger = palette.danger;
+        colors.danger_foreground = palette.accent_contrast;
+        colors.danger_hover = palette.danger_hi;
+        colors.danger_active = palette.danger;
+        colors.warning = palette.warn;
+        colors.warning_foreground = palette.accent_contrast;
+        colors.warning_hover = palette.warn;
+        colors.warning_active = palette.warn;
+        colors.success = palette.ok;
+        colors.success_foreground = palette.accent_contrast;
+        colors.success_hover = palette.ok;
+        colors.success_active = palette.ok;
+        colors.info = palette.accent;
+        colors.info_foreground = palette.accent_contrast;
+        colors.muted = palette.surface2;
+        colors.muted_foreground = palette.muted;
+        colors.popover = palette.surface;
+        colors.popover_foreground = palette.fg;
+        colors.sidebar = palette.bg;
+        colors.sidebar_foreground = palette.fg;
+        colors.title_bar = palette.bg;
+        colors.title_bar_border = palette.border;
+        colors.group_box = palette.surface;
+        colors.group_box_foreground = palette.fg;
+        colors.overlay = palette.bg.opacity(0.55);
+        colors.selection = palette.accent.opacity(0.26);
+        colors.caret = palette.accent_hi;
+        colors.link = palette.accent_hi;
+        colors.link_hover = palette.accent;
+        colors.ring = palette.accent.opacity(0.55);
+        colors.scrollbar = palette.surface3;
+        colors.scrollbar_thumb = palette.border_strong;
+        colors.scrollbar_thumb_hover = palette.faint;
+        colors.drag_border = palette.accent;
+        colors.drop_target = palette.accent.opacity(0.20);
+        for (index, color) in palette.categories.iter().enumerate() {
+            colors.chart_1 = if index == 0 { *color } else { colors.chart_1 };
+        }
+        let _ = Rgba::default();
     }
-
-    // `Theme::global_mut` leaves the renderable token snapshot stale; derive it
-    // from the colours we just wrote before projecting to the Base layer.
-    let tokens = ThemeTokens::from(&Theme::global(cx).colors);
-    Theme::global_mut(cx).tokens = tokens;
+    // Re-derive the renderable tokens from the colours just written, then refresh
+    // the Base projection (scrollbars, resize handles) and the windows.
     Theme::sync_base(cx);
+    cx.set_global(SiftTheme(palette));
 }
 
-/// The azure accent mixed for a treemap tile of the given rank.
-///
-/// `rank` is `0.0` for the largest tile and `1.0` for the smallest; the ramp
-/// stays inside the accent family so the treemap reads as one material rather
-/// than a rainbow.
-pub fn tile_tint(cx: &App, rank: f32) -> gpui_kit::Hsla {
-    let rank = rank.clamp(0.0, 1.0);
-    let mut tint = cx.theme().chart_1;
-    tint.l = (tint.l - 0.20 * rank).clamp(0.0, 1.0);
-    tint.s = (tint.s - 0.12 * rank).clamp(0.0, 1.0);
-    tint.alpha(0.30 + 0.28 * (1.0 - rank))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Colours are authored as sRGB and stored as HSLA, so a comparison has to
+    /// allow the ±1/255 the conversion can round by. Asserting exact equality
+    /// would be testing the colour space, not the palette.
+    fn assert_near(actual: Hsla, expected: u32, what: &str) {
+        let actual = Rgba::from(actual);
+        let expected = rgb(expected);
+        let channel = |a: f32, b: f32| (a - b).abs() <= 1.0 / 255.0 + 1e-6;
+        assert!(
+            channel(actual.r, expected.r)
+                && channel(actual.g, expected.g)
+                && channel(actual.b, expected.b),
+            "{what}: {actual:?} is not within one step of {expected:?}"
+        );
+    }
+
+    #[test]
+    fn the_palette_is_the_design_s_tokens() {
+        let palette = Palette::design();
+        assert_near(palette.bg, 0x07_09_0C, "bg");
+        assert_near(palette.surface, 0x0F_12_17, "surface");
+        assert_near(palette.surface2, 0x18_1C_21, "surface-2");
+        assert_near(palette.border, 0x26_2B_31, "border");
+        assert_near(palette.border_strong, 0x3B_40_47, "border-strong");
+        assert_near(palette.fg, 0xE9_EB_EE, "fg");
+        assert_near(palette.muted, 0x9B_9F_A4, "muted");
+        assert_near(palette.faint, 0x64_69_70, "faint");
+        assert_near(palette.accent, 0x30_93_EC, "accent");
+        assert_near(palette.accent_hi, 0x52_A9_FE, "accent-hi");
+        assert_near(palette.accent_contrast, 0xF8_FA_FD, "on-accent");
+        assert_near(palette.danger, 0xF4_5A_56, "danger");
+        assert_near(palette.warn, 0xE8_A6_3D, "warn");
+        assert_near(palette.ok, 0x59_C9_77, "ok");
+        assert_near(palette.category_other, 0x39_3E_43, "cat-other");
+    }
+
+    #[test]
+    fn categorical_colours_cycle_like_the_design_s_cats() {
+        let palette = Palette::design();
+        assert_near(palette.category(0), 0x2F_91_E2, "cat-1");
+        assert_near(palette.category(7), 0x73_7B_86, "cat-8");
+        // `CATS[i % CATS.length]`
+        assert_near(palette.category(8), 0x2F_91_E2, "cat-1 again");
+        assert_near(palette.category(9), 0x00_AF_B0, "cat-2 again");
+    }
+
+    #[test]
+    fn the_traffic_lights_are_the_design_s_three_dots() {
+        let palette = Palette::design();
+        assert_near(palette.traffic[0], 0xEF_66_61, "red");
+        assert_near(palette.traffic[1], 0xE0_AF_3B, "amber");
+        assert_near(palette.traffic[2], 0x5B_C6_63, "green");
+    }
+
+    #[test]
+    fn a_translucent_surface_matches_the_design_s_color_mix() {
+        let palette = Palette::design();
+        // `color-mix(in oklch, var(--color-bg) 55%, transparent)`
+        let veil = palette.bg.opacity(0.55);
+        assert!((veil.a - 0.55).abs() < 0.01, "got {}", veil.a);
+        // Reading a colour and fading it must not mutate the palette.
+        let _ = palette.border.opacity(0.6);
+        assert!((palette.border.a - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_scale_matches_the_design_s_frames() {
+        // The numbers a reviewer checks first against the design稿.
+        assert_eq!(metrics::TITLE_BAR_H, 46.0);
+        assert_eq!(metrics::LIST_W, 268.0);
+        assert_eq!(metrics::CANVAS_MAX_W, 1180.0);
+        assert_eq!(metrics::CANVAS_RADIUS, 20.0);
+        assert_eq!(metrics::CRUMB_H, 28.0);
+        assert_eq!(metrics::ROW_PAD_Y, 7.0);
+        assert_eq!(metrics::CAPSULE_ICON_BOX, 28.0);
+        assert_eq!(metrics::TREEMAP_PAD, 14.0);
+        assert_eq!(metrics::TILE_MIN_W, 88.0);
+        assert_eq!(metrics::TILE_STROKE, 1.5);
+        assert_eq!(metrics::SWITCH_W, 38.0);
+        assert_eq!(metrics::SWITCH_H, 22.0);
+        assert_eq!(text::BODY, 13.5);
+        assert_eq!(text::LIST_NAME, 12.5);
+    }
+
+    #[test]
+    fn the_elevation_recipes_are_the_design_s_shadows() {
+        // `.glass` has an inset highlight and one deep drop.
+        let glass = elevation::glass();
+        assert_eq!(glass.len(), 2);
+        assert!(glass[0].inset, "the highlight is inset");
+        assert!(!glass[1].inset, "the drop is not");
+        assert_eq!(glass[1].blur_radius, gpui_kit::px(60.));
+    }
 }

@@ -25,9 +25,24 @@ sift-monitor = { workspace = true }
 serde = { workspace = true }
 dirs = "6"
 gpui-kit = { workspace = true }
+# The full Lucide icon catalog. GPUI Kit re-exports a small subset on its
+# components; the design uses names outside it (Layers, HardDrive, RefreshCw).
+gpui-kit-assets = "0.6.6"
 
 [dev-dependencies]
+# `Window::render_to_image` hands back an `image::RgbaImage`; the rendering
+# harness saves it so the window can be looked at, not just asserted about.
+image = { version = "0.25", default-features = false, features = ["png"] }
 # The same crate and version as the dependency above, plus the headless test
 # support the UI integration tests need.
 gpui-kit = { version = "0.6.6", features = ["test-support"] }
 tempfile = "3"
+
+# The rendering harness needs the Metal renderer and the main thread, so it runs
+# as a plain binary rather than through the test harness (the layout GPUI Kit's
+# own rendering suite uses).
+[[test]]
+name = "rendering"
+path = "tests/rendering.rs"
+test = false
+harness = false

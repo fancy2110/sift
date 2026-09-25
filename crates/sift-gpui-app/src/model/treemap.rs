@@ -481,3 +481,102 @@ mod tests {
         assert!(!laid.tiles[0].is_aggregate());
     }
 }
+
+#[cfg(test)]
+mod fill_tests {
+    use super::*;
+
+    fn entry(name: &str, size: u64) -> TreemapEntry {
+        TreemapEntry {
+            key: NodeKey::from_bytes(name.as_bytes()),
+            label: name.to_string(),
+            size,
+            is_dir: true,
+        }
+    }
+
+    /// The listing the screenshots use, in the stage's real geometry (a 1180 px
+    /// canvas minus the 268 px list, inset by the design's 14 px pad).
+    fn laid_out() -> (Rect, TreemapLayout) {
+        let area = Rect::new(79.0, 117.0, 884.0, 629.0);
+        let entries = vec![
+            entry("Library", 41_200_000_000),
+            entry("Docker.raw", 12_884_901_888),
+            entry("node_modules", 9_126_000_000),
+            entry("target", 2_412_000_000),
+            entry("Movies", 1_940_000_000),
+            entry("Downloads", 1_284_000_000),
+            entry(".cache", 812_000_000),
+            entry("Documents", 604_000_000),
+            entry("Photos", 512_000_000),
+            entry("installer.dmg", 402_653_184),
+            entry("archive.zip", 268_435_456),
+            entry("Desktop", 190_000_000),
+            entry("xcode.log", 84_000_000),
+            entry("Music", 62_000_000),
+            entry(".npm", 41_000_000),
+            entry("notes.md", 12_288),
+        ];
+        let laid = layout(&entries, area, 88.0 * 48.0);
+        (area, laid)
+    }
+
+    #[test]
+    fn no_tile_leaves_the_area_it_was_given() {
+        let (area, laid) = laid_out();
+        assert!(!laid.tiles.is_empty());
+        for tile in &laid.tiles {
+            assert!(
+                tile.rect.x >= area.x - 0.5
+                    && tile.rect.y >= area.y - 0.5
+                    && tile.rect.right() <= area.right() + 0.5
+                    && tile.rect.bottom() <= area.bottom() + 0.5,
+                "{:?} leaves {:?}",
+                tile.rect,
+                area
+            );
+        }
+    }
+
+    #[test]
+    fn tiles_account_for_the_whole_area() {
+        let (area, laid) = laid_out();
+        let covered: f32 = laid.tiles.iter().map(|t| t.rect.area()).sum();
+        let ratio = covered / area.area();
+        assert!(
+            ratio > 0.995,
+            "tiles cover {ratio:.3} of the area, {} px^2 short: {:#?}",
+            area.area() - covered,
+            laid.tiles
+                .iter()
+                .map(|t| (t.label.clone(), t.rect, t.size))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn the_long_tail_folds_instead_of_shrinking_forever() {
+        let (_, laid) = laid_out();
+        let folded = laid
+            .tiles
+            .iter()
+            .find(|tile| tile.is_aggregate())
+            .expect("a long tail must fold into one tile");
+        assert!(folded.folded_count.unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn tiles_do_not_overlap() {
+        let (_, laid) = laid_out();
+        for (index, tile) in laid.tiles.iter().enumerate() {
+            for other in laid.tiles.iter().skip(index + 1) {
+                assert!(
+                    !tile.rect.overlaps(&other.rect),
+                    "{:?} overlaps {:?}",
+                    tile.rect,
+                    other.rect
+                );
+            }
+        }
+    }
+}

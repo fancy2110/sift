@@ -220,13 +220,53 @@ GPUI 视图层覆盖了原设计的全部表面：
 
 这些测试**立刻抓到一个真实缺陷**：`Esc` 当时只清空了队列，没有关闭候选浮层——按设计指南「Escape 应关闭最上层可关闭层」，现在 `on_dismiss` 先关对话框、再关 sheet，最后才动窗口内状态。
 
-### 8.2 仍未实现
+### 8.2 设计稿还原（§9 之前的这一轮返工）
+
+第一版 GPUI 界面是**照设计稿意译**的，不是照抄：布局近似、颜色手挑、尺寸取整。反馈是「还原度极差」，根因有三条，都不是审美问题而是**具体的实现错误**：
+
+1. **颜色构造用错了函数**。`gpui::rgba(hex)` 接收的是 **8 位 RGBA**（`[r,g,b,a] = hex.to_be_bytes()`），传 6 位设计令牌 `0x07090C` 会被读成 `[0x00,0x07,0x09,0x0C]`——**几乎全透明**。整份调色板都该用 `rgb()`。这一条会让所有表面发灰发透。
+2. **treemap 坐标重复叠加原点**。`squarify` 返回的矩形已经是传入 area 的坐标系（我把绝对窗口坐标传进去了），渲染时又加了一次 `bounds.origin`，整张图被平移（偏移量正好等于舞台原点）。
+3. **标签 run 长度写死为 1 字节**。`text_style().to_run(1)` 只塑造一个字节，于是每个方块的名字都只画出首字母（`Library` → `L`）。
+
+修完之后，还原**不再靠肉眼**，而是三条可复现的证据链：
+
+**(a) 颜色：像素级对齐。** 渲染真实视图到 PNG，再直接读像素（`tools/png_sample.py`，纯标准库解码 PNG）：
+
+| 元素 | 设计稿令牌 | 期望合成 | 实测像素 | |
+|---|---|---|---|---|
+| 窗口底 | `oklch(0.138 0.009 255)` | `#07090C` | `#07090C` | 精确 |
+| 画布 | `surface` 52% over bg | `#0B0E12` | `#0B0E12` | 精确 |
+| 玻璃导航 | `surface` 86% over bg | `#0E1115` | `#0E1115` | 精确 |
+| 列表栏 | `bg` 30% over canvas | `#0A0C10` | `#0A0D0F` | ±1（内阴影） |
+| 方块填充 | `cat-1` @0.92 | `#2C87D1` | `#2C86D1` | ±1（渐变插值） |
+
+**(b) 尺寸：在测试里量出来。** `the_shell_frames_match_the_design` 渲染后取两个相邻行按钮的 y 差，断言行距 = `metrics::ROW_H` = **32px**（18px 图标槽 + 上下 7px）；`theme::tests` 断言 46 / 268 / 1180 / 20 / 28 / 14 / 1.5 等帧值。截图能看出「高度不对」，只有数字能阻止它漂回去。
+
+**(c) 每个设计令牌一个 owner。** 调色板（oklch→sRGB 精确换算）、字号（13.5/12.5/11/10.5…）、字重（480/550/560/600/650，`FontWeight(pub f32)` 可以给任意值，不必四舍五入到 `SEMIBOLD`）、帧尺寸、阴影配方、渐变系数（0.92→0.62、压暗 0.34、hover 提亮 1.12）全部集中在 `crates/sift-gpui-app/src/theme.rs`；视图里不留字面量，所以「像不像设计稿」只有一个地方需要审。
+
+**怎么看界面。** GPUI 的 `Window::render_to_image` 走 headless Metal，不需要录屏权限：
+
+```sh
+cargo test -p sift-gpui-app --test rendering   # 写 crates/sift-gpui-app/target/ui-shots/{shell,popup,scanning}.png
+python3 tools/png_sample.py <png> X Y ...      # 读任意像素/区域均值
+```
+
+`tests/rendering.rs` 用一份「开发者主目录」的真实规模清单（38GB 的 Library、12GB 的 Docker.raw、长尾）渲染三种状态，因此布局的极端情况（超长名、长尾折叠、空态、扫描中）都在图上可查。
+
+**这一轮从截图上抓到的缺陷**：方块标签只显示首字母、整图平移、行高 27px（应 32px）、`Photos Library.photoslibrary` 把大小列挤出面板（缺 `truncate`）、列表不能滚动、候选弹层高度随内容塌缩（设计稿是固定高）、页脚主按钮没靠右、文件行多了一个设计稿没有的高亮底色（设计稿只用 `row-dim` 压暗其余项）。
+
+### 8.3 仍未实现
 
 | 后续项 | 说明 |
 |---|---|
 | 列表虚拟化 | 当前渲染前 200 行并显示「还有 N 项」；条目极多时应换 `VirtualList` |
 | 窗口拖拽区与菜单栏快捷键展示 | `TitleBar` 的拖拽区与原生菜单未接入 |
-| 玻璃质感 | GPUI 没有 backdrop blur；当前用深色分层表面 + 描边表达层级，视觉语言接近但非模糊玻璃 |
+| 玻璃模糊 | GPUI 没有 `backdrop-filter`。用半透明表面 + 1px 描边 + inset 高光 + 深投影近似（颜色数值与设计稿一致，模糊本身没有） |
+| 动画 | 设计稿有行入场 stagger、弹层 scale/fade、胶囊状态过渡；当前直接切换状态 |
+| letter-spacing | `Div` 没有该 builder（只有 `TextStyleRefinement` 有），`.chip` 的 0.01em 与 `.section-title` 的 -0.01em 未实现 |
+| 按钮字重 550 | 组件 `Button` 的 label 没有字重入口（`content_style` 是 `pub(crate)`）。保留了可访问性 `label`，字重留默认 |
+| treemap 标签描边 | 设计稿给标签加 2.5px 深色描边保证在浅色方块上可读；GPUI 文本管线无描边 |
+| 列表文件行可点击 | 设计稿里文件行是 `disabled`（只能右键/由 AI 建议入队）；这里保留可点击入队，因为分析闭环需要一个直接入口 |
 | Windows / Linux 整卷快路径 | 见 README 跨平台表（Tier 2 回退已可用） |
 | 右键菜单项级断言 | 菜单项没有 test id，只覆盖到「打开菜单不影响状态」；PopupMenu 实体由窗口 element state 持有，测试需显式关窗才能通过 harness 的泄漏检查 |
 

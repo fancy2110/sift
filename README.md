@@ -38,7 +38,9 @@ cargo run --release -p sift-scan --example scan_bench -- / --workers 8
 ### 常用校验
 
 ```bash
-cargo test                      # 278 项：单元 + 集成 + GPUI 交互级 UI 测试
+cargo test                      # 单元 + 集成 + GPUI 交互级 UI 测试
+cargo test -p sift-gpui-app --test rendering   # 渲染真实窗口到 PNG，肉眼核对设计稿
+python3 tools/png_sample.py crates/sift-gpui-app/target/ui-shots/shell.png 30 900   # 读像素
 cargo clippy --all-targets
 pnpm check                      # Svelte 类型检查
 cargo run --release -p sift-scan --example scan_bench -- <path>

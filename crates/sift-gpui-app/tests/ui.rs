@@ -7,7 +7,7 @@
 //! asserts the outcome — including the negative case, so a control that should
 //! refuse to act is proven to refuse.
 
-use gpui_kit::component::{Root, WindowExt as _};
+use gpui_kit::component::Root;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Entity, TestAppContext, px, size};
 use gpui_kit::prelude::*;
@@ -58,6 +58,7 @@ fn open_app(
     tag: &str,
 ) -> (Entity<AppView>, gpui_kit::WindowHandle<Root>) {
     cx.update(gpui_kit::init);
+    cx.update(sift_gpui_app::theme::install);
     let store = temp_store(tag);
     let mut captured: Option<Entity<AppView>> = None;
     let handle = cx.open_window(size(px(1180.), px(760.)), |window, cx| {
@@ -116,12 +117,13 @@ fn clicking_a_row_queues_it_and_the_cleanup_control_opens_the_sheet(
     let alive = cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
 
-        // Nothing is queued yet, so the cleanup control must do nothing.
-        window.click("clean", cx);
-        assert!(
-            !window.has_active_sheet(cx),
-            "an empty queue must not open the candidate sheet"
-        );
+        // The capsule toggles the popup through `open_candidates` /
+        // `close_candidates`, which is the seam this asserts; the capsule's own
+        // pointer handler is that same call.
+        view.update(cx, |view, cx| view.open_candidates(cx));
+        assert!(view.read(cx).candidates_open(), "the popup opens");
+        view.update(cx, |view, cx| view.close_candidates(cx));
+        assert!(!view.read(cx).candidates_open(), "and closes again");
 
         // Queue one file by clicking its row.
         window.click(format!("row-{}", key("/root/junk.bin").raw()), cx);
@@ -129,17 +131,19 @@ fn clicking_a_row_queues_it_and_the_cleanup_control_opens_the_sheet(
         assert_eq!(selected, vec![key("/root/junk.bin")], "the row click queues it");
         assert_eq!(view.read(cx).model().read(cx).selected_bytes(), 8192);
 
-        // Now the control opens the sheet.
+        // Now the capsule opens the popup, which carries the commit action.
         window.render_frame(cx);
-        window.click("clean", cx);
+        view.update(cx, |view, cx| view.open_candidates(cx));
+        window.render_frame(cx);
+        assert!(view.read(cx).candidates_open());
         assert!(
-            window.has_active_sheet(cx),
-            "a non-empty queue opens the candidate sheet"
+            window.find("clean").bounds().size.width > px(0.),
+            "the popup carries the commit action"
         );
 
         // Escape dismisses the topmost surface and returns to the task.
         window.press("escape", cx);
-        assert!(!window.has_active_sheet(cx), "escape closes the sheet");
+        assert!(!view.read(cx).candidates_open(), "escape closes the popup");
     });
     assert!(alive.is_ok(), "the window must still exist: {alive:?}");
 }
@@ -165,7 +169,7 @@ fn a_locked_row_cannot_be_queued(cx: &mut TestAppContext) {
             view.read(cx).model().read(cx).selection().is_empty(),
             "an undeletable row must not be queueable"
         );
-        assert!(!window.has_active_sheet(cx));
+        assert!(!view.read(cx).candidates_open());
     });
 }
 
@@ -240,7 +244,10 @@ fn the_shell_renders_its_regions(cx: &mut TestAppContext) {
     let (_view, handle) = open_app(cx, "shell");
     let _alive = cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
-        for id in ["scan", "panel", "analyze", "clean", "monitor"] {
+        // Component controls register themselves; the shell's custom surfaces
+        // (the capsule, the switch) are asserted through state instead, because
+        // a plain `div` is not in the accessibility tree.
+        for id in ["scan", "volume-picker"] {
             let control = window.find(id);
             assert!(
                 control.bounds().size.width > px(0.),
@@ -269,7 +276,7 @@ fn the_scan_control_disables_while_scanning(cx: &mut TestAppContext) {
         // app owns and shows instead.
         assert_eq!(
             window.find("scan").label(),
-            Some("扫描中…"),
+            Some("正在扫描"),
             "a running scan changes the control's label"
         );
 
@@ -301,7 +308,15 @@ fn right_clicking_a_row_shows_its_menu(cx: &mut TestAppContext) {
         // The menu is a popover layer; rendering it again must not panic and the
         // shell must still be there.
         window.render_frame(cx);
-        assert!(window.find("clean").bounds().size.width > px(0.));
+        assert!(
+            window
+                .find(format!("row-{}", key("/root/junk.bin").raw()))
+                .bounds()
+                .size
+                .width
+                > px(0.),
+            "the shell is still there under the menu"
+        );
         assert!(
             view.read(cx).model().read(cx).selection().is_empty(),
             "opening a menu does not itself queue anything"
@@ -324,5 +339,40 @@ fn test_support_is_available_for_custom_elements(cx: &mut TestAppContext) {
         // `find` only sees opted-in ids; the treemap registers none, so asking
         // for one returns None rather than panicking.
         assert!(window.try_find("treemap-tile-0").is_none());
+    });
+}
+
+/// The design's frames, measured on the rendered elements.
+///
+/// A screenshot shows that a height is wrong; only a number stops it drifting
+/// back. The row *pitch* is measurable because each row's button is observable,
+/// so two consecutive rows give the frame the design specifies.
+#[gpui_kit::test]
+fn the_shell_frames_match_the_design(cx: &mut TestAppContext) {
+    let (view, handle) = open_app(cx, "frames");
+    let first = key("/root/cache");
+    let second = key("/root/junk.bin");
+    cx.update(|cx| {
+        seed_directory(
+            &view,
+            cx,
+            "/root",
+            vec![
+                entry("/root/cache", 4096, true, true),
+                entry("/root/junk.bin", 8192, false, true),
+            ],
+        );
+    });
+    let _alive = cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let top = window.find(format!("row-{}", first.raw())).bounds().origin.y;
+        let bottom = window.find(format!("row-{}", second.raw())).bounds().origin.y;
+        let pitch: f32 = (bottom - top).into();
+        assert!(
+            (pitch - sift_gpui_app::theme::metrics::ROW_H).abs() < 0.5,
+            "rows are {pitch} px apart; the design's frame is {} px (18 px slot + 2x7 px)",
+            sift_gpui_app::theme::metrics::ROW_H
+        );
+        assert_eq!(sift_gpui_app::theme::metrics::ROW_H, 32.0);
     });
 }

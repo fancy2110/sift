@@ -14,12 +14,19 @@ fn main() {
         gpui_kit::init(cx);
         theme::install(cx);
 
+        // The design's window: 1280 × 832 with a 980 × 640 floor, a transparent
+        // title bar and the traffic lights where the design puts them.
         let options = WindowOptions {
             window_bounds: Some(gpui_kit::WindowBounds::Windowed(gpui_kit::Bounds::new(
                 gpui_kit::point(px(80.), px(80.)),
-                size(px(1180.), px(760.)),
+                size(px(1280.), px(832.)),
             ))),
-            window_min_size: Some(size(px(880.), px(560.))),
+            window_min_size: Some(size(px(980.), px(640.))),
+            titlebar: Some(gpui_kit::TitlebarOptions {
+                title: Some("Sift".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(gpui_kit::point(px(14.), px(16.))),
+            }),
             ..Default::default()
         };
 

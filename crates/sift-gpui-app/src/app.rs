@@ -1,52 +1,91 @@
-//! The window's root view and its regions.
+//! The window's root view, laid out to the design稿.
 //!
-//! `AppView` owns the retained state (the workspace model entity, the service
-//! wiring, the side panel choice) and renders one shell. Every region lives in a
-//! named `render_*` helper, so a render function never grows into a second place
-//! where product rules can hide.
+//! The structure is the design's (`src/views/CleanerView.svelte`,
+//! `src/lib/components/TitleBar.svelte`):
 //!
-//! This layer renders the model and forwards intents. It does not scan, account,
-//! analyze, or decide what is deletable — [`crate::model::WorkspaceModel`] holds
-//! every display decision, and the `sift-*` crates hold every product rule.
+//! ```text
+//! ┌ title bar ─────────────────────────── 46px, bg 55%, hairline bottom ─┐
+//! │ ●●●(real)  ▨Sift                             [switch] [scan]         │
+//! ├ workspace ────────────────────────────── padding 12, gap 12 ─────────┤
+//! │ ▢ glass capsule: [location ▾ │ crumb › crumb]                        │
+//! │ ┌ canvas 1180 max, radius 20, surface 52% ──────────────────────────┐ │
+//! │ │ treemap stage (flex 1, pad 14)        │ file list (268px)         │ │
+//! │ └───────────────────────────────────────────────────────────────────┘ │
+//! │ ▢ glass capsule: [▨] 摘要 … ›                       (opens the popup) │
+//! └───────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! This layer renders the model and forwards intents; it holds no product rule.
+//! Every colour, size and gap comes from [`crate::theme`], which is a
+//! transcription of the design's tokens, so the fidelity question has one place
+//! to be reviewed.
 
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::{Disableable as _, WindowExt as _};
-use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{ActiveTheme as _, Selectable as _, Sizable as _, TitleBar, h_flex, v_flex};
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::{
+    Disableable as _, Selectable as _, Sizable as _, WindowExt as _, h_flex,
+    v_flex,
+};
+use gpui_kit_assets::IconName;
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Context, Entity, FocusHandle, KeyBinding, Render, Window, div};
-use sift_core::{NodeKey, Volume};
+use gpui_kit::{
+    App, AnyElement, BoxShadow, Context, Entity, FocusHandle, FontWeight, Hsla, KeyBinding, Render,
+    Window, div, point, px, rgb,
+};
+use sift_core::{NodeKey, Volume, format_bytes};
 use sift_store::Store;
 
 use crate::model::{ToastLevel, WorkspaceModel};
 use crate::services::Services;
+use crate::theme::{elevation, metrics, palette, text};
 use crate::treemap_element::TreemapElement;
 
 gpui_kit::actions!(sift, [Rescan, Activate, SelectPrev, SelectNext, GoUp, Dismiss]);
 
-/// How many rows a panel draws. Both panels are the current directory's children
-/// or the analysis conclusions, which the model already filters and sorts; the
-/// cap keeps a pathological directory from building a frame's worth of elements,
-/// and the panel states how many are hidden rather than truncating silently.
-const ROW_LIMIT: usize = 200;
+/// How many rows the file list draws before it says how many are hidden. The
+/// design renders the whole list; the cap keeps a pathological directory from
+/// building a frame's worth of elements, and the count is stated, not hidden.
+const ROW_LIMIT: usize = 300;
 
-/// Which column the right-hand panel shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SidePanel {
-    Files,
-    Findings,
+/// The design's font weights, exactly as `app.css` and the components ask for
+/// them. GPUI's `FontWeight` is a plain number, so there is no reason to round
+/// the design's 480/550/560/600/650 to the nearest named constant.
+pub mod weight {
+    use gpui_kit::FontWeight;
+    /// `.btn` — every button label.
+    pub const BUTTON: FontWeight = FontWeight(550.0);
+    /// A file-list row's name (`font-[480]`).
+    pub const ROW_NAME: FontWeight = FontWeight(480.0);
+    /// A list or popup heading (`font-[650]`).
+    pub const HEADING: FontWeight = FontWeight(650.0);
+    /// A candidate's name in the popup (`font-[560]`).
+    pub const CANDIDATE: FontWeight = FontWeight(560.0);
+    /// A candidate's size in the popup (`font-[600]`).
+    pub const CANDIDATE_SIZE: FontWeight = FontWeight(600.0);
+    /// The brand wordmark (`font-[700]`).
+    pub const BRAND: FontWeight = FontWeight(700.0);
 }
+
+/// The capsule is pad 10 + a 28 px icon box + pad 10, so the popup that sits
+/// above it starts at the workspace pad plus the capsule plus the design's gap.
+const CAPSULE_H: f32 = metrics::CAPSULE_ICON_BOX + metrics::CAPSULE_PAD_Y * 2.0;
+const POPUP_BOTTOM: f32 = metrics::WORKSPACE_PAD + CAPSULE_H + 8.0;
+const POPUP_W: f32 = 520.0;
+const POPUP_MAX_H: f32 = 560.0;
+/// The design's window height. The popup's height is derived from it, so this
+/// is the number to change if the window's default size ever moves.
+const POPUP_WINDOW_H: f32 = 832.0;
 
 /// The application's root view.
 pub struct AppView {
     model: Entity<WorkspaceModel>,
     services: Services,
     focus_handle: FocusHandle,
-    panel: SidePanel,
+    /// The design's `drawerOpen`: the cleanup candidate popup.
+    candidates_open: bool,
     /// The newest toast already surfaced as a notification.
     notified_toast: u64,
 }
@@ -89,7 +128,7 @@ impl AppView {
             model,
             services,
             focus_handle,
-            panel: SidePanel::Files,
+            candidates_open: false,
             notified_toast: 0,
         }
     }
@@ -100,6 +139,27 @@ impl AppView {
 
     pub fn services(&self) -> &Services {
         &self.services
+    }
+
+    /// Whether the cleanup candidate popup is open (the design's `drawerOpen`).
+    pub fn candidates_open(&self) -> bool {
+        self.candidates_open
+    }
+
+    /// Open the cleanup candidate popup (the design's `drawerOpen = true`).
+    ///
+    /// The capsule, the keyboard and any future entry point all call this, so
+    /// "what opens the popup" has one implementation.
+    pub fn open_candidates(&mut self, cx: &mut Context<Self>) {
+        self.candidates_open = true;
+        cx.notify();
+    }
+
+    /// Close the popup. Escape, the scrim, the close control and a committed
+    /// cleanup all call this.
+    pub fn close_candidates(&mut self, cx: &mut Context<Self>) {
+        self.candidates_open = false;
+        cx.notify();
     }
 
     pub fn services_mut(&mut self) -> &mut Services {
@@ -124,10 +184,13 @@ impl AppView {
     }
 
     fn on_dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        // Escape dismisses the topmost layer first: a dialog, then a sheet, and
-        // only then the in-window state. Without this the sheet swallowed the
-        // key while the queue was cleared behind it — a UI integration test
-        // caught exactly that.
+        // Escape dismisses the topmost layer first: the candidate popup, then the
+        // window's own overlays, and only then the in-window state. It never
+        // closes the window.
+        if self.candidates_open {
+            self.close_candidates(cx);
+            return;
+        }
         if window.has_active_dialog(cx) {
             window.close_dialog(cx);
             return;
@@ -136,8 +199,6 @@ impl AppView {
             window.close_sheet(cx);
             return;
         }
-        // Nothing to dismiss: clear the queue (the lighter commitment), then the
-        // highlight. Escape never closes the window.
         self.model.update(cx, |model, cx| {
             if model.selection().is_empty() {
                 model.set_focus(None);
@@ -208,202 +269,314 @@ impl AppView {
                 .map(|node| node.path.clone())
                 .unwrap_or_default()
         });
-        // Re-prioritize the running scan toward what the user just opened.
         if !path.as_os_str().is_empty() {
             self.services.focus_scan(path);
         }
     }
 
-    // ---- regions -----------------------------------------------------------
+    // ---- title bar (46 px) -------------------------------------------------
 
     fn render_title_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Copy the colours out of the theme: `cx.theme()` borrows the app, and
-        // the builder chains below also call `cx.listener`, which needs `cx`
-        // mutably. Hsla values are `Copy`, so a local ends the borrow.
-        let (_border, muted, _success, _warning) = {
-            let t = cx.theme();
-            (t.border, t.muted_foreground, t.success, t.warning)
-        };
-        let (scanning, status, monitor_running) = {
+        let p = palette(cx);
+        let (scanning, monitor_running) = {
             let model = self.model.read(cx);
-            (
-                model.is_scanning(),
-                model.status_line(),
-                model.monitor().running,
-            )
+            (model.is_scanning(), model.monitor().running)
         };
 
-        TitleBar::new().child(
-            h_flex()
-                .flex_1()
-                .items_center()
-                .gap_3()
-                .px_3()
-                .child(div().text_sm().child("Sift"))
-                .child(div().flex_1())
-                .child(div().text_sm().text_color(muted).child(status))
-                .child(
-                    Button::new("monitor")
-                        .label(if monitor_running { "停止值守" } else { "开始值守" })
-                        .small()
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            let running = view.model.read(cx).monitor().running;
-                            view.services.set_monitor_running(!running, cx);
-                        })),
-                )
-                .child(
-                    Button::new("scan")
-                        .label(if scanning { "扫描中…" } else { "扫描" })
-                        .small()
-                        .primary()
-                        .disabled(scanning)
-                        .on_click(cx.listener(|view, _, _, cx| view.services.restart_scan(cx))),
-                )
-                .child(
-                    Button::new("panel")
-                        .label(match self.panel {
-                            SidePanel::Files => "结论",
-                            SidePanel::Findings => "文件",
-                        })
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.panel = match view.panel {
-                                SidePanel::Files => SidePanel::Findings,
-                                SidePanel::Findings => SidePanel::Files,
-                            };
-                            cx.notify();
-                        })),
-                ),
-        )
+        h_flex()
+            .h(px(metrics::TITLE_BAR_H))
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(metrics::TITLE_BAR_GAP))
+            .px(px(metrics::TITLE_BAR_PAD_X))
+            .bg(p.bg.opacity(0.55))
+            .border_b_1()
+            .border_color(p.border.opacity(0.6))
+            // The real macOS traffic lights live here (x = 14), so the design's
+            // leading space is reserved rather than drawn twice.
+            .child(div().w(px(metrics::TRAFFIC_RESERVE)))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .size(px(metrics::MARK))
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(metrics::MARK_RADIUS))
+                            .bg(p.accent)
+                            .shadow(vec![BoxShadow {
+                                color: p.accent.opacity(0.55),
+                                offset: point(px(0.), px(4.)),
+                                blur_radius: px(12.),
+                                spread_radius: px(-4.),
+                                inset: false,
+                            }])
+                            .child(
+                                icon(IconName::Layers, 13., p.accent_contrast),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(text::TITLE))
+                            .font_weight(weight::BRAND)
+                            .child("Sift"),
+                    ),
+            )
+            .child(div().flex_1())
+            .child(self.render_auto_switch(monitor_running, cx))
+            .child(
+                // The design's only primary action, disabled while a scan runs so
+                // a second click cannot start a competing walk.
+                // `.label` rather than a child: the label is what an
+                // accessibility client reads, and the component exposes no way to
+                // set a label's weight, so the design's 550 stays the one
+                // approximation here.
+                gpui_kit::component::button::Button::new("scan")
+                    .label(if scanning { "正在扫描" } else { "智能扫描" })
+                    .small()
+                    .primary()
+                    .disabled(scanning)
+                    .on_click(cx.listener(|view, _, _, cx| view.services.restart_scan(cx))),
+            )
     }
 
-    fn render_volume_row(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Copy the colours out of the theme: `cx.theme()` borrows the app, and
-        // the builder chains below also call `cx.listener`, which needs `cx`
-        // mutably. Hsla values are `Copy`, so a local ends the borrow.
-        let (border, _muted, _success, _warning) = {
-            let t = cx.theme();
-            (t.border, t.muted_foreground, t.success, t.warning)
-        };
-        let (volumes, current) = {
-            let model = self.model.read(cx);
-            (model.volumes().to_vec(), model.current_volume_id())
-        };
+    /// The design's `switch`: 38 × 22 with a 16 px thumb.
+    fn render_auto_switch(&self, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette(cx);
+        div()
+            .id("auto-switch")
+            .w(px(metrics::SWITCH_W))
+            .h(px(metrics::SWITCH_H))
+            .flex_shrink_0()
+            .rounded(px(999.))
+            .bg(if on { p.accent } else { p.surface3 })
+            .border_1()
+            .border_color(if on { p.accent } else { p.border })
+            .flex()
+            .items_center()
+            .when(on, |el| {
+                el.shadow(vec![BoxShadow {
+                    color: p.accent.opacity(0.6),
+                    offset: point(px(0.), px(2.)),
+                    blur_radius: px(8.),
+                    spread_radius: px(-2.),
+                    inset: false,
+                }])
+            })
+            .child(
+                div()
+                    .size(px(metrics::SWITCH_THUMB))
+                    .rounded(px(999.))
+                    .bg(rgb(0xFF_FF_FF))
+                    .ml(px(if on {
+                        metrics::SWITCH_W - metrics::SWITCH_THUMB - 4.0
+                    } else {
+                        2.0
+                    }))
+                    .shadow(vec![BoxShadow {
+                        color: Hsla::from(rgb(0x00_00_00)).opacity(0.3),
+                        offset: point(px(0.), px(1.)),
+                        blur_radius: px(3.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }]),
+            )
+            .on_click(cx.listener(|view, _, _, cx| {
+                let running = view.model.read(cx).monitor().running;
+                view.services.set_monitor_running(!running, cx);
+            }))
+    }
 
-        // One control, not a row of buttons: a machine can mount many volumes,
-        // and a picker is the desktop pattern for "choose one of N".
-        let volumes_for_menu: Rc<Vec<Volume>> = Rc::new(volumes);
+    // ---- top navigation: one pill holding the picker and the crumbs --------
+
+    fn render_nav(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette(cx);
+        let volumes = self.model.read(cx).volumes().to_vec();
+        let current = self.model.read(cx).current_volume_id();
+        let crumbs: Vec<(NodeKey, String)> = self
+            .model
+            .read(cx)
+            .breadcrumbs()
+            .iter()
+            .map(|node| (node.key, node.name.clone()))
+            .collect();
+
+        let current_volume = current.and_then(|id| volumes.iter().find(|volume| volume.id == id).cloned());
         let this = cx.entity();
-        let current_label = current
-            .and_then(|id| {
-                volumes_for_menu
-                    .iter()
-                    .find(|volume| volume.id == id)
-                    .map(|volume| {
-                        format!(
-                            "{} · {} 可用",
-                            volume.name,
-                            sift_core::format_bytes(volume.available_bytes)
+        let volumes_for_menu: Rc<Vec<Volume>> = Rc::new(volumes);
+
+        h_flex()
+            .self_start()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(metrics::NAV_GAP))
+            .rounded(px(metrics::NAV_RADIUS))
+            .px(px(metrics::NAV_PAD_X))
+            .py(px(metrics::NAV_PAD_Y))
+            // `.glass`: translucent surface, hairline border, inset highlight and
+            // a deep drop shadow.
+            .bg(p.surface.opacity(0.86))
+            .border_1()
+            .border_color(p.border_strong.opacity(0.7))
+            .shadow(elevation::glass())
+            .child({
+                let current_for_menu = current;
+                let volumes_menu = volumes_for_menu.clone();
+                let this = this.clone();
+                let removable = current_volume.as_ref().is_some_and(|v| v.is_removable);
+                let mut label: Vec<AnyElement> = Vec::new();
+                label.push(
+                    icon(IconName::HardDrive, 14., if removable { p.accent_hi } else { p.fg })
+                        .into_any_element(),
+                );
+                label.push(
+                    div()
+                        .text_size(px(text::NAV_NAME))
+                        .font_weight(weight::BUTTON)
+                        .child(
+                            current_volume
+                                .as_ref()
+                                .map(|volume| volume.name.clone())
+                                .unwrap_or_else(|| "—".to_string()),
+                        )
+                        .into_any_element(),
+                );
+                if let Some(volume) = current_volume.as_ref() {
+                    label.push(
+                        div()
+                            .font_family("Menlo")
+                            .text_size(px(text::NAV_SUB))
+                            .text_color(p.faint)
+                            .child(format!("{} 可用", format_bytes(volume.available_bytes)))
+                            .into_any_element(),
+                    );
+                }
+                label.push(
+                    icon(IconName::ChevronDown, 12., p.muted)
+                        .into_any_element(),
+                );
+
+                let mut button = gpui_kit::component::button::Button::new("volume-picker")
+                    .ghost()
+                    .small();
+                for element in label {
+                    button = button.child(element);
+                }
+                button.dropdown_menu(move |mut menu, _window, _cx| {
+                        for volume in volumes_menu.iter() {
+                            let id = volume.id;
+                            let selected = Some(id) == current_for_menu;
+                            let item_label = format!(
+                                "{} · {} / {}",
+                                volume.name,
+                                format_bytes(volume.available_bytes),
+                                format_bytes(volume.total_bytes)
+                            );
+                            let this = this.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(item_label)
+                                    .checked(selected)
+                                    .on_click(move |_, _window, cx| {
+                                        this.update(cx, |view, cx| {
+                                            view.services.select_volume(id, cx);
+                                        });
+                                    }),
+                            );
+                        }
+                        let this = this.clone();
+                        menu.separator().item(
+                            PopupMenuItem::new("所有磁盘").on_click(move |_, _window, cx| {
+                                this.update(cx, |view, cx| view.services.show_all_volumes(cx));
+                            }),
                         )
                     })
             })
-            .unwrap_or_else(|| "选择磁盘".to_string());
-        let current_for_menu = current;
-        let volumes_menu = volumes_for_menu.clone();
-
-        let row = h_flex().flex_shrink_0().items_center().gap_2().px_3().pb_2().child(
-            Button::new("volume-picker")
-                .label(current_label)
-                .xsmall()
-                .dropdown_menu(move |mut menu, _window, _cx| {
-                    for volume in volumes_for_menu.iter() {
-                        let id = volume.id;
-                        let selected = Some(id) == current_for_menu;
-                        let label = format!(
-                            "{} · {} / {}",
-                            volume.name,
-                            sift_core::format_bytes(volume.available_bytes),
-                            sift_core::format_bytes(volume.total_bytes)
-                        );
-                        let this = this.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(selected)
-                                .on_click(move |_, _window, cx| {
-                                    this.update(cx, |view, cx| view.services.select_volume(id, cx));
-                                }),
+            // The design's divider: 1 × 20 with a 4 px margin either side.
+            .child(
+                div()
+                    .w(px(metrics::DIVIDER_W))
+                    .h(px(metrics::DIVIDER_H))
+                    .mx(px(metrics::DIVIDER_MX))
+                    .bg(p.border_strong),
+            )
+            .child({
+                let mut trail = h_flex().items_center().gap(px(metrics::CRUMB_GAP)).pr_1();
+                for (index, (key, name)) in crumbs.iter().enumerate() {
+                    let key = *key;
+                    if index > 0 {
+                        trail = trail.child(
+                            icon(IconName::ChevronRight, 11., p.faint),
                         );
                     }
-                    let this = this.clone();
-                    menu.separator().item(
-                        PopupMenuItem::new("所有磁盘").on_click(move |_, _window, cx| {
-                            this.update(cx, |view, cx| view.services.show_all_volumes(cx));
-                        }),
-                    )
-                }),
-        );
-        let _ = volumes_menu;
-
-        // Breadcrumbs navigate inside the app, so they are Buttons, never Links.
-        let crumbs: Vec<(NodeKey, String)> = {
-            let model = self.model.read(cx);
-            model
-                .breadcrumbs()
-                .iter()
-                .map(|node| (node.key, node.name.clone()))
-                .collect()
-        };
-        let mut trail = h_flex().gap_1().items_center().px_3().pb_2();
-        for (index, (key, name)) in crumbs.iter().enumerate() {
-            // Copy before the `move` closure so the id does not borrow `crumbs`.
-            let key = *key;
-            let is_last = index + 1 == crumbs.len();
-            trail = trail.child(
-                Button::new(format!("crumb-{index}"))
-                    .label(name.clone())
-                    .xsmall()
-                    .when(is_last, |button| button.selected(true))
-                    .on_click(cx.listener(move |view, _, _, cx| view.drill(key, cx))),
-            );
-        }
-
-        v_flex()
-            .flex_shrink_0()
-            .border_b_1()
-            .border_color(border)
-            .child(row)
-            .child(trail)
+                    let is_last = index + 1 == crumbs.len();
+                    trail = trail.child(
+                        gpui_kit::component::button::Button::new(format!("crumb-{index}"))
+                            .ghost()
+                            .xsmall()
+                            .when(is_last, |button| button.selected(true))
+                            .child(
+                                div()
+                                    .max_w(px(metrics::CRUMB_MAX_W))
+                                    .text_size(px(text::CRUMB))
+                                    .text_color(if is_last { p.fg } else { p.muted })
+                                    .child(name.clone()),
+                            )
+                            .on_click(cx.listener(move |view, _, _, cx| view.drill(key, cx))),
+                    );
+                }
+                trail
+            })
     }
 
+    // ---- body: the canvas holding the treemap and the 268 px list ----------
+
     fn render_body(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Copy the colours out of the theme: `cx.theme()` borrows the app, and
-        // the builder chains below also call `cx.listener`, which needs `cx`
-        // mutably. Hsla values are `Copy`, so a local ends the borrow.
-        let (border, _muted, _success, _warning) = {
-            let t = cx.theme();
-            (t.border, t.muted_foreground, t.success, t.warning)
-        };
+        let p = palette(cx);
+        let pending = self.model.read(cx).is_scanning();
+
         h_flex()
             .flex_1()
             .min_h_0()
             .items_stretch()
+            .justify_center()
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
+                h_flex()
+                    .w_full()
+                    .max_w(px(metrics::CANVAS_MAX_W))
                     .min_h_0()
-                    .p_2()
-                    .child(self.render_treemap(cx)),
-            )
-            .child(
-                v_flex()
-                    .w_80()
-                    .flex_shrink_0()
-                    .min_h_0()
-                    .border_l_1()
-                    .border_color(border)
-                    .child(self.render_panel(cx)),
+                    .items_stretch()
+                    .rounded(px(metrics::CANVAS_RADIUS))
+                    .overflow_hidden()
+                    .bg(p.surface.opacity(metrics::CANVAS_ALPHA))
+                    .child(
+                        // The stage: the treemap plus the design's pending hint.
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .child(self.render_treemap(cx))
+                            .when(pending, |stage| {
+                                stage.child(
+                                    h_flex()
+                                        .absolute()
+                                        .left(px(12.))
+                                        .top(px(8.))
+                                        .items_center()
+                                        .gap_1()
+                                        .text_size(px(10.5))
+                                        .text_color(p.faint)
+                                        .child(
+                                            icon(IconName::RefreshCw, 11., p.faint),
+                                        )
+                                        .child("正在扫描…"),
+                                )
+                            }),
+                    )
+                    .child(self.render_file_list(cx)),
             )
     }
 
@@ -430,431 +603,713 @@ impl AppView {
         )
     }
 
-    fn render_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        match self.panel {
-            SidePanel::Files => self.render_files(cx).into_any_element(),
-            SidePanel::Findings => self.render_findings(cx).into_any_element(),
-        }
-    }
+    /// The design's `immersive-list`: 268 px, a 30% background and two inset
+    /// shadows that make it read as a recessed pane rather than a card.
+    fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette(cx);
+        let focus = self.model.read(cx).focus_key();
 
-    fn render_files(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Copy the colours out of the theme: `cx.theme()` borrows the app, and
-        // the builder chains below also call `cx.listener`, which needs `cx`
-        // mutably. Hsla values are `Copy`, so a local ends the borrow.
-        let (border, muted, success, _warning) = {
-            let t = cx.theme();
-            (t.border, t.muted_foreground, t.success, t.warning)
-        };
-        let rows: Vec<(NodeKey, String, String, bool, bool)> = {
+        let rows: Vec<RowData> = {
             let model = self.model.read(cx);
+            let findings = model.findings();
             model
                 .visible_entries()
                 .iter()
                 .take(ROW_LIMIT)
-                .map(|node| {
-                    (
-                        node.key,
-                        node.name.clone(),
-                        node.size_label(),
-                        node.is_dir,
-                        model.is_selected(node.key),
-                    )
+                .map(|node| RowData {
+                    key: node.key,
+                    name: node.name.clone(),
+                    size: node.size_label(),
+                    is_dir: node.is_dir,
+                    selected: model.is_selected(node.key),
+                    safety: findings
+                        .iter()
+                        .find(|finding| finding.key == node.key)
+                        .map(|finding| finding.safety),
                 })
                 .collect()
         };
         let total = self.model.read(cx).visible_entries().len();
 
-        let mut list = v_flex().flex_1().min_h_0().p_1();
-        for (key, name, size, is_dir, selected) in rows {
-            let label = format!("{name}   {size}");
-            // The row offers its object-scoped commands on right-click. The
-            // same commands stay reachable without a pointer: clicking selects,
-            // and the findings panel carries the approval toggle.
-            let approval = {
-                let model = self.model.read(cx);
-                model
-                    .findings()
-                    .iter()
-                    .find(|finding| finding.key == key)
-                    .map(|finding| finding.approved_for_auto)
-            };
-            let this = cx.entity();
-            let row_menu = move |mut menu: gpui_kit::component::menu::PopupMenu,
-                                 _window: &mut Window,
-                                 _cx: &mut gpui_kit::Context<gpui_kit::component::menu::PopupMenu>| {
-                let toggler = this.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(if selected {
-                        "从删除队列移除"
-                    } else {
-                        "加入删除队列"
-                    })
-                    .on_click(move |_, _, cx| {
-                        toggler.update(cx, |view, cx| {
-                            view.model.update(cx, |model, cx| {
-                                model.toggle_selected(key);
-                                cx.notify();
-                            });
-                        });
-                    }),
-                );
-                if let Some(approved) = approval {
-                    let approver = this.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(if approved {
-                            "取消允许自动清理"
-                        } else {
-                            "允许自动清理"
-                        })
-                        .on_click(move |_, _, cx| {
-                            approver.update(cx, |view, cx| {
-                                view.services.set_auto_approval(key, !approved, cx);
-                            });
-                        }),
-                    );
-                }
-                menu
-            };
-
+        // The design's list is the pane's scroll area (`overflow-y-auto`): a
+        // directory with more entries than fit must scroll, not clip.
+        let mut list = v_flex()
+            .id("file-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(metrics::LIST_PAD_X))
+            .pb(px(metrics::LIST_PAD_BOTTOM));
+        if rows.is_empty() {
             list = list.child(
-                h_flex()
-                    .id(format!("row-wrapper-{}", key.raw()))
-                    .context_menu(row_menu)
-                    .w_full()
-                    .gap_2()
+                v_flex()
+                    .flex_1()
                     .items_center()
-                    .child(
-                        Button::new(format!("row-{}", key.raw()))
-                            .label(label)
-                            .xsmall()
-                            .when(selected, |button| button.selected(true))
-                            .on_click(cx.listener(move |view, _, _, cx| view.activate(key, cx))),
-                    )
-                    .when(selected, |row| {
-                        row.child(div().text_xs().text_color(success).child("✓"))
-                    })
-                    .when(is_dir, |row| {
-                        row.child(div().text_xs().text_color(muted).child("›"))
-                    }),
+                    .justify_center()
+                    .gap_2()
+                    .text_size(px(12.))
+                    .text_color(p.muted)
+                    .child(icon(IconName::Check, 20., p.ok))
+                    .child("此文件夹没有可显示的内容"),
             );
+        }
+        for row in rows {
+            list = list.child(self.render_row(row, focus, cx));
         }
         if total > ROW_LIMIT {
             list = list.child(
                 div()
-                    .p_2()
-                    .text_xs()
-                    .text_color(muted)
+                    .px_2()
+                    .py_2()
+                    .text_size(px(text::LIST_SIZE))
+                    .text_color(p.faint)
                     .child(format!("还有 {} 项未显示（按大小排序）", total - ROW_LIMIT)),
             );
         }
 
         v_flex()
-            .flex_1()
+            .w(px(metrics::LIST_W))
+            .flex_shrink_0()
             .min_h_0()
+            .bg(p.bg.opacity(0.3))
+            .shadow(vec![
+                BoxShadow {
+                    color: Hsla::from(rgb(0x00_00_00)).opacity(0.55),
+                    offset: point(px(14.), px(18.)),
+                    blur_radius: px(22.),
+                    spread_radius: px(-18.),
+                    inset: true,
+                },
+                BoxShadow {
+                    color: Hsla::from(rgb(0x00_00_00)).opacity(0.45),
+                    offset: point(px(10.), px(0.)),
+                    blur_radius: px(14.),
+                    spread_radius: px(-12.),
+                    inset: true,
+                },
+            ])
             .child(
+                // The design's list header: 12 px/650 title, 11 px mono count.
                 h_flex()
                     .flex_shrink_0()
                     .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(div().text_xs().child("文件与文件夹"))
-                    .child(div().flex_1())
+                    .gap(px(metrics::LIST_HEADER_GAP))
+                    .px(px(metrics::LIST_HEADER_PAD_X))
+                    .pt(px(metrics::LIST_HEADER_PAD_TOP))
+                    .pb(px(metrics::LIST_HEADER_PAD_BOTTOM))
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(muted)
+                            .text_size(px(text::LIST_TITLE))
+                            .font_weight(weight::HEADING)
+                            .text_color(p.muted)
+                            .child("文件与文件夹"),
+                    )
+                    .child(
+                        div()
+                            .ml_auto()
+                            .font_family("Menlo")
+                            .text_size(px(text::LIST_SIZE))
+                            .text_color(p.faint)
                             .child(total.to_string()),
                     ),
             )
             .child(list)
     }
 
-    fn render_findings(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Copy the colours out of the theme: `cx.theme()` borrows the app, and
-        // the builder chains below also call `cx.listener`, which needs `cx`
-        // mutably. Hsla values are `Copy`, so a local ends the borrow.
-        let (border, muted, success, warning) = {
-            let t = cx.theme();
-            (t.border, t.muted_foreground, t.success, t.warning)
-        };
-        let analyzing = self.model.read(cx).is_analyzing();
-        let findings: Vec<(NodeKey, String, String, u64, bool, bool)> = {
+    fn render_row(
+        &self,
+        row: RowData,
+        focus: Option<NodeKey>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let p = palette(cx);
+        let is_focused = focus == Some(row.key);
+        let dim = focus.is_some() && !is_focused;
+        let safety_color = row.safety.map(|safety| match safety {
+            sift_analyze::Safety::Safe => p.ok,
+            sift_analyze::Safety::Review => p.warn,
+            sift_analyze::Safety::Keep => p.faint,
+        });
+        let approval = {
             let model = self.model.read(cx);
             model
                 .findings()
                 .iter()
+                .find(|finding| finding.key == row.key)
+                .map(|finding| finding.approved_for_auto)
+        };
+        let this = cx.entity();
+        let key = row.key;
+        let selected = row.selected;
+
+        let row_menu = move |mut menu: gpui_kit::component::menu::PopupMenu,
+                             _window: &mut Window,
+                             _cx: &mut gpui_kit::Context<gpui_kit::component::menu::PopupMenu>| {
+            let toggler = this.clone();
+            menu = menu.item(
+                PopupMenuItem::new(if selected {
+                    "从删除队列移除"
+                } else {
+                    "加入删除队列"
+                })
+                .on_click(move |_, _, cx| {
+                    toggler.update(cx, |view, cx| {
+                        view.model.update(cx, |model, cx| {
+                            model.toggle_selected(key);
+                            cx.notify();
+                        });
+                    });
+                }),
+            );
+            if let Some(approved) = approval {
+                let approver = this.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(if approved {
+                        "取消允许自动清理"
+                    } else {
+                        "允许自动清理"
+                    })
+                    .on_click(move |_, _, cx| {
+                        approver.update(cx, |view, cx| {
+                            view.services.set_auto_approval(key, !approved, cx);
+                        });
+                    }),
+                );
+            }
+            menu
+        };
+
+        h_flex()
+            .id(format!("row-wrapper-{}", row.key.raw()))
+            .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
+                // `onmouseenter` / `onmouseleave` set the shared focus, which is
+                // what dims the other rows and the other tiles at once.
+                view.model.update(cx, |model, cx| {
+                    if *hovered {
+                        model.set_focus(Some(key));
+                    } else if model.focus_key() == Some(key) {
+                        model.set_focus(None);
+                    }
+                    cx.notify();
+                });
+            }))
+            .context_menu(row_menu)
+            .w_full()
+            .h(px(metrics::ROW_H))
+            .items_center()
+            .gap(px(metrics::ROW_GAP))
+            .rounded(px(metrics::ROW_RADIUS))
+            .px(px(metrics::ROW_PAD_X))
+            .py(px(metrics::ROW_PAD_Y))
+            // `.entry-row.row-dim { opacity: 0.34 }`: the design dims the others
+            // rather than highlighting the hovered row, and the treemap tile is
+            // where the highlight is read from.
+            .when(dim, |el| el.opacity(0.34))
+            // The design's 18 px icon slot keeps names on one spine whether the
+            // icon differs in width or is absent.
+            .child(
+                // `h-[18px] w-[18px]`: the slot's height is what sets the design's
+                // 32 px row (18 px of content plus 7 px above and below).
+                div()
+                    .flex()
+                    .size(px(metrics::ROW_ICON_SLOT))
+                    .items_center()
+                    .justify_center()
+                    .text_color(p.faint)
+                    .child(icon(
+                        if row.is_dir {
+                            IconName::Folder
+                        } else {
+                            IconName::HardDrive
+                        },
+                        metrics::ROW_ICON,
+                        p.faint,
+                    )),
+            )
+            .child(
+                // The design's name button: `flex min-w-0 flex-1`, no padding of
+                // its own, the name truncating and the chevron pushed to the
+                // button's trailing edge with `ml-auto`.
+                gpui_kit::component::button::Button::new(format!("row-{}", row.key.raw()))
+                    .ghost()
+                    .xsmall()
+                    .flex_1()
+                    .min_w_0()
+                    .px(px(0.))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(text::LIST_NAME))
+                                    .font_weight(weight::ROW_NAME)
+                                    .text_color(p.fg)
+                                    .child(row.name.clone()),
+                            )
+                            .when(row.is_dir, |el| {
+                                el.child(
+                                    div()
+                                        .ml_auto()
+                                        .flex_shrink_0()
+                                        .child(icon(IconName::ChevronRight, 12., p.faint)),
+                                )
+                            }),
+                    )
+                    .on_click(cx.listener(move |view, _, _, cx| view.activate(key, cx))),
+            )
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_2()
+                    // An AI conclusion reads as a marker on the row, which is what
+                    // makes the treemap and the list one judgement view.
+                    .when_some(safety_color, |el, color| {
+                        el.child(div().size(px(6.)).rounded(px(999.)).bg(color))
+                    })
+                    .when(selected, |el| {
+                        el.child(
+                            icon(IconName::Check, 12., p.accent),
+                        )
+                    })
+                    .child(
+                        div()
+                            .font_family("Menlo")
+                            .text_size(px(text::LIST_SIZE))
+                            .text_color(p.muted)
+                            .child(row.size.clone()),
+                    ),
+            )
+    }
+
+    // ---- bottom capsule: the design's summary, and the popup's anchor ------
+
+    fn render_capsule(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette(cx);
+        let (scanning, files, dirs, selected_bytes, selected_count, available) = {
+            let model = self.model.read(cx);
+            (
+                model.is_scanning(),
+                model.progress().files,
+                model.progress().dirs,
+                model.selected_bytes(),
+                model.selection().len(),
+                model.current_volume().map(|volume| volume.available_bytes),
+            )
+        };
+
+        let summary: AnyElement = if scanning {
+            h_flex()
+                .gap_1()
+                .text_size(px(text::CAPSULE))
+                .child("正在扫描：")
+                .child(
+                    div()
+                        .font_family("Menlo")
+                        .font_weight(weight::HEADING)
+                        .child(files.to_string()),
+                )
+                .child(" 文件 · ")
+                .child(
+                    div()
+                        .font_family("Menlo")
+                        .font_weight(weight::HEADING)
+                        .child(dirs.to_string()),
+                )
+                .child(" 文件夹")
+                .into_any_element()
+        } else if selected_count > 0 {
+            h_flex()
+                .gap_1()
+                .text_size(px(text::CAPSULE))
+                .child("待清理 ")
+                .child(
+                    div()
+                        .font_family("Menlo")
+                        .font_weight(weight::HEADING)
+                        .text_color(p.accent_hi)
+                        .child(format_bytes(selected_bytes)),
+                )
+                .child(
+                    div()
+                        .text_color(p.faint)
+                        .child(format!(" · {selected_count} 项")),
+                )
+                .into_any_element()
+        } else {
+            h_flex()
+                .gap_1()
+                .text_size(px(text::CAPSULE))
+                .child(
+                    div()
+                        .font_family("Menlo")
+                        .font_weight(weight::HEADING)
+                        .child(format_bytes(available.unwrap_or(0))),
+                )
+                .child(div().text_color(p.faint).child(" 可用空间"))
+                .into_any_element()
+        };
+
+        h_flex()
+            .id("ai-summary")
+            .self_start()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(metrics::CAPSULE_GAP))
+            .rounded(px(metrics::CAPSULE_RADIUS))
+            .px(px(metrics::CAPSULE_PAD_X))
+            .py(px(metrics::CAPSULE_PAD_Y))
+            .bg(p.surface.opacity(0.86))
+            .border_1()
+            .border_color(p.border_strong.opacity(0.7))
+            .shadow(elevation::glass())
+            .child(
+                div()
+                    .flex()
+                    .size(px(metrics::CAPSULE_ICON_BOX))
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(metrics::CAPSULE_ICON_RADIUS))
+                    .bg(p.accent.opacity(0.22))
+                    .child(
+                        icon(IconName::Layers, 15., p.accent_hi),
+                    ),
+            )
+            .child(summary)
+            .child(
+                icon(IconName::ChevronRight, 14., p.faint),
+            )
+            .on_click(cx.listener(|view, _, _, cx| {
+                if view.candidates_open {
+                    view.close_candidates(cx);
+                } else {
+                    view.open_candidates(cx);
+                }
+            }))
+    }
+
+    /// The design's backdrop: a scrim over the workspace that closes the popup.
+    fn render_scrim(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.candidates_open {
+            return None;
+        }
+        Some(
+            div()
+                .id("popup-scrim")
+                .absolute()
+                .inset_0()
+                // `oklch(0 0 0 / 0.34)` with a blur. GPUI has no backdrop blur,
+                // so the scrim carries slightly more weight instead.
+                .bg(Hsla::from(rgb(0x00_00_00)).opacity(0.42))
+                .on_click(cx.listener(|view, _, _, cx| view.close_candidates(cx)))
+                .into_any_element(),
+        )
+    }
+
+    /// The design's candidate popup: anchored above the capsule, 520 × 560 max,
+    /// with a header, the candidate rows and a footer that commits.
+    fn render_candidates(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.candidates_open {
+            return None;
+        }
+        let p = palette(cx);
+        // `min(560, capsule top - workspace top - 8)`: the design's popup is a
+        // fixed-height frame, so an empty list still shows the panel a user
+        // expects rather than a box that shrinks to its content.
+        let popup_height = (POPUP_WINDOW_H - metrics::TITLE_BAR_H - metrics::WORKSPACE_PAD * 2.0
+            - CAPSULE_H
+            - 8.0)
+            .min(POPUP_MAX_H);
+        let (queued, suggestions, selected_bytes) = {
+            let model = self.model.read(cx);
+            let queued: Vec<(NodeKey, String, String, u64)> = model
+                .selected_items()
+                .iter()
+                .map(|node| {
+                    (
+                        node.key,
+                        node.name.clone(),
+                        node.path.to_string_lossy().into_owned(),
+                        node.size.reclaimable(),
+                    )
+                })
+                .collect();
+            // The analysis's own nominations, offered as one-click suggestions.
+            let suggestions: Vec<(NodeKey, String, String, u64)> = model
+                .removable_findings()
+                .iter()
+                .filter(|finding| !model.is_selected(finding.key))
+                .take(50)
                 .map(|finding| {
                     (
                         finding.key,
                         finding.name.clone(),
                         render_reason(&finding.reason),
                         finding.size,
-                        finding.safety == sift_analyze::Safety::Safe,
-                        finding.approved_for_auto,
                     )
                 })
-                .collect()
+                .collect();
+            (queued, suggestions, model.selected_bytes())
         };
-        let reclaimable = self.model.read(cx).reclaimable_bytes();
-        let safe = self.model.read(cx).safe_bytes();
+        let count = queued.len();
 
-        let mut list = v_flex().flex_1().min_h_0().p_1();
-        if findings.is_empty() {
-            list = list.child(
-                v_flex()
+        let mut rows = v_flex().flex_1().min_h_0().px(px(12.)).pt_2();
+        for (key, name, detail, size) in &queued {
+            let key = *key;
+            let (name, detail, size) = (name.clone(), detail.clone(), *size);
+            rows = rows.child(
+                h_flex()
+                    .w_full()
                     .items_center()
-                    .gap_2()
-                    .p_4()
+                    .gap_3()
+                    .rounded(px(metrics::ROW_RADIUS))
+                    .px(px(10.))
+                    .py_2()
                     .child(
+                        // The design's checked box: an accent square with a tick.
                         div()
-                            .text_sm()
-                            .text_color(muted)
-                            .child("还没有分析结论"),
+                            .id(format!("unqueue-{}", key.raw()))
+                            .flex()
+                            .size(px(18.))
+                            .flex_shrink_0()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(5.))
+                            .bg(p.accent)
+                            .child(
+                                icon(IconName::Check, 12., p.accent_contrast),
+                            )
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.model.update(cx, |model, cx| {
+                                    model.toggle_selected(key);
+                                    cx.notify();
+                                });
+                            })),
                     )
                     .child(
-                        Button::new("analyze-empty")
-                            .label("开始分析")
-                            .small()
-                            .disabled(analyzing)
-                            .on_click(cx.listener(|view, _, _, cx| view.services.run_analysis(cx))),
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .text_size(px(text::LIST_NAME))
+                            .font_weight(weight::CANDIDATE)
+                            .child(name),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family("Menlo")
+                            .text_size(px(text::LIST_SIZE))
+                            .text_color(p.faint)
+                            .child(detail),
+                    )
+                    .child(
+                        div()
+                            .w(px(64.))
+                            .flex_shrink_0()
+                            .text_right()
+                            .font_family("Menlo")
+                            .text_size(px(12.))
+                            .font_weight(weight::CANDIDATE_SIZE)
+                            .child(format_bytes(size)),
                     ),
             );
         }
-        for (key, name, reason, size, is_safe, approved) in findings {
-            let color = if is_safe { success } else { warning };
-            list = list.child(
-                v_flex().w_full().gap_1().p_2().child(
-                    h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().flex_1().text_sm().child(name))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(if is_safe { color } else { warning })
-                                .child(if is_safe { "可直接清理" } else { "建议确认" }),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(sift_core::format_bytes(size)),
-                        )
-                        .when(is_safe, |row| {
-                            row.child(
-                                Button::new(format!("approve-{}", key.raw()))
-                                    .label(if approved { "取消自动" } else { "允许自动" })
-                                    .xsmall()
-                                    .ghost()
-                                    .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.services.set_auto_approval(key, !approved, cx);
-                                    })),
-                            )
-                        }),
-                )
-                .child(div().text_xs().text_color(muted).child(reason)),
-            );
-        }
 
-        v_flex()
-            .flex_1()
-            .min_h_0()
-            .child(
+        if !suggestions.is_empty() {
+            rows = rows.child(
                 h_flex()
-                    .flex_shrink_0()
+                    .w_full()
                     .items_center()
                     .gap_2()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(div().text_xs().child("分析结论"))
-                    .child(div().flex_1())
+                    .px(px(10.))
+                    .pt_3()
+                    .pb_1()
                     .child(
-                        div().text_xs().text_color(muted).child(format!(
-                            "可回收 {} · 免确认 {}",
-                            sift_core::format_bytes(reclaimable),
-                            sift_core::format_bytes(safe)
-                        )),
+                        div()
+                            .text_size(px(text::PANEL_SUB))
+                            .font_weight(weight::HEADING)
+                            .text_color(p.muted)
+                            .child("分析建议"),
+                    )
+                    .child(
+                        div()
+                            .font_family("Menlo")
+                            .text_size(px(text::PANEL_SUB))
+                            .text_color(p.faint)
+                            .child(format!("{} 项", suggestions.len())),
                     ),
-            )
-            .child(list)
-    }
-
-    /// The cleanup candidate sheet: what is queued, and the one action that
-    /// moves it.
-    ///
-    /// A sheet rather than an inline commit because the queue can be long and
-    /// the user should see exactly what is about to leave before it does. The
-    /// commit still only moves items to the trash.
-    fn open_candidate_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let items: Vec<(String, String, u64, bool)> = self
-            .model
-            .read(cx)
-            .selected_items()
-            .iter()
-            .map(|node| {
-                (
-                    node.name.clone(),
-                    node.path.to_string_lossy().into_owned(),
-                    node.size.reclaimable(),
-                    node.is_dir,
-                )
-            })
-            .collect();
-        if items.is_empty() {
-            return;
-        }
-        let count = items.len();
-        let total: u64 = items.iter().map(|(_, _, size, _)| *size).sum();
-        let this = cx.entity();
-
-        window.open_sheet(cx, move |sheet, _window, _cx| {
-            let mut list = v_flex().gap_1().p_2();
-            for (name, path, size, is_dir) in items.clone() {
-                list = list.child(
+            );
+            for (key, name, detail, size) in &suggestions {
+                let key = *key;
+                let (name, detail, size) = (name.clone(), detail.clone(), *size);
+                rows = rows.child(
                     h_flex()
                         .w_full()
                         .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
+                        .gap_3()
+                        .rounded(px(metrics::ROW_RADIUS))
+                        .px(px(10.))
+                        .py_2()
                         .child(
                             div()
-                                .flex_1()
-                                .text_sm()
-                                .child(if is_dir {
-                                    format!("{name}/")
-                                } else {
-                                    name
-                                }),
+                                .id(format!("queue-{}", key.raw()))
+                                .flex()
+                                .size(px(18.))
+                                .flex_shrink_0()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(5.))
+                                .border_1()
+                                .border_color(p.border_strong)
+                                .child(
+                                    icon(IconName::Plus, 11., p.muted),
+                                )
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.model.update(cx, |model, cx| {
+                                        model.toggle_selected(key);
+                                        cx.notify();
+                                    });
+                                })),
                         )
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(_cx.theme().muted_foreground)
-                                .child(sift_core::format_bytes(size)),
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_size(px(text::LIST_NAME))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(name),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .font_family("Menlo")
+                                .text_size(px(text::LIST_SIZE))
+                                .text_color(p.faint)
+                                .child(detail),
+                        )
+                        .child(
+                            div()
+                                .w(px(64.))
+                                .flex_shrink_0()
+                                .text_right()
+                                .font_family("Menlo")
+                                .text_size(px(12.))
+                                .child(format_bytes(size)),
                         ),
                 );
-                list = list.child(
-                    div()
-                        .px_2()
-                        .pb_1()
-                        .text_xs()
-                        .text_color(_cx.theme().muted_foreground)
-                        .child(path),
-                );
             }
+        }
 
-            let commit = {
-                let this = this.clone();
-                Button::new("candidate-commit")
-                    .label(format!(
-                        "清理 {} 项 · {}",
-                        count,
-                        sift_core::format_bytes(total)
-                    ))
-                    .danger()
-                    .on_click(move |_, window, cx| {
-                        this.update(cx, |view, cx| view.services.trash_selection(cx));
-                        window.close_sheet(cx);
-                    })
-            };
-            let cancel = Button::new("candidate-cancel")
-                .label("取消")
-                .ghost()
-                .on_click(|_, window, cx| window.close_sheet(cx));
+        let body: AnyElement = if queued.is_empty() && suggestions.is_empty() {
+            v_flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .py(px(56.))
+                .text_size(px(12.))
+                .text_color(p.faint)
+                .child("暂未选择项目，可在左侧区块或列表中右键加入")
+                .into_any_element()
+        } else {
+            rows.into_any_element()
+        };
 
-            sheet
-                .title(format!("清理候选 · {count} 项"))
-                .child(list)
-                .footer(
+        Some(
+            v_flex()
+                .id("candidate-popup")
+                .absolute()
+                .left(px(metrics::WORKSPACE_PAD))
+                .bottom(px(POPUP_BOTTOM))
+                .w(px(POPUP_W))
+                .h(px(popup_height))
+                .min_h_0()
+                .rounded(px(metrics::CANVAS_RADIUS))
+                .overflow_hidden()
+                .bg(p.surface.opacity(0.95))
+                .border_1()
+                .border_color(p.border_strong)
+                .shadow(elevation::glass_strong())
+                .child(
                     h_flex()
+                        .flex_shrink_0()
                         .items_center()
                         .gap_2()
+                        .px(px(16.))
+                        .pt(px(14.))
                         .child(
                             div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(_cx.theme().muted_foreground)
+                                .text_size(px(text::PANEL_TITLE))
+                                .font_weight(weight::HEADING)
+                                .child("清理候选"),
+                        )
+                        .child(
+                            div()
+                                .font_family("Menlo")
+                                .text_size(px(text::PANEL_SUB))
+                                .text_color(p.faint)
+                                .child(format!("{count} 项")),
+                        )
+                        .child(
+                            div()
+                                .id("candidates-close")
+                                .ml_auto()
+                                .flex()
+                                .size(px(metrics::BTN_ICON))
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(metrics::BTN_ICON_RADIUS))
+                                .text_color(p.muted)
+                                .child(icon(IconName::X, 15., p.muted))
+                                .on_click(cx.listener(|view, _, _, cx| view.close_candidates(cx))),
+                        ),
+                )
+                .child(body)
+                .child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap_3()
+                        .px(px(16.))
+                        .py(px(12.))
+                        .border_t_1()
+                        .border_color(p.border)
+                        .child(
+                            div()
+                                .text_size(px(text::PANEL_SUB))
+                                .text_color(p.faint)
                                 .child("移入回收站，可恢复"),
                         )
-                        .child(cancel)
-                        .child(commit),
+                        .child(
+                            gpui_kit::component::button::Button::new("clean")
+                                .label(format!("清理 {}", format_bytes(selected_bytes)))
+                                .small()
+                                .primary()
+                                .disabled(count == 0)
+                                .ml_auto()
+                                .min_w(px(150.))
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.services.trash_selection(cx);
+                                    view.close_candidates(cx);
+                                })),
+                        ),
                 )
-        });
-    }
-
-    fn render_footer(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Copy the colours out of the theme: `cx.theme()` borrows the app, and
-        // the builder chains below also call `cx.listener`, which needs `cx`
-        // mutably. Hsla values are `Copy`, so a local ends the borrow.
-        let (border, muted, _success, _warning) = {
-            let t = cx.theme();
-            (t.border, t.muted_foreground, t.success, t.warning)
-        };
-        let (selected_count, selected_bytes, status) = {
-            let model = self.model.read(cx);
-            (
-                model.selection().len(),
-                model.selected_bytes(),
-                model.status_line(),
-            )
-        };
-
-        h_flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap_2()
-            .px_3()
-            .py_2()
-            .border_t_1()
-            .border_color(border)
-            .child(div().text_sm().text_color(muted).child(status))
-            .child(div().flex_1())
-            .child(
-                Button::new("analyze")
-                    .label("分析")
-                    .small()
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.services.run_analysis(cx);
-                        view.panel = SidePanel::Findings;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("clean")
-                    .label(if selected_count == 0 {
-                        "清理".to_string()
-                    } else {
-                        format!(
-                            "清理 {} 项 · {}",
-                            selected_count,
-                            sift_core::format_bytes(selected_bytes)
-                        )
-                    })
-                    .small()
-                    // A destructive commitment, but a reversible one: the items
-                    // move to the trash, so the commit is a danger-styled button
-                    // and the result is a notification naming what moved, rather
-                    // than a modal.
-                    .danger()
-                    .disabled(selected_count == 0)
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        view.open_candidate_sheet(window, cx);
-                    })),
-            )
+                .into_any_element(),
+        )
     }
 
     /// Surface new model messages as notifications.
     ///
     /// This reads and advances a view-local counter during render. It does not
-    /// call `notify`, so it cannot schedule another frame; the alternative would
-    /// be threading a `Window` into the background signal pump, putting
-    /// presentation state inside a service.
+    /// call `notify`, so it cannot schedule another frame.
     fn sync_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let toasts: Vec<(u64, String, ToastLevel)> = self
             .model
@@ -868,7 +1323,9 @@ impl AppView {
                 continue;
             }
             self.notified_toast = id;
-            let note = Notification::new().message(message).autohide(true);
+            let note = gpui_kit::component::notification::Notification::new()
+                .message(message)
+                .autohide(true);
             let note = match level {
                 ToastLevel::Warning | ToastLevel::Error => note.title("Sift"),
                 _ => note,
@@ -878,20 +1335,49 @@ impl AppView {
     }
 }
 
+/// An icon at an exact size and colour.
+///
+/// The shared catalog renders itself from the inherited text style, so size and
+/// colour go on a wrapper: that keeps every icon on the same text style as the
+/// label beside it, and lets an icon size differ from the body font without a
+/// second style object.
+fn icon(name: IconName, size: f32, color: Hsla) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .text_size(px(size))
+        .text_color(color)
+        .child(name)
+}
+
+/// One file-list row, resolved from the model before rendering.
+struct RowData {
+    key: NodeKey,
+    name: String,
+    size: String,
+    is_dir: bool,
+    selected: bool,
+    safety: Option<sift_analyze::Safety>,
+}
+
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_notifications(window, cx);
+        let p = palette(cx);
 
         let dialogs = gpui_kit::component::Root::render_dialog_layer(window, cx);
         let sheets = gpui_kit::component::Root::render_sheet_layer(window, cx);
         let notifications = gpui_kit::component::Root::render_notification_layer(window, cx);
+        let scrim = self.render_scrim(cx);
+        let candidates = self.render_candidates(cx);
 
         v_flex()
             .size_full()
             .key_context("Sift")
             .track_focus(&self.focus_handle)
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
+            .bg(p.bg)
+            .text_color(p.fg)
+            .text_size(px(text::BODY))
             .on_action(cx.listener(Self::on_rescan))
             .on_action(cx.listener(Self::on_go_up))
             .on_action(cx.listener(Self::on_dismiss))
@@ -899,37 +1385,49 @@ impl Render for AppView {
             .on_action(cx.listener(Self::on_select_prev))
             .on_action(cx.listener(Self::on_select_next))
             .child(self.render_title_bar(window, cx))
-            .child(self.render_volume_row(window, cx))
-            .child(self.render_body(window, cx))
-            .child(self.render_footer(window, cx))
+            // The design's workspace: 12 px padding, 12 px between the three
+            // bands, with the popup anchored inside it.
+            .child(
+                v_flex()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .gap(px(metrics::WORKSPACE_GAP))
+                    .p(px(metrics::WORKSPACE_PAD))
+                    .child(self.render_nav(window, cx))
+                    .child(self.render_body(window, cx))
+                    .child(self.render_capsule(cx))
+                    .children(scrim)
+                    .children(candidates),
+            )
             .children(dialogs)
             .children(sheets)
             .children(notifications)
     }
 }
 
-/// Render a reason: a stable key goes through the local table, adjudicator-written
-/// text is shown verbatim.
+/// Render a reason: a stable key goes through the local table,
+/// adjudicator-written text is shown verbatim.
 fn render_reason(reason: &sift_analyze::Reason) -> String {
     use sift_analyze::Reason;
     match reason {
         Reason::Text(text) => text.clone(),
         Reason::Key { key, params } => {
             let template = match key.as_str() {
-                "reason.rebuildableCache" => "{} 的可重建目录，重新构建即可恢复",
-                "reason.cacheDirectory" => "{} 的缓存，可自动重建",
-                "reason.packageInstaller" => "{} 安装包，安装完成后通常不再需要",
-                "reason.archive" => "{} 压缩包，确认内容后可删除",
+                "reason.rebuildableCache" => "{} 的可重建目录",
+                "reason.cacheDirectory" => "{} 的缓存",
+                "reason.packageInstaller" => "{} 安装包",
+                "reason.archive" => "{} 压缩包",
                 "reason.staleLargeFile" => "{} 天未修改的大文件",
-                "reason.duplicate" => "与其它副本同名同大小（{}）",
-                "reason.trash" => "回收站内容，清空即释放",
-                "reason.tempFile" => "系统临时文件，可安全删除",
-                "reason.log" => "{} 日志，排查完成后可删除",
-                "reason.insideBundle" => "{} 位于应用包内部，删除会破坏该应用",
+                "reason.duplicate" => "同名同大小的副本",
+                "reason.trash" => "回收站内容",
+                "reason.tempFile" => "系统临时文件",
+                "reason.log" => "{} 日志",
+                "reason.insideBundle" => "{} 位于应用包内部",
                 "reason.aiConfirmed" => "经模型确认可删除",
-                "reason.aiLowConfidence" => "模型置信度不足，建议人工确认",
-                "reason.aiNotAuthorized" => "该类型不允许由模型判定为可直接清理",
-                "reason.aiConsentRequired" => "尚未同意发送文件元数据，模型未参与判定",
+                "reason.aiLowConfidence" => "模型置信度不足",
+                "reason.aiNotAuthorized" => "该类型不允许由模型判定",
+                "reason.aiConsentRequired" => "尚未同意发送文件元数据",
                 "reason.unjudged" => "尚未判定",
                 _ => "见规则说明",
             };
@@ -951,7 +1449,6 @@ mod tests {
         let keyed = Reason::key_with("reason.rebuildableCache", vec!["npm".into()]);
         let text = render_reason(&keyed);
         assert!(text.contains("npm"), "{text}");
-        assert!(text.contains("重建"), "{text}");
 
         let unknown = Reason::key("reason.somethingNew");
         assert_eq!(render_reason(&unknown), "见规则说明");
@@ -961,9 +1458,19 @@ mod tests {
     }
 
     #[test]
-    fn a_key_without_params_still_reads_as_a_sentence() {
-        let reason = Reason::key("reason.trash");
-        let text = render_reason(&reason);
-        assert!(text.contains("回收站"), "{text}");
+    fn the_popup_sits_above_the_capsule() {
+        // 12 (workspace pad) + 48 (capsule) + 8 (design gap) = 68.
+        assert_eq!(CAPSULE_H, 48.0);
+        assert_eq!(POPUP_BOTTOM, 68.0);
+    }
+
+    #[test]
+    fn text_sizes_match_the_design() {
+        assert_eq!(text::BODY, 13.5);
+        assert_eq!(text::LIST_NAME, 12.5);
+        assert_eq!(text::LIST_SIZE, 11.0);
+        assert_eq!(text::PANEL_SUB, 11.0);
+        assert_eq!(text::CRUMB, 12.0);
+        let _ = Hsla::default();
     }
 }

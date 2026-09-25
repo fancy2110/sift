@@ -7726,6 +7726,8 @@ version = "0.1.0"
 dependencies = [
  "dirs 6.0.0",
  "gpui-kit",
+ "gpui-kit-assets",
+ "image",
  "serde",
  "sift-analyze",
  "sift-core",
