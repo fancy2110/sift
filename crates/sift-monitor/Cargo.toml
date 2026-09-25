@@ -1,0 +1,20 @@
+[package]
+name = "sift-monitor"
+description = "Sift background disk-space monitor: threshold policy and approved cleanup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+sift-core = { workspace = true }
+sift-platform = { workspace = true }
+sift-analyze = { workspace = true }
+sift-store = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+sift-scan = { workspace = true }
+dirs = "6"

@@ -1,8 +1,11 @@
-//! Cross-platform deletion: items always go to the OS trash/recycle bin,
-//! never permanently erased.
+//! Tauri adapter for deletion.
+//!
+//! The contract is unchanged from the original implementation and is worth
+//! restating: items always go to the OS trash, never permanently erased, and
+//! failures are reported per item so one locked file cannot fail a batch.
 
 use serde::Serialize;
-use trash::delete;
+use tauri::command;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,23 +15,16 @@ pub struct DeleteResultItem {
     pub error: Option<String>,
 }
 
-/// Move every path to the platform trash. Per-item errors are returned so
-/// one locked file doesn't fail the whole batch.
-#[tauri::command]
+/// Move every path to the platform trash.
+#[command]
 pub fn move_to_trash(paths: Vec<String>) -> Vec<DeleteResultItem> {
-    paths
+    let as_paths: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
+    sift_platform::trash::trash_paths(&as_paths)
         .into_iter()
-        .map(|p| match delete(&p) {
-            Ok(()) => DeleteResultItem {
-                path: p,
-                ok: true,
-                error: None,
-            },
-            Err(e) => DeleteResultItem {
-                path: p,
-                ok: false,
-                error: Some(e.to_string()),
-            },
+        .map(|result| DeleteResultItem {
+            path: result.path.to_string_lossy().into_owned(),
+            ok: result.ok,
+            error: result.error,
         })
         .collect()
 }
@@ -36,37 +32,35 @@ pub fn move_to_trash(paths: Vec<String>) -> Vec<DeleteResultItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// Real trash round-trip: a file we delete must vanish from its
-    /// original location (the trash crate moves it to the OS trash).
     #[test]
-    fn deleted_file_leaves_original_path() {
-        let n = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("sift-trash-test-{n}"));
-        fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("junk.txt");
-        fs::write(&f, b"temporary").unwrap();
-        assert!(f.exists());
-
-        let results = move_to_trash(vec![f.to_string_lossy().to_string()]);
-        assert_eq!(results.len(), 1);
-        assert!(results[0].ok, "delete failed: {:?}", results[0].error);
-        assert!(!f.exists());
-
-        // Clean up the empty temp dir.
-        let _ = fs::remove_dir_all(&dir);
+    fn missing_paths_report_a_per_item_error() {
+        let results = move_to_trash(vec![
+            "/nonexistent/sift-missing-a".into(),
+            "/nonexistent/sift-missing-b".into(),
+        ]);
+        assert_eq!(results.len(), 2);
+        for result in &results {
+            assert!(!result.ok);
+            assert!(result.error.is_some());
+        }
     }
 
+    /// The real trash round-trip needs macOS Finder Automation permission, so it
+    /// runs only when explicitly requested.
     #[test]
-    fn missing_path_reports_per_item_error() {
-        let results = move_to_trash(vec!["/nonexistent/sift-missing-12345".into()]);
-        assert_eq!(results.len(), 1);
-        assert!(!results[0].ok);
-        assert!(results[0].error.is_some());
+    #[ignore = "requires macOS Finder Automation permission"]
+    fn a_real_file_leaves_its_original_path() {
+        let dir = std::env::temp_dir().join(format!("sift-tauri-trash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("junk.txt");
+        std::fs::write(&file, b"temporary").unwrap();
+
+        let results = move_to_trash(vec![file.to_string_lossy().into_owned()]);
+        assert!(results[0].ok, "{:?}", results[0].error);
+        assert!(!file.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

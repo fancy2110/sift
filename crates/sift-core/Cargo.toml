@@ -1,0 +1,11 @@
+[package]
+name = "sift-core"
+description = "Sift domain model: compact directory tree, name interner, size accounting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }

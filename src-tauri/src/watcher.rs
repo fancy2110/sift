@@ -1,12 +1,15 @@
-//! Filesystem watcher: detects deletions made outside the app
-//! (Finder/Explorer/terminal) and streams the removed paths + node ids.
+//! Tauri adapter for filesystem watching.
+//!
+//! Detects deletions made outside the app (Finder, Explorer, a terminal) and
+//! publishes them as `fs://deleted`, so a stale treemap never lingers. The
+//! watcher itself lives in `sift-platform`.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use notify::{Event, EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use sift_platform::watch::{FsEvent, FsWatcherHandle};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::scanner::node_id;
 
@@ -17,60 +20,62 @@ struct DeletedEvent {
     path: String,
 }
 
+/// Owns the running watcher; replacing it stops the previous watch.
+#[derive(Default)]
 pub struct FsWatcherState {
-    inner: Mutex<Option<notify::RecommendedWatcher>>,
-}
-
-impl Default for FsWatcherState {
-    fn default() -> Self {
-        Self {
-            inner: Mutex::new(None),
-        }
-    }
+    inner: Mutex<Option<FsWatcherHandle>>,
 }
 
 /// Start (or replace) a recursive watch rooted at `root`.
 #[tauri::command]
 pub fn watch_fs(
     app: AppHandle,
-    state: tauri::State<'_, FsWatcherState>,
+    state: State<'_, FsWatcherState>,
     root: String,
 ) -> Result<(), String> {
-    let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Ok(event) = res {
-            if matches!(event.kind, EventKind::Remove(_) | EventKind::Any) {
-                // On rename-away the second half may arrive as Remove;
-                // treat all removed paths as deletions.
-                for path in dedup(&event.paths) {
-                    let p = path.to_string_lossy().to_string();
-                    let _ = app.emit(
+    let (handle, receiver) =
+        FsWatcherHandle::watch(PathBuf::from(&root)).map_err(|err| err.to_string())?;
+
+    let app_for_pump = app.clone();
+    std::thread::Builder::new()
+        .name("sift-tauri-watch".into())
+        .spawn(move || {
+            while let Ok(event) = receiver.recv() {
+                // Only removals change the tree's shape; creations and writes are
+                // picked up by the next scan.
+                if let FsEvent::Deleted(path) = event {
+                    let text = path.to_string_lossy().into_owned();
+                    let _ = app_for_pump.emit(
                         "fs://deleted",
                         DeletedEvent {
-                            id: node_id(&p),
-                            path: p,
+                            id: node_id(&text),
+                            path: text,
                         },
                     );
                 }
             }
-        }
-    })
-    .map_err(|e| e.to_string())?;
+        })
+        .map_err(|err| err.to_string())?;
 
-    let mut guard = state.inner.lock().unwrap();
-    let mut w = watcher;
-    w.watch(&PathBuf::from(&root), RecursiveMode::Recursive)
-        .map_err(|e| e.to_string())?;
-    *guard = Some(w);
+    *state.inner.lock().unwrap() = Some(handle);
     Ok(())
 }
 
-fn dedup(paths: &[PathBuf]) -> Vec<PathBuf> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for p in paths {
-        if seen.insert(p.clone()) {
-            out.push(p.clone());
-        }
+/// Stop watching, if a watch is active.
+#[tauri::command]
+pub fn unwatch_fs(state: State<'_, FsWatcherState>) {
+    *state.inner.lock().unwrap() = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_state_starts_empty_and_can_be_cleared() {
+        let state = FsWatcherState::default();
+        assert!(state.inner.lock().unwrap().is_none());
+        *state.inner.lock().unwrap() = None;
+        assert!(state.inner.lock().unwrap().is_none());
     }
-    out
 }

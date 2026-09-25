@@ -1,0 +1,26 @@
+[package]
+name = "sift-analyze"
+description = "Sift local analysis: cleanup candidates, safety verdicts, adjudication contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+sift-core = { workspace = true }
+sift-platform = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+default = []
+# Remote LLM adjudication. Off by default: shipping a network client that can
+# see file paths must be an explicit build and an explicit runtime opt-in.
+remote-ai = ["dep:reqwest"]
+
+[dependencies.reqwest]
+version = "0.13"
+optional = true
+default-features = false
+features = ["blocking", "json", "rustls"]

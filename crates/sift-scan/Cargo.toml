@@ -1,0 +1,13 @@
+[package]
+name = "sift-scan"
+description = "Sift scan engine: fast parallel disk walking with memory budgets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+sift-core = { workspace = true }
+sift-platform = { workspace = true }
+serde = { workspace = true }

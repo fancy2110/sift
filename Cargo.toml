@@ -1,0 +1,61 @@
+# Sift workspace.
+#
+# Two front ends share one core:
+#   * src-tauri/  — the original Tauri v2 + Svelte application (kept, unchanged in behaviour)
+#   * crates/sift-gpui-app — the native GPUI Kit application
+#
+# Dependencies point downward only:
+#   ui (tauri | gpui) -> sift-analyze -> sift-scan -> sift-platform / sift-core
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "crates/sift-core",
+    "crates/sift-platform",
+    "crates/sift-scan",
+    "crates/sift-analyze",
+    "crates/sift-store",
+    "crates/sift-monitor",
+    "crates/sift-gpui-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.85"
+authors = ["Sift"]
+
+[workspace.dependencies]
+sift-core = { path = "crates/sift-core" }
+sift-platform = { path = "crates/sift-platform" }
+sift-scan = { path = "crates/sift-scan" }
+sift-analyze = { path = "crates/sift-analyze" }
+sift-store = { path = "crates/sift-store" }
+sift-monitor = { path = "crates/sift-monitor" }
+
+# Domain / engine dependencies.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.33"
+trash = "5"
+notify = "7"
+
+# The single UI dependency of the native front end.
+gpui-kit = "0.6.6"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+
+# The scan engine is benchmarked in release-like conditions without paying
+# whole-program LTO on every iteration.
+[profile.bench-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+opt-level = 3
+strip = false

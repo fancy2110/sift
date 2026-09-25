@@ -1,0 +1,23 @@
+[package]
+name = "sift-gpui-app"
+description = "Sift native desktop front end built on GPUI Kit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "sift-gpui-app"
+path = "src/main.rs"
+
+[dependencies]
+sift-core = { workspace = true }
+sift-platform = { workspace = true }
+sift-scan = { workspace = true }
+sift-analyze = { workspace = true }
+sift-store = { workspace = true }
+sift-monitor = { workspace = true }
+serde = { workspace = true }
+dirs = "6"
+gpui-kit = { workspace = true }
