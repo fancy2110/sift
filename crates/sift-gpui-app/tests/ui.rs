@@ -376,3 +376,47 @@ fn the_shell_frames_match_the_design(cx: &mut TestAppContext) {
         assert_eq!(sift_gpui_app::theme::metrics::ROW_H, 32.0);
     });
 }
+
+/// A treemap whose long tail folds into the aggregate tile must render.
+///
+/// The earlier fixtures were small enough that the aggregate tile never earned a
+/// label, so this case was never rendered by a test: the tile is 884x156 px here
+/// and its label starts with a three-byte character ("其他 · N 项"). That matters
+/// because GPUI shapes text through byte-ranged runs, so a run length that does
+/// not land on a character boundary is a process abort rather than a visual
+/// glitch — an early revision did abort the application here. The label run is
+/// now derived from the string, and this test holds the case open.
+#[gpui_kit::test]
+fn a_folded_long_tail_renders_its_aggregate_label(cx: &mut TestAppContext) {
+    let (view, handle) = open_app(cx, "aggregate");
+    let mut entries = vec![entry("/root/big.bin", 2_000_000_000, false, true)];
+    // Many entries that individually fall under the fold threshold but together
+    // hold enough bytes to give the aggregate tile a label-bearing area.
+    for index in 0..40 {
+        entries.push(entry(
+            &format!("/root/tail-{index:02}.bin"),
+            18_000_000,
+            false,
+            true,
+        ));
+    }
+    cx.update(|cx| seed_directory(&view, cx, "/root", entries));
+
+    let alive = cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        // The model must have folded, or the test is not exercising the label.
+        let folded = view
+            .read(cx)
+            .model()
+            .read(cx)
+            .treemap_layout(
+                sift_gpui_app::model::Rect::new(0.0, 0.0, 912.0, 657.0),
+                88.0 * 48.0,
+            )
+            .tiles
+            .iter()
+            .any(|tile| tile.is_aggregate());
+        assert!(folded, "the fixture must fold its long tail");
+    });
+    assert!(alive.is_ok());
+}
