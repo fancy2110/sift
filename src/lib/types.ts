@@ -2,7 +2,7 @@ export type Risk = 'safe' | 'review' | 'keep';
 export type AutoMode = 'approve' | 'auto';
 
 /** A live filesystem node streamed in by the backend scanner. */
-export interface FileNode {
+export interface Node {
   id: string;
   parentId: string | null;
   name: string;
@@ -13,6 +13,15 @@ export interface FileNode {
   deletable: boolean;
   /** Directory whose subtree scan hasn't finished. */
   pending: boolean;
+
+  // ---- client-assembled fields ----
+  /** Direct children, attached as they stream in. */
+  children?: Node[];
+  /** Aggregated AI finding this node belongs to. */
+  insightId?: string;
+  risk?: Risk;
+  note?: string;
+  ext?: string;
 }
 
 export interface Finding {

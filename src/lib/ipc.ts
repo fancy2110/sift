@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { FileNode, VolumeInfo } from './types';
+import type { Node, VolumeInfo } from './types';
 
 // ---- commands --------------------------------------------------------------
 
@@ -53,8 +53,8 @@ export interface ScanDoneEvent {
   root: string;
 }
 
-export function onDiscovered(cb: (node: FileNode) => void): Promise<UnlistenFn> {
-  return listen<FileNode>('scan://discovered', (e) => cb(e.payload));
+export function onDiscovered(cb: (node: Node) => void): Promise<UnlistenFn> {
+  return listen<Node>('scan://discovered', (e) => cb(e.payload));
 }
 
 export function onSized(cb: (e: SizedEvent) => void): Promise<UnlistenFn> {
