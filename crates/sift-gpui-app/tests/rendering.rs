@@ -229,6 +229,17 @@ mod macos {
                 view.open_candidates(cx);
             });
         });
+        // One tile under the pointer: the design's highlight is a near-white
+        // hairline plus brightness, so anything that reads as a shadow is a
+        // defect worth seeing.
+        shoot("focus", true, 420, |cx, view| {
+            view.update(cx, |view, cx| {
+                view.model().update(cx, |model, cx| {
+                    model.set_focus(Some(key("/Users/dev/Library")));
+                    cx.notify();
+                });
+            });
+        });
         // The AI configuration surface, opened from the title bar or ⌘,.
         shoot("settings", true, 420, |cx, view| {
             view.update(cx, |view, cx| {

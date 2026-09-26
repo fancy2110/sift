@@ -13,7 +13,8 @@
 //!   long-tail aggregate tile uses `--color-cat-other`.
 //! * **A 1.5 px border**, `oklch(0.13 0.01 255 / 0.55)` at rest and
 //!   `oklch(0.985 0.005 250)` when focused.
-//! * **Non-focused tiles dim to 30%** once anything is focused.
+//! * **Only the focused tile changes.** The design fades every other tile to
+//!   30%; this paints no veil (see the note in `paint`).
 //! * **One label row per tile**, centred vertically: the name at `x + 10` and
 //!   the size flush right at `x + w - 10`, drawn only when the tile is at least
 //!   70 × 26, with the name truncated so it can never collide with the size.
@@ -37,15 +38,13 @@ use gpui_kit::{
 use sift_core::{format_bytes, NodeKey};
 
 use crate::model::{Tile, WorkspaceModel};
-use crate::theme::{self, metrics, text};
+use crate::theme::{self, metrics, text, Palette};
 
 /// The design's gradient: the same hue, brighter at the top-left.
 const GRADIENT_FROM_ALPHA: f32 = 0.92;
 const GRADIENT_TO_ALPHA: f32 = 0.62;
 /// `filter: brightness(1.12)` on hover, approximated by lifting the stops.
 const HOVER_LIFT: f32 = 0.12;
-/// `opacity: 0.3` for tiles that are not the focused one.
-const DIM_ALPHA: f32 = 0.30;
 /// The gap the design leaves between a tile's name and its size.
 const LABEL_SIZE_GAP: f32 = 8.0;
 const LABEL_LINE_HEIGHT: f32 = 1.35;
@@ -116,6 +115,25 @@ impl TreemapElement {
             _ => tile.label.clone(),
         }
     }
+}
+
+/// The fill and stroke for one tile.
+///
+/// Pure on purpose: "only the focused tile changes" is the rule this application
+/// deliberately holds against the design稿's fade, so it is worth a test that
+/// needs no window.
+fn tile_appearance(is_focused: bool, color: Hsla, palette: &Palette) -> (Hsla, Hsla) {
+    let mut fill = color;
+    if is_focused {
+        // `filter: brightness(1.12)`, expressed as lightness.
+        fill.l = (fill.l + HOVER_LIFT).min(1.0);
+    }
+    let stroke = if is_focused {
+        palette.tile_stroke_hover
+    } else {
+        palette.tile_stroke.opacity(0.55)
+    };
+    (fill, stroke)
 }
 
 impl IntoElement for TreemapElement {
@@ -318,34 +336,16 @@ impl Element for TreemapElement {
         cx: &mut App,
     ) {
         let palette = theme::palette(cx);
-        let any_focused = tiles.iter().any(|tile| tile.is_focused);
 
         for tile in tiles.iter() {
-            // The design dims every tile except the focused one, and lifts the
-            // focused tile's fill by `brightness(1.12)`.
-            let (from_alpha, to_alpha, lift) = if tile.is_focused {
-                (GRADIENT_FROM_ALPHA, GRADIENT_TO_ALPHA, HOVER_LIFT)
-            } else if any_focused {
-                (
-                    GRADIENT_FROM_ALPHA * DIM_ALPHA,
-                    GRADIENT_TO_ALPHA * DIM_ALPHA,
-                    0.0,
-                )
-            } else {
-                (GRADIENT_FROM_ALPHA, GRADIENT_TO_ALPHA, 0.0)
-            };
-
-            let mut base = tile.color;
-            if lift > 0.0 {
-                base.l = (base.l + lift).min(1.0);
-            }
-            let stroke = if tile.is_focused {
-                palette.tile_stroke_hover
-            } else if any_focused {
-                palette.tile_stroke.opacity(0.55 * DIM_ALPHA)
-            } else {
-                palette.tile_stroke.opacity(0.55)
-            };
+            // Only the focused tile changes: it is lifted by
+            // `brightness(1.12)` and stroked in near-white, and the tiles around
+            // it are left alone. The design also fades every other tile to 30%,
+            // which reads as a dark veil laid over the map rather than as a
+            // highlight on one tile — and it makes the sizes of the tiles being
+            // compared the hardest thing to see at the moment of comparing them.
+            let (base, stroke) = tile_appearance(tile.is_focused, tile.color, &palette);
+            let (from_alpha, to_alpha) = (GRADIENT_FROM_ALPHA, GRADIENT_TO_ALPHA);
 
             // `linear-gradient(x1 0, y1 0 → x2 1, y2 1)` is a 135° gradient.
             let background = linear_gradient(
@@ -461,11 +461,39 @@ mod tests {
     }
 
     #[test]
-    fn the_design_s_gradient_and_dim_factors_are_intact() {
-        // These are the numbers a reviewer compares against the design稿.
+    fn the_design_s_gradient_and_highlight_factors_are_intact() {
+        // The numbers a reviewer compares against the design稿.
         assert!((GRADIENT_FROM_ALPHA - 0.92).abs() < 1e-6);
         assert!((GRADIENT_TO_ALPHA - 0.62).abs() < 1e-6);
-        assert!((DIM_ALPHA - 0.30).abs() < 1e-6);
         assert!((HOVER_LIFT - 0.12).abs() < 1e-6);
+    }
+
+    #[test]
+    fn only_the_focused_tile_changes() {
+        // Selecting a tile must not alter any other tile: no veil, no lighter
+        // stroke, nothing that could read as a shadow over the map.
+        let palette = Palette::design();
+        let color = palette.category(0);
+        let (focused_fill, focused_stroke) = tile_appearance(true, color, &palette);
+        let (rest_fill, rest_stroke) = tile_appearance(false, color, &palette);
+
+        assert!(
+            focused_fill.l > rest_fill.l,
+            "the focused tile is lifted"
+        );
+        assert_eq!(
+            focused_fill.a, rest_fill.a,
+            "and nothing is faded: the fill keeps its alpha"
+        );
+        assert_eq!(
+            rest_fill, color,
+            "an unfocused tile is painted exactly as it would be with nothing selected"
+        );
+        assert_ne!(focused_stroke, rest_stroke, "the hairline marks the focused tile");
+        assert_eq!(
+            rest_stroke,
+            palette.tile_stroke.opacity(0.55),
+            "and the resting hairline is the design's"
+        );
     }
 }
