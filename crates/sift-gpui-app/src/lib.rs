@@ -15,6 +15,7 @@
 
 pub mod app;
 pub mod assets;
+pub mod menus;
 pub mod model;
 pub mod services;
 pub mod theme;

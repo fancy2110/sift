@@ -245,6 +245,91 @@ pub mod metrics {
     pub const TILE_LABEL_MIN_H: f32 = 26.0;
 }
 
+/// The design's motion, as GPUI can express it.
+///
+/// GPUI ships `linear`, `quadratic`, `ease_in_out`, `ease_out_quint` and
+/// `bounce`; the design uses `backOut` for the candidate popup and
+/// `cubic-bezier(0.22, 1, 0.36, 1)` for row entrances, so both are implemented
+/// here rather than substituted with the nearest thing the framework has.
+pub mod motion {
+    /// `panelIn { duration: 320, easing: backOut }`
+    pub const PANEL_MS: u64 = 320;
+    /// The design's panel scale: `0.92 + 0.08 * t`.
+    pub const PANEL_SCALE_FROM: f32 = 0.92;
+    /// `cand-row-in` / `list-row-in`: 0.24s with a staggered delay.
+    pub const ROW_MS: u64 = 240;
+    /// `animation-delay: 120 + Math.min(i, 8) * 26` ms on a candidate row.
+    pub const CAND_ROW_BASE_DELAY_MS: u64 = 120;
+    pub const CAND_ROW_STEP_MS: u64 = 26;
+    /// The list staggers slightly tighter: `Math.min(i, 8) * 24` ms.
+    pub const LIST_ROW_STEP_MS: u64 = 24;
+    /// Rows enter from 8 px below, and list rows from 10 px to the right.
+    pub const CAND_ROW_RISE: f32 = 8.0;
+    pub const LIST_ROW_SLIDE: f32 = 10.0;
+    /// How many rows take part in the stagger before it stops growing.
+    pub const STAGGER_CAP: usize = 8;
+
+    /// `backOut` — the standard ease-out-back, which overshoots 1.0 before
+    /// settling: `1 + c3*(t-1)^3 + c1*(t-1)^2`.
+    pub fn back_out(t: f32) -> f32 {
+        const C1: f32 = 1.701_58;
+        const C3: f32 = C1 + 1.0;
+        let t = t - 1.0;
+        1.0 + C3 * t * t * t + C1 * t * t
+    }
+
+    /// A CSS `cubic-bezier(x1, y1, x2, y2)` timing function.
+    ///
+    /// The curve is defined with `x` as time, so evaluating it means solving for
+    /// the parameter where the curve's x equals the input; the design's
+    /// `cubic-bezier(0.22, 1, 0.36, 1)` is not a named easing, so this is the
+    /// only faithful way to reproduce it. Bisection is used: 24 iterations put
+    /// the parameter far below one frame's worth of visual error, and it cannot
+    /// fail to converge here because x is monotone for control points in 0..=1.
+    pub fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32) -> impl Fn(f32) -> f32 {
+        fn curve(t: f32, a: f32, b: f32) -> f32 {
+            // `3a t(1-t)^2 + 3b t^2 (1-t) + t^3`
+            let one_minus = 1.0 - t;
+            3.0 * a * t * one_minus * one_minus + 3.0 * b * t * t * one_minus + t * t * t
+        }
+        move |x: f32| {
+            let x = x.clamp(0.0, 1.0);
+            let (mut low, mut high) = (0.0_f32, 1.0_f32);
+            let mut t = x;
+            for _ in 0..24 {
+                if curve(t, x1, x2) < x {
+                    low = t;
+                } else {
+                    high = t;
+                }
+                t = (low + high) / 2.0;
+            }
+            curve(t, y1, y2)
+        }
+    }
+
+    /// The design's row entrance curve, `cubic-bezier(0.22, 1, 0.36, 1)`.
+    pub fn row_ease() -> impl Fn(f32) -> f32 {
+        cubic_bezier(0.22, 1.0, 0.36, 1.0)
+    }
+
+    /// The delay for the `index`-th row of a staggered entrance.
+    pub fn stagger_delay(index: usize, step_ms: u64, base_ms: u64) -> u64 {
+        base_ms + index.min(STAGGER_CAP) as u64 * step_ms
+    }
+
+    /// A row's entrance progress: the animation covers its delay plus its own
+    /// duration, so the animator has to map the shared phase back to 0..=1.
+    pub fn staggered_progress(phase: f32, delay_ms: u64, duration_ms: u64) -> f32 {
+        let total = delay_ms + duration_ms;
+        if total == 0 {
+            return 1.0;
+        }
+        let elapsed = phase * total as f32 - delay_ms as f32;
+        (elapsed / duration_ms as f32).clamp(0.0, 1.0)
+    }
+}
+
 /// The design's elevation recipes, as GPUI shadows.
 ///
 /// `backdrop-filter: blur()` does not exist in GPUI, so the glass surfaces are
@@ -505,6 +590,52 @@ mod tests {
         assert_eq!(metrics::SWITCH_H, 22.0);
         assert_eq!(text::BODY, 13.5);
         assert_eq!(text::LIST_NAME, 12.5);
+    }
+
+    #[test]
+    fn back_out_starts_at_zero_ends_at_one_and_overshoots() {
+        assert!(motion::back_out(0.0).abs() < 1e-6);
+        assert!((motion::back_out(1.0) - 1.0).abs() < 1e-6);
+        // The overshoot is the point of backOut: it is what makes the panel
+        // arrive rather than appear.
+        let peak = (0..100)
+            .map(|step| motion::back_out(step as f32 / 100.0))
+            .fold(f32::MIN, f32::max);
+        assert!(peak > 1.0, "backOut must overshoot, peaked at {peak}");
+        assert!(peak < 1.2, "and not by much, peaked at {peak}");
+    }
+
+    #[test]
+    fn the_row_curve_is_the_design_s_cubic_bezier() {
+        let ease = motion::row_ease();
+        assert!(ease(0.0).abs() < 1e-3);
+        assert!((ease(1.0) - 1.0).abs() < 1e-3);
+        // A strong ease-out: most of the distance is covered early.
+        assert!(ease(0.25) > 0.6, "got {}", ease(0.25));
+        assert!(ease(0.5) > 0.85, "got {}", ease(0.5));
+        // Monotone, so a row never moves backwards on its way in.
+        let mut previous = 0.0;
+        for step in 0..=100 {
+            let value = ease(step as f32 / 100.0);
+            assert!(value >= previous - 1e-3, "not monotone at {step}: {value} < {previous}");
+            previous = value;
+        }
+    }
+
+    #[test]
+    fn a_staggered_row_maps_its_delay_back_to_progress() {
+        // The 12th row waits 120 + 8*26 = 328 ms (the cap) before moving.
+        let delay = motion::stagger_delay(11, motion::CAND_ROW_STEP_MS, motion::CAND_ROW_BASE_DELAY_MS);
+        assert_eq!(delay, 328);
+        let total = delay + motion::ROW_MS;
+        // Halfway through the whole animation it is still waiting.
+        assert_eq!(motion::staggered_progress(0.0, delay, motion::ROW_MS), 0.0);
+        assert_eq!(
+            motion::staggered_progress((delay / 2) as f32 / total as f32, delay, motion::ROW_MS),
+            0.0
+        );
+        // Its own duration later it has arrived.
+        assert_eq!(motion::staggered_progress(1.0, delay, motion::ROW_MS), 1.0);
     }
 
     #[test]

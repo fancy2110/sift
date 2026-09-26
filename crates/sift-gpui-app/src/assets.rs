@@ -37,6 +37,7 @@ const ICONS: &[(&str, &str)] = &[
     ("lock", include_str!("../assets/sift-icons/lock.svg")),
     ("refresh", include_str!("../assets/sift-icons/refresh.svg")),
     ("search", include_str!("../assets/sift-icons/search.svg")),
+    ("settings", include_str!("../assets/sift-icons/settings.svg")),
     ("spark", include_str!("../assets/sift-icons/spark.svg")),
     ("trash", include_str!("../assets/sift-icons/trash.svg")),
     ("x", include_str!("../assets/sift-icons/x.svg")),

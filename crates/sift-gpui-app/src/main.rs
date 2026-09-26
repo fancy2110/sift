@@ -37,5 +37,10 @@ fn main() {
             cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
         })
         .expect("failed to open the Sift window");
+
+        // After the window, because the menu bar prints each item's shortcut from
+        // the keymap, and the window is what binds the keys.
+        cx.set_menus(sift_gpui_app::menus::app_menus());
+        cx.set_dock_menu(sift_gpui_app::menus::dock_menu());
     });
 }

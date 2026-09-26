@@ -467,3 +467,80 @@ fn the_window_knows_its_disk_and_waits_to_be_asked(cx: &mut TestAppContext) {
     );
     assert_eq!(entries, 0, "nothing has been walked yet");
 }
+
+/// The AI configuration must be reachable and must actually persist.
+///
+/// Both halves matter: a settings form that cannot be opened is dead UI, and one
+/// that closes without writing is worse — it looks like it worked. The shortcut
+/// is checked too, because the menu item's displayed shortcut comes from the same
+/// binding, so a broken chord is a menu bar that lies about it.
+#[gpui_kit::test]
+fn the_ai_settings_open_from_the_shortcut_and_persist(cx: &mut TestAppContext) {
+    let (view, handle) = open_app(cx, "ai-settings");
+    let _alive = cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !view.read(cx).model().read(cx).settings_open(),
+            "the panel starts closed"
+        );
+
+        window.press("cmd-,", cx);
+        assert!(
+            view.read(cx).model().read(cx).settings_open(),
+            "the preferences shortcut opens the panel"
+        );
+
+        window.render_frame(cx);
+        // The consent step is the one that decides whether anything leaves the
+        // machine, so it is the one worth driving end to end.
+        window.click("ai-consent", cx);
+        window.render_frame(cx);
+        window.click("ai-settings-save", cx);
+    });
+
+    let (consent, open) = cx.update(|cx| {
+        (
+            view.read(cx).services().store().settings().ai.consent_granted,
+            view.read(cx).model().read(cx).settings_open(),
+        )
+    });
+    assert!(
+        consent,
+        "saving must write the consent decision to the store"
+    );
+    assert!(!open, "saving closes the panel");
+}
+
+/// Escape closes the settings panel before anything under it.
+#[gpui_kit::test]
+fn escape_closes_the_settings_panel(cx: &mut TestAppContext) {
+    let (view, handle) = open_app(cx, "ai-settings-escape");
+    let _alive = cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.press("cmd-,", cx);
+        assert!(view.read(cx).model().read(cx).settings_open());
+        window.press("escape", cx);
+        assert!(!view.read(cx).model().read(cx).settings_open());
+    });
+}
+
+/// The scan control is the only thing that starts a walk, and the menu items are
+/// actions, so the two must agree: pressing them must not scan on their own.
+#[gpui_kit::test]
+fn menu_actions_do_not_start_a_scan_on_their_own(cx: &mut TestAppContext) {
+    let (view, handle) = open_app(cx, "menu-actions");
+    let _alive = cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        // Toggling the candidate list and the monitor are window actions; neither
+        // is a scan.
+        window.press("cmd-shift-c", cx);
+        assert!(view.read(cx).model().read(cx).drawer_open());
+        window.press("cmd-shift-c", cx);
+        assert!(!view.read(cx).model().read(cx).drawer_open());
+
+        assert!(
+            !view.read(cx).model().read(cx).has_started(),
+            "no menu action may begin a scan"
+        );
+    });
+}

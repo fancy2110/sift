@@ -25,24 +25,44 @@ use std::sync::Arc;
 
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
-    Disableable as _, Selectable as _, Sizable as _, WindowExt as _, h_flex,
-    v_flex,
+    Disableable as _, Selectable as _, Sizable as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::*;
+use gpui_kit::AnimationExt as _;
 use gpui_kit::{
-    App, AnyElement, BoxShadow, Context, Entity, FocusHandle, FontWeight, Hsla, KeyBinding, Render,
-    Window, div, point, px, rgb,
+    Animation, App, AnyElement, BoxShadow, Context, Entity, FocusHandle, Hsla, KeyBinding,
+    Render, Window, div, point, px, rgb,
 };
 use sift_core::{NodeKey, Volume, format_bytes};
 use sift_store::Store;
 
-use crate::model::{ToastLevel, WorkspaceModel};
+use crate::model::{CandidateTab, ToastLevel, WorkspaceModel};
 use crate::services::Services;
-use crate::theme::{elevation, metrics, palette, text};
+use crate::theme::{elevation, metrics, motion, palette, text};
 use crate::treemap_element::TreemapElement;
 
-gpui_kit::actions!(sift, [Rescan, Activate, SelectPrev, SelectNext, GoUp, Dismiss]);
+gpui_kit::actions!(
+    sift,
+    [
+        Rescan,
+        Activate,
+        SelectPrev,
+        SelectNext,
+        GoUp,
+        Dismiss,
+        Quit,
+        OpenAiSettings,
+        AnalyzeNow,
+        CleanSelected,
+        ToggleCandidates,
+        ToggleMonitor,
+        ShowAllVolumes
+    ]
+);
 
 /// How many rows the file list draws before it says how many are hidden. The
 /// design renders the whole list; the cap keeps a pathological directory from
@@ -78,11 +98,29 @@ const POPUP_MAX_H: f32 = 560.0;
 /// is the number to change if the window's default size ever moves.
 const POPUP_WINDOW_H: f32 = 832.0;
 
+/// The AI settings form's text fields.
+///
+/// One entity per editable field. They are rebuilt from the store whenever the
+/// panel opens, so the form always starts from what is actually configured
+/// rather than from whatever was typed and abandoned last time.
+struct AiFields {
+    provider: Entity<InputState>,
+    endpoint: Entity<InputState>,
+    model: Entity<InputState>,
+    api_key_env: Entity<InputState>,
+    language: Entity<InputState>,
+    batch_size: Entity<InputState>,
+}
+
 /// The application's root view.
 pub struct AppView {
     model: Entity<WorkspaceModel>,
     services: Services,
     focus_handle: FocusHandle,
+    /// The AI settings form, plus the two decisions that gate the remote path.
+    ai_fields: AiFields,
+    ai_enabled: bool,
+    ai_consent: bool,
     /// The newest toast already surfaced as a notification.
     notified_toast: u64,
 }
@@ -108,10 +146,26 @@ impl AppView {
     ) -> Self {
         let model = cx.new(|_| WorkspaceModel::new());
         let focus_handle = cx.focus_handle();
+        // Read the configuration before the store moves into the services.
+        let ai = store.settings().ai;
+        let ai_fields = AiFields {
+            provider: cx.new(|cx| InputState::new(window, cx).default_value(ai.provider.clone())),
+            endpoint: cx.new(|cx| InputState::new(window, cx).default_value(ai.endpoint.clone())),
+            model: cx.new(|cx| InputState::new(window, cx).default_value(ai.model.clone())),
+            api_key_env: cx
+                .new(|cx| InputState::new(window, cx).default_value(ai.api_key_env.clone())),
+            language: cx.new(|cx| InputState::new(window, cx).default_value(ai.language.clone())),
+            batch_size: cx.new(|cx| {
+                InputState::new(window, cx).default_value(ai.batch_size.to_string())
+            }),
+        };
         let services = Services::new(model.clone(), Arc::new(store), warnings, cx);
         focus_handle.focus(window, cx);
 
         // Bind before anything reads the keymap.
+        // Bound here rather than at the call site because the menu bar reads the
+        // keymap to print an item's shortcut: a binding and its menu item must
+        // come from the same place or the menu shows nothing.
         cx.bind_keys([
             KeyBinding::new("cmd-r", Rescan, None),
             KeyBinding::new("escape", Dismiss, None),
@@ -119,12 +173,22 @@ impl AppView {
             KeyBinding::new("down", SelectNext, None),
             KeyBinding::new("enter", Activate, None),
             KeyBinding::new("backspace", GoUp, None),
+            KeyBinding::new("cmd-,", OpenAiSettings, None),
+            KeyBinding::new("cmd-shift-a", AnalyzeNow, None),
+            KeyBinding::new("cmd-backspace", CleanSelected, None),
+            KeyBinding::new("cmd-shift-c", ToggleCandidates, None),
+            KeyBinding::new("cmd-shift-m", ToggleMonitor, None),
+            KeyBinding::new("cmd-shift-v", ShowAllVolumes, None),
+            KeyBinding::new("cmd-q", Quit, None),
         ]);
 
         Self {
             model,
             services,
             focus_handle,
+            ai_fields,
+            ai_enabled: ai.enabled,
+            ai_consent: ai.consent_granted,
             notified_toast: 0,
         }
     }
@@ -173,6 +237,45 @@ impl AppView {
         self.services.restart_scan(cx);
     }
 
+    fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
+        cx.quit();
+    }
+
+    fn on_open_ai_settings(&mut self, _: &OpenAiSettings, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_ai_fields(window, cx);
+        self.model.update(cx, |model, cx| {
+            model.set_settings_open(true);
+            cx.notify();
+        });
+    }
+
+    fn on_analyze_now(&mut self, _: &AnalyzeNow, _: &mut Window, cx: &mut Context<Self>) {
+        self.services.run_analysis(cx);
+    }
+
+    fn on_clean_selected(&mut self, _: &CleanSelected, _: &mut Window, cx: &mut Context<Self>) {
+        // The ellipsis means a dialog, so this opens the candidate list rather
+        // than removing anything: a menu item must never delete on its own.
+        self.open_candidates(cx);
+    }
+
+    fn on_toggle_candidates(&mut self, _: &ToggleCandidates, _: &mut Window, cx: &mut Context<Self>) {
+        if self.model.read(cx).drawer_open() {
+            self.close_candidates(cx);
+        } else {
+            self.open_candidates(cx);
+        }
+    }
+
+    fn on_toggle_monitor(&mut self, _: &ToggleMonitor, _: &mut Window, cx: &mut Context<Self>) {
+        let running = self.model.read(cx).monitor().running;
+        self.services.set_monitor_running(!running, cx);
+    }
+
+    fn on_show_all_volumes(&mut self, _: &ShowAllVolumes, _: &mut Window, cx: &mut Context<Self>) {
+        self.services.show_all_volumes(cx);
+    }
+
     fn on_go_up(&mut self, _: &GoUp, _: &mut Window, cx: &mut Context<Self>) {
         let parent = self
             .model
@@ -188,6 +291,13 @@ impl AppView {
         // Escape dismisses the topmost layer first: the candidate popup, then the
         // window's own overlays, and only then the in-window state. It never
         // closes the window.
+        if self.model.read(cx).settings_open() {
+            self.model.update(cx, |model, cx| {
+                model.set_settings_open(false);
+                cx.notify();
+            });
+            return;
+        }
         if self.model.read(cx).drawer_open() {
             self.close_candidates(cx);
             return;
@@ -327,6 +437,22 @@ impl AppView {
                     ),
             )
             .child(div().flex_1())
+            // A visible entry point for the AI configuration: a menu item alone
+            // is not discoverable enough for the setting that decides whether
+            // anything leaves the machine.
+            .child(
+                gpui_kit::component::button::Button::new("ai-settings-open")
+                    .icon(gpui_kit::component::Icon::default().path(crate::assets::path("settings")))
+                    .ghost()
+                    .xsmall()
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.sync_ai_fields(window, cx);
+                        view.model.update(cx, |model, cx| {
+                            model.set_settings_open(true);
+                            cx.notify();
+                        });
+                    })),
+            )
             .child(self.render_auto_switch(monitor_running, cx))
             .child(
                 // The design's only primary action, disabled while a scan runs so
@@ -349,6 +475,335 @@ impl AppView {
                     .disabled(scanning)
                     .on_click(cx.listener(|view, _, _, cx| view.services.restart_scan(cx))),
             )
+    }
+
+    // ---- AI settings -------------------------------------------------------
+
+    /// Rebuild the form from what is actually configured.
+    ///
+    /// The fields are recreated rather than edited in place: it keeps the panel
+    /// from opening on a half-typed value that was cancelled last time.
+    fn sync_ai_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ai = self.services.store().settings().ai;
+        self.ai_enabled = ai.enabled;
+        self.ai_consent = ai.consent_granted;
+        self.ai_fields = AiFields {
+            provider: cx.new(|cx| InputState::new(window, cx).default_value(ai.provider)),
+            endpoint: cx.new(|cx| InputState::new(window, cx).default_value(ai.endpoint)),
+            model: cx.new(|cx| InputState::new(window, cx).default_value(ai.model)),
+            api_key_env: cx.new(|cx| InputState::new(window, cx).default_value(ai.api_key_env)),
+            language: cx.new(|cx| InputState::new(window, cx).default_value(ai.language)),
+            batch_size: cx.new(|cx| {
+                InputState::new(window, cx).default_value(ai.batch_size.to_string())
+            }),
+        };
+    }
+
+    /// Write the form to the store.
+    fn save_ai_settings(&mut self, cx: &mut Context<Self>) {
+        let field = |state: &Entity<InputState>, cx: &App| state.read(cx).value().trim().to_string();
+        let provider = field(&self.ai_fields.provider, cx);
+        let endpoint = field(&self.ai_fields.endpoint, cx);
+        let model = field(&self.ai_fields.model, cx);
+        let api_key_env = field(&self.ai_fields.api_key_env, cx);
+        let language = field(&self.ai_fields.language, cx);
+        let batch_size = field(&self.ai_fields.batch_size, cx)
+            .parse::<usize>()
+            // A batch is a request size, so a typo falls back to the default
+            // rather than to zero (which would mean "send nothing, forever").
+            .unwrap_or(12)
+            .clamp(1, 200);
+        let (enabled, consent) = (self.ai_enabled, self.ai_consent);
+        let store = Arc::clone(self.services.store());
+
+        store.update_settings(|settings| {
+            settings.ai.enabled = enabled;
+            settings.ai.consent_granted = consent;
+            settings.ai.provider = provider;
+            settings.ai.endpoint = endpoint;
+            settings.ai.model = model;
+            settings.ai.api_key_env = api_key_env;
+            settings.ai.language = language;
+            settings.ai.batch_size = batch_size;
+        });
+        let outcome = store.save();
+        let (message, level) = match outcome {
+            Ok(()) => ("AI 设置已保存".to_string(), ToastLevel::Info),
+            Err(error) => (format!("设置未能写入：{error}"), ToastLevel::Warning),
+        };
+        let now = crate::services::now_ms();
+        self.model.update(cx, |model, cx| {
+            model.set_settings_open(false);
+            model.toast(message, level, now);
+            cx.notify();
+        });
+    }
+
+    /// A labelled row in the settings form.
+    fn render_setting_row(
+        &self,
+        label: &str,
+        hint: &str,
+        control: impl IntoElement,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let p = palette(cx);
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(text::LIST_NAME))
+                            .font_weight(weight::BUTTON)
+                            .child(label.to_string()),
+                    )
+                    .child(div().ml_auto().child(control)),
+            )
+            .child(
+                div()
+                    .text_size(px(text::PANEL_SUB))
+                    .text_color(p.faint)
+                    .child(hint.to_string()),
+            )
+    }
+
+    /// The AI settings panel: what the remote path does, and what it needs.
+    fn render_ai_settings(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.model.read(cx).settings_open() {
+            return None;
+        }
+        let p = palette(cx);
+        // Show where the settings actually live: a user who would rather edit
+        // the file than the form needs to know which file it is.
+        let store_path = self
+            .services
+            .store()
+            .paths()
+            .map(|paths| paths.settings().display().to_string())
+            .unwrap_or_else(|| "（未定位到配置目录）".to_string());
+
+        let section = |title: &str| {
+            div()
+                .text_size(px(text::PANEL_SUB))
+                .font_weight(weight::HEADING)
+                .text_color(p.muted)
+                .child(title.to_string())
+        };
+
+        let mut form = v_flex().w_full().gap_4();
+        form = form
+            .child(section("模型判定"))
+            .child(self.render_setting_row(
+                "启用模型判定",
+                "关闭时只用本地规则；规则永远离线运行，结论同样可审计。",
+                Switch::new("ai-enabled")
+                    .checked(self.ai_enabled)
+                    .on_click(cx.listener(|view, checked: &bool, _, cx| {
+                        view.ai_enabled = *checked;
+                        cx.notify();
+                    })),
+                cx,
+            ))
+            .child(self.render_setting_row(
+                "同意发送文件元数据",
+                "只发送名称、大小、类型与修改时间；路径按配置脱敏；API Key 只从环境变量读取，不写入磁盘。",
+                Checkbox::new("ai-consent")
+                    .checked(self.ai_consent)
+                    .on_click(cx.listener(|view, checked: &bool, _, cx| {
+                        view.ai_consent = *checked;
+                        cx.notify();
+                    })),
+                cx,
+            ));
+        if self.ai_enabled && !self.ai_consent {
+            form = form.child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .rounded(px(metrics::ROW_RADIUS))
+                    .bg(p.warn.opacity(0.12))
+                    .px(px(10.))
+                    .py_2()
+                    .child(icon("alert", 14., p.warn))
+                    .child(
+                        div()
+                            .text_size(px(text::PANEL_SUB))
+                            .text_color(p.warn)
+                            .child("已启用模型判定但未同意发送，远端判定不会执行。"),
+                    ),
+            );
+        }
+        form = form
+            .child(section("连接"))
+            .child(self.render_setting_row(
+                "提供方",
+                "兼容 OpenAI Chat Completions 的任一服务。",
+                div().w(px(240.)).child(Input::new(&self.ai_fields.provider)),
+                cx,
+            ))
+            .child(self.render_setting_row(
+                "Endpoint",
+                "请求地址，例如 https://api.example.com/v1/chat/completions",
+                div().w(px(320.)).child(Input::new(&self.ai_fields.endpoint)),
+                cx,
+            ))
+            .child(self.render_setting_row(
+                "模型",
+                "用于判定的模型名。",
+                div().w(px(240.)).child(Input::new(&self.ai_fields.model)),
+                cx,
+            ))
+            .child(self.render_setting_row(
+                "API Key 环境变量",
+                "只读这个环境变量；密钥本身从不落盘。",
+                div().w(px(240.)).child(Input::new(&self.ai_fields.api_key_env)),
+                cx,
+            ))
+            .child(self.render_setting_row(
+                "原因语言",
+                "模型给出的原因使用哪种语言。",
+                div().w(px(160.)).child(Input::new(&self.ai_fields.language)),
+                cx,
+            ))
+            .child(self.render_setting_row(
+                "每批候选数",
+                "一次请求提交多少个候选，1–200。",
+                div().w(px(120.)).child(Input::new(&self.ai_fields.batch_size)),
+                cx,
+            ));
+
+        Some(
+            div()
+                .id("settings-scrim")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(Hsla::from(rgb(0x00_00_00)).opacity(0.5))
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.model.update(cx, |model, cx| {
+                        model.set_settings_open(false);
+                        cx.notify();
+                    });
+                }))
+                .child(
+                    v_flex()
+                        .id("ai-settings")
+                        .w(px(620.))
+                        .max_h(px(660.))
+                        .min_h_0()
+                        .rounded(px(metrics::CANVAS_RADIUS))
+                        .overflow_hidden()
+                        .bg(p.surface.opacity(0.97))
+                        .border_1()
+                        .border_color(p.border_strong)
+                        .shadow(elevation::glass_strong())
+                        // A click inside must not reach the scrim, or the panel
+                        // closes the moment a field is touched.
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            h_flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .gap_2()
+                                .px(px(16.))
+                                .pt(px(14.))
+                                .child(
+                                    div()
+                                        .text_size(px(text::PANEL_TITLE))
+                                        .font_weight(weight::HEADING)
+                                        .child("AI 设置"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(text::PANEL_SUB))
+                                        .text_color(p.faint)
+                                        .child("配置文件："),
+                                )
+                                .child(
+                                    div()
+                                        .font_family("Menlo")
+                                        .text_size(px(text::PANEL_SUB))
+                                        .text_color(p.faint)
+                                        .child(store_path),
+                                )
+                                .child(
+                                    div()
+                                        .id("ai-settings-close")
+                                        .ml_auto()
+                                        .flex()
+                                        .size(px(metrics::BTN_ICON))
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(metrics::BTN_ICON_RADIUS))
+                                        .text_color(p.muted)
+                                        .child(icon("x", 15., p.muted))
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.model.update(cx, |model, cx| {
+                                                model.set_settings_open(false);
+                                                cx.notify();
+                                            });
+                                        })),
+                                ),
+                        )
+                        .child(
+                            v_flex()
+                                .id("ai-settings-form")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .px(px(16.))
+                                .py_3()
+                                .child(form),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .gap_3()
+                                .px(px(16.))
+                                .py(px(12.))
+                                .border_t_1()
+                                .border_color(p.border)
+                                .child(
+                                    div()
+                                        .text_size(px(text::PANEL_SUB))
+                                        .text_color(p.faint)
+                                        .child("离线规则不需要任何配置。"),
+                                )
+                                .child(
+                                    gpui_kit::component::button::Button::new("ai-settings-cancel")
+                                        .label("取消")
+                                        .small()
+                                        .ghost()
+                                        .ml_auto()
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.model.update(cx, |model, cx| {
+                                                model.set_settings_open(false);
+                                                cx.notify();
+                                            });
+                                        })),
+                                )
+                                .child(
+                                    gpui_kit::component::button::Button::new("ai-settings-save")
+                                        .label("保存")
+                                        .small()
+                                        .primary()
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.save_ai_settings(cx);
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The design's `switch`: 38 × 22 with a 16 px thumb.
@@ -1049,8 +1504,164 @@ impl AppView {
         )
     }
 
+    /// One row of a candidate list: a checkbox, a name, a detail and a size.
+    ///
+    /// Each row enters on the design's stagger — `cand-row-in` rises 8 px with
+    /// `cubic-bezier(0.22, 1, 0.36, 1)` — and the delay rides on the row's index,
+    /// so a long list arrives as a sweep instead of a single flash.
+    fn render_candidate_row(
+        &self,
+        index: usize,
+        row: &CandidateRow,
+        queued: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = palette(cx);
+        let (key, name, detail, size) = (
+            row.key,
+            row.name.clone(),
+            row.detail.clone(),
+            row.size,
+        );
+        let delay = motion::stagger_delay(
+            index,
+            motion::CAND_ROW_STEP_MS,
+            motion::CAND_ROW_BASE_DELAY_MS,
+        );
+        let ease = motion::row_ease();
+
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap_3()
+            .rounded(px(metrics::ROW_RADIUS))
+            .px(px(10.))
+            .py_2()
+            .child(
+                // The design's check box: filled and ticked when the row is in
+                // the queue, an empty hairline box when it is only a suggestion.
+                div()
+                    .id(format!(
+                        "{}{}",
+                        if queued { "unqueue-" } else { "queue-" },
+                        key.raw()
+                    ))
+                    .flex()
+                    .size(px(18.))
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(5.))
+                    .when(queued, |box_| box_.bg(p.accent))
+                    .when(!queued, |box_| {
+                        box_.border_1().border_color(p.border_strong)
+                    })
+                    .child(icon(
+                        "check",
+                        12.,
+                        if queued { p.accent_contrast } else { p.muted },
+                    ))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.model.update(cx, |model, cx| {
+                            model.toggle_selected(key);
+                            cx.notify();
+                        });
+                    })),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_size(px(text::LIST_NAME))
+                    .font_weight(if queued {
+                        weight::CANDIDATE
+                    } else {
+                        weight::ROW_NAME
+                    })
+                    .child(name),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_family("Menlo")
+                    .text_size(px(text::LIST_SIZE))
+                    .text_color(p.faint)
+                    .child(detail),
+            )
+            .child(
+                div()
+                    .w(px(64.))
+                    .flex_shrink_0()
+                    .text_right()
+                    .font_family("Menlo")
+                    .text_size(px(12.))
+                    .font_weight(weight::CANDIDATE_SIZE)
+                    .child(format_bytes(size)),
+            )
+            .with_animation(
+                format!("cand-row-{index}"),
+                Animation::new(std::time::Duration::from_millis(
+                    delay + motion::ROW_MS,
+                )),
+                move |el, phase| {
+                    // The animation covers the delay plus the row's own duration,
+                    // so the shared phase is mapped back to this row's window
+                    // before it is eased.
+                    let local = motion::staggered_progress(phase, delay, motion::ROW_MS);
+                    let eased = ease(local);
+                    el.opacity(eased)
+                        .relative()
+                        .top(px(motion::CAND_ROW_RISE * (1.0 - eased)))
+                },
+            )
+            .into_any_element()
+    }
+
+    /// One tab of the candidate popup.
+    fn render_candidate_tab(
+        &self,
+        tab: CandidateTab,
+        count: usize,
+        active: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let p = palette(cx);
+        h_flex()
+            .id(format!("candidate-tab-{}", tab.label()))
+            .items_center()
+            .gap_1()
+            .rounded(px(8.))
+            .px(px(10.))
+            .py(px(5.))
+            .when(active, |el| el.bg(p.surface3))
+            .when(!active, |el| el.bg(Hsla { a: 0.0, ..p.surface3 }))
+            .text_size(px(text::LIST_NAME))
+            .font_weight(if active {
+                weight::HEADING
+            } else {
+                weight::ROW_NAME
+            })
+            .text_color(if active { p.fg } else { p.muted })
+            .child(tab.label())
+            .child(
+                div()
+                    .font_family("Menlo")
+                    .text_size(px(text::PANEL_SUB))
+                    .text_color(p.faint)
+                    .child(count.to_string()),
+            )
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.model.update(cx, |model, cx| {
+                    model.set_drawer_tab(tab);
+                    cx.notify();
+                });
+            }))
+    }
+
     /// The design's candidate popup: anchored above the capsule, 520 × 560 max,
-    /// with a header, the candidate rows and a footer that commits.
+    /// with a header, the tab strip, the rows and a footer that commits.
     fn render_candidates(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.model.read(cx).drawer_open() {
             return None;
@@ -1063,203 +1674,77 @@ impl AppView {
             - CAPSULE_H
             - 8.0)
             .min(POPUP_MAX_H);
-        let (queued, suggestions, selected_bytes) = {
+        let (queued, suggestions, selected_bytes, tab) = {
             let model = self.model.read(cx);
-            let queued: Vec<(NodeKey, String, String, u64)> = model
+            let queued: Vec<CandidateRow> = model
                 .selected_items()
                 .iter()
-                .map(|node| {
-                    (
-                        node.key,
-                        node.name.clone(),
-                        node.path.to_string_lossy().into_owned(),
-                        node.size.reclaimable(),
-                    )
+                .map(|node| CandidateRow {
+                    key: node.key,
+                    name: node.name.clone(),
+                    detail: node.path.to_string_lossy().into_owned(),
+                    size: node.size.reclaimable(),
                 })
                 .collect();
             // The analysis's own nominations, offered as one-click suggestions.
-            let suggestions: Vec<(NodeKey, String, String, u64)> = model
+            let suggestions: Vec<CandidateRow> = model
                 .removable_findings()
                 .iter()
                 .filter(|finding| !model.is_selected(finding.key))
                 .take(50)
-                .map(|finding| {
-                    (
-                        finding.key,
-                        finding.name.clone(),
-                        render_reason(&finding.reason),
-                        finding.size,
-                    )
+                .map(|finding| CandidateRow {
+                    key: finding.key,
+                    name: finding.name.clone(),
+                    detail: render_reason(&finding.reason),
+                    size: finding.size,
                 })
                 .collect();
-            (queued, suggestions, model.selected_bytes())
+            (queued, suggestions, model.selected_bytes(), model.drawer_tab())
         };
-        let count = queued.len();
+        let (queue_count, suggestion_count) = (queued.len(), suggestions.len());
 
+        let strip = h_flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap_1()
+            .px(px(12.))
+            .pt_2()
+            .child(self.render_candidate_tab(CandidateTab::Queue, queue_count, tab == CandidateTab::Queue, cx))
+            .child(self.render_candidate_tab(
+                CandidateTab::Suggestions,
+                suggestion_count,
+                tab == CandidateTab::Suggestions,
+                cx,
+            ));
+
+        let active: &Vec<CandidateRow> = match tab {
+            CandidateTab::Queue => &queued,
+            CandidateTab::Suggestions => &suggestions,
+        };
         let mut rows = v_flex().flex_1().min_h_0().px(px(12.)).pt_2();
-        for (key, name, detail, size) in &queued {
-            let key = *key;
-            let (name, detail, size) = (name.clone(), detail.clone(), *size);
+        if active.is_empty() {
             rows = rows.child(
-                h_flex()
-                    .w_full()
+                v_flex()
+                    .flex_1()
                     .items_center()
-                    .gap_3()
-                    .rounded(px(metrics::ROW_RADIUS))
-                    .px(px(10.))
-                    .py_2()
-                    .child(
-                        // The design's checked box: an accent square with a tick.
-                        div()
-                            .id(format!("unqueue-{}", key.raw()))
-                            .flex()
-                            .size(px(18.))
-                            .flex_shrink_0()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(5.))
-                            .bg(p.accent)
-                            .child(
-                                icon("check", 12., p.accent_contrast),
-                            )
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.model.update(cx, |model, cx| {
-                                    model.toggle_selected(key);
-                                    cx.notify();
-                                });
-                            })),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .text_size(px(text::LIST_NAME))
-                            .font_weight(weight::CANDIDATE)
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_family("Menlo")
-                            .text_size(px(text::LIST_SIZE))
-                            .text_color(p.faint)
-                            .child(detail),
-                    )
-                    .child(
-                        div()
-                            .w(px(64.))
-                            .flex_shrink_0()
-                            .text_right()
-                            .font_family("Menlo")
-                            .text_size(px(12.))
-                            .font_weight(weight::CANDIDATE_SIZE)
-                            .child(format_bytes(size)),
-                    ),
+                    .justify_center()
+                    .py(px(56.))
+                    .text_size(px(12.))
+                    .text_color(p.faint)
+                    .child(match tab {
+                        CandidateTab::Queue => "还没有选择项目，可在左侧区块或列表中右键加入",
+                        CandidateTab::Suggestions => "分析没有给出可清理的建议",
+                    }),
             );
         }
-
-        if !suggestions.is_empty() {
-            rows = rows.child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap_2()
-                    .px(px(10.))
-                    .pt_3()
-                    .pb_1()
-                    .child(
-                        div()
-                            .text_size(px(text::PANEL_SUB))
-                            .font_weight(weight::HEADING)
-                            .text_color(p.muted)
-                            .child("分析建议"),
-                    )
-                    .child(
-                        div()
-                            .font_family("Menlo")
-                            .text_size(px(text::PANEL_SUB))
-                            .text_color(p.faint)
-                            .child(format!("{} 项", suggestions.len())),
-                    ),
-            );
-            for (key, name, detail, size) in &suggestions {
-                let key = *key;
-                let (name, detail, size) = (name.clone(), detail.clone(), *size);
-                rows = rows.child(
-                    h_flex()
-                        .w_full()
-                        .items_center()
-                        .gap_3()
-                        .rounded(px(metrics::ROW_RADIUS))
-                        .px(px(10.))
-                        .py_2()
-                        .child(
-                            div()
-                                .id(format!("queue-{}", key.raw()))
-                                .flex()
-                                .size(px(18.))
-                                .flex_shrink_0()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(5.))
-                                .border_1()
-                                .border_color(p.border_strong)
-                                .child(
-                                    icon("check", 11., p.muted),
-                                )
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.model.update(cx, |model, cx| {
-                                        model.toggle_selected(key);
-                                        cx.notify();
-                                    });
-                                })),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .truncate()
-                                .text_size(px(text::LIST_NAME))
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(name),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .font_family("Menlo")
-                                .text_size(px(text::LIST_SIZE))
-                                .text_color(p.faint)
-                                .child(detail),
-                        )
-                        .child(
-                            div()
-                                .w(px(64.))
-                                .flex_shrink_0()
-                                .text_right()
-                                .font_family("Menlo")
-                                .text_size(px(12.))
-                                .child(format_bytes(size)),
-                        ),
-                );
-            }
+        for (index, row) in active.iter().enumerate() {
+            rows = rows.child(self.render_candidate_row(
+                index,
+                row,
+                tab == CandidateTab::Queue,
+                cx,
+            ));
         }
-
-        let body: AnyElement = if queued.is_empty() && suggestions.is_empty() {
-            v_flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .py(px(56.))
-                .text_size(px(12.))
-                .text_color(p.faint)
-                .child("暂未选择项目，可在左侧区块或列表中右键加入")
-                .into_any_element()
-        } else {
-            rows.into_any_element()
-        };
 
         Some(
             v_flex()
@@ -1294,7 +1779,7 @@ impl AppView {
                                 .font_family("Menlo")
                                 .text_size(px(text::PANEL_SUB))
                                 .text_color(p.faint)
-                                .child(format!("{count} 项")),
+                                .child(format!("{queue_count} 项")),
                         )
                         .child(
                             div()
@@ -1310,7 +1795,8 @@ impl AppView {
                                 .on_click(cx.listener(|view, _, _, cx| view.close_candidates(cx))),
                         ),
                 )
-                .child(body)
+                .child(strip)
+                .child(rows)
                 .child(
                     h_flex()
                         .flex_shrink_0()
@@ -1331,7 +1817,7 @@ impl AppView {
                                 .label(format!("清理 {}", format_bytes(selected_bytes)))
                                 .small()
                                 .primary()
-                                .disabled(count == 0)
+                                .disabled(queue_count == 0)
                                 .ml_auto()
                                 .min_w(px(150.))
                                 .on_click(cx.listener(|view, _, _, cx| {
@@ -1339,6 +1825,26 @@ impl AppView {
                                     view.close_candidates(cx);
                                 })),
                         ),
+                )
+                // `panelIn`: 320 ms of ease-out-back, opacity with the phase and
+                // a 0.92 → 1 arrival. GPUI transforms `Svg` only, so the scale is
+                // the same motion expressed as size about the panel's centre —
+                // width, height and the offsets that keep that centre still.
+                .with_animation(
+                    "candidates-in",
+                    Animation::new(std::time::Duration::from_millis(motion::PANEL_MS))
+                        .with_easing(motion::back_out),
+                    move |el, phase| {
+                        let scale =
+                            motion::PANEL_SCALE_FROM + (1.0 - motion::PANEL_SCALE_FROM) * phase;
+                        let width = POPUP_W * scale;
+                        let height = popup_height * scale;
+                        el.opacity(phase.clamp(0.0, 1.0))
+                            .w(px(width))
+                            .h(px(height))
+                            .left(px(metrics::WORKSPACE_PAD + (POPUP_W - width) / 2.0))
+                            .bottom(px(POPUP_BOTTOM + (popup_height - height) / 2.0))
+                    },
                 )
                 .into_any_element(),
         )
@@ -1387,6 +1893,14 @@ fn icon(name: &str, size: f32, color: Hsla) -> impl IntoElement {
         .text_color(color)
 }
 
+/// One row of a candidate list: what the popup needs to draw it.
+struct CandidateRow {
+    key: NodeKey,
+    name: String,
+    detail: String,
+    size: u64,
+}
+
 /// One file-list row, resolved from the model before rendering.
 struct RowData {
     key: NodeKey,
@@ -1407,6 +1921,7 @@ impl Render for AppView {
         let notifications = gpui_kit::component::Root::render_notification_layer(window, cx);
         let scrim = self.render_scrim(cx);
         let candidates = self.render_candidates(cx);
+        let settings = self.render_ai_settings(cx);
 
         v_flex()
             .size_full()
@@ -1421,6 +1936,13 @@ impl Render for AppView {
             .on_action(cx.listener(Self::on_activate))
             .on_action(cx.listener(Self::on_select_prev))
             .on_action(cx.listener(Self::on_select_next))
+            .on_action(cx.listener(Self::on_quit))
+            .on_action(cx.listener(Self::on_open_ai_settings))
+            .on_action(cx.listener(Self::on_analyze_now))
+            .on_action(cx.listener(Self::on_clean_selected))
+            .on_action(cx.listener(Self::on_toggle_candidates))
+            .on_action(cx.listener(Self::on_toggle_monitor))
+            .on_action(cx.listener(Self::on_show_all_volumes))
             .child(self.render_title_bar(window, cx))
             // The design's workspace: 12 px padding, 12 px between the three
             // bands, with the popup anchored inside it.
@@ -1435,7 +1957,8 @@ impl Render for AppView {
                     .child(self.render_body(window, cx))
                     .child(self.render_capsule(cx))
                     .children(scrim)
-                    .children(candidates),
+                    .children(candidates)
+                    .children(settings),
             )
             .children(dialogs)
             .children(sheets)

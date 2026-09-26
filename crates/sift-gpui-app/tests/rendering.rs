@@ -146,9 +146,16 @@ mod macos {
     }
 
     /// Render one scenario and write it to `target/ui-shots/<name>.png`.
+    /// Render one scenario, let any entrance animation settle, and write it.
+    ///
+    /// `settle_ms` matters: the popup's entrance is 320 ms of time-based motion,
+    /// so a capture taken immediately would show the frame the panel is still
+    /// growing out of. Zero keeps the mid-flight frame on purpose, which is how
+    /// the motion itself gets checked.
     fn shoot(
         name: &str,
         seed_scan: bool,
+        settle_ms: u64,
         prepare: impl FnOnce(&mut HeadlessAppContext, &gpui_kit::Entity<AppView>),
     ) {
         let mut cx = context();
@@ -168,6 +175,10 @@ mod macos {
             .expect("a headless window");
         let view = captured.expect("the view");
         prepare(&mut cx, &view);
+        if settle_ms > 0 {
+            let _ = cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx));
+            std::thread::sleep(std::time::Duration::from_millis(settle_ms));
+        }
         cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
             .expect("a frame");
         let image = cx
@@ -186,10 +197,22 @@ mod macos {
     }
 
     pub fn run() {
-        shoot("shell", true, |_, _| {});
+        shoot("shell", true, 0, |_, _| {});
         // Before the user asks: no walk, and the window has to say so.
-        shoot("idle", false, |_, _| {});
-        shoot("popup", true, |cx, view| {
+        shoot("idle", false, 0, |_, _| {});
+        // Mid-flight: at 45 ms of a 320 ms entrance the panel is still ~96% of
+        // its size and ~54% opaque (backOut covers most of its distance early),
+        // and the rows have not started their staggered arrival yet.
+        shoot("popup-enter", true, 45, |cx, view| {
+            view.update(cx, |view, cx| {
+                view.model().update(cx, |model, cx| {
+                    model.toggle_selected(key("/Users/dev/node_modules"));
+                    cx.notify();
+                });
+                view.open_candidates(cx);
+            });
+        });
+        shoot("popup", true, 420, |cx, view| {
             // Queue three rows the way a user would, then open the popup through
             // the same seam the capsule calls.
             view.update(cx, |view, cx| {
@@ -206,7 +229,16 @@ mod macos {
                 view.open_candidates(cx);
             });
         });
-        shoot("scanning", true, |cx, view| {
+        // The AI configuration surface, opened from the title bar or ⌘,.
+        shoot("settings", true, 420, |cx, view| {
+            view.update(cx, |view, cx| {
+                view.model().update(cx, |model, cx| {
+                    model.set_settings_open(true);
+                    cx.notify();
+                });
+            });
+        });
+        shoot("scanning", true, 0, |cx, view| {
             view.update(cx, |view, cx| {
                 view.model().update(cx, |model, cx| {
                     model.begin_scan();

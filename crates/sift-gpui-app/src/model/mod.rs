@@ -172,6 +172,30 @@ pub enum Surface {
     AllVolumes,
 }
 
+/// Which list the cleanup popup is showing.
+///
+/// The design稿 renders one list; this application has two kinds of candidate —
+/// what the user chose, and what the analysis nominates — and keeping them as
+/// two tabs holds "what am I about to delete" apart from "what could I delete".
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum CandidateTab {
+    /// Rows the user has queued.
+    #[default]
+    Queue,
+    /// Rows the analysis nominates, not yet queued.
+    Suggestions,
+}
+
+impl CandidateTab {
+    /// The label on the tab strip.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Queue => "待清理",
+            Self::Suggestions => "分析建议",
+        }
+    }
+}
+
 /// Everything the window renders.
 #[derive(Debug, Default)]
 pub struct WorkspaceModel {
@@ -197,6 +221,11 @@ pub struct WorkspaceModel {
     focus_key: Option<NodeKey>,
     selected: BTreeSet<NodeKey>,
     drawer_open: bool,
+    settings_open: bool,
+    drawer_tab: CandidateTab,
+    /// Whether the user has picked a tab themselves. An automatic choice must
+    /// never override a deliberate one.
+    drawer_tab_chosen: bool,
 
     findings: Vec<Finding>,
     analyzing: bool,
@@ -577,7 +606,35 @@ impl WorkspaceModel {
         self.drawer_open
     }
 
+    /// Whether the AI settings panel is open.
+    pub fn settings_open(&self) -> bool {
+        self.settings_open
+    }
+
+    pub fn set_settings_open(&mut self, open: bool) {
+        self.settings_open = open;
+    }
+
+    /// Which tab the cleanup popup is showing.
+    pub fn drawer_tab(&self) -> CandidateTab {
+        self.drawer_tab
+    }
+
+    pub fn set_drawer_tab(&mut self, tab: CandidateTab) {
+        self.drawer_tab = tab;
+        self.drawer_tab_chosen = true;
+    }
+
+    /// Open or close the popup.
+    ///
+    /// Opening lands on the tab that has something to show: a queue the user has
+    /// not built yet is an empty tab, while the analysis's nominations are what
+    /// they would have come for.
     pub fn set_drawer_open(&mut self, open: bool) {
+        if open && !self.drawer_tab_chosen && self.selected.is_empty() && !self.removable_findings().is_empty()
+        {
+            self.drawer_tab = CandidateTab::Suggestions;
+        }
         self.drawer_open = open;
     }
 
@@ -1475,5 +1532,46 @@ mod scan_state_tests {
         assert!(!model.has_started(), "a new disk is not scanned on sight");
         assert_eq!(model.current_volume_id(), Some(other));
         assert_eq!(model.visible_entries().len(), 0, "the old tree is gone");
+    }
+}
+
+#[cfg(test)]
+mod candidate_tab_tests {
+    use super::*;
+
+    #[test]
+    fn a_tab_knows_its_label() {
+        assert_eq!(CandidateTab::Queue.label(), "待清理");
+        assert_eq!(CandidateTab::Suggestions.label(), "分析建议");
+        assert_eq!(CandidateTab::default(), CandidateTab::Queue);
+    }
+
+    #[test]
+    fn opening_an_empty_queue_lands_on_the_suggestions() {
+        let mut model = WorkspaceModel::new();
+        // A finding is what makes the suggestions tab worth landing on.
+        model.findings.push(Finding {
+            key: NodeKey::from_bytes(b"cache"),
+            name: "cache".into(),
+            path: PathBuf::from("/Users/dev/cache"),
+            display_path: "~/cache".into(),
+            size: 1024,
+            is_dir: true,
+            safety: Safety::Safe,
+            confidence: 0.9,
+            reason: Reason::key("reason.cacheDirectory"),
+            source: VerdictSource::rule("cacheDirectory"),
+            kind: "rebuildableCache".into(),
+            known_cleanable: false,
+            approved_for_auto: false,
+        });
+        model.set_drawer_open(true);
+        assert_eq!(model.drawer_tab(), CandidateTab::Suggestions);
+
+        // An explicit choice is never overridden by the next open.
+        model.set_drawer_tab(CandidateTab::Queue);
+        model.set_drawer_open(false);
+        model.set_drawer_open(true);
+        assert_eq!(model.drawer_tab(), CandidateTab::Queue);
     }
 }
