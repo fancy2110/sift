@@ -544,3 +544,94 @@ fn menu_actions_do_not_start_a_scan_on_their_own(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// Clicking outside the candidate popup must dismiss it.
+///
+/// The click lands on a file row that sits *under* the popup's scrim, which
+/// makes this two assertions in one: the popup closes, and the row does not
+/// receive the click. A scrim that merely looks right would fail the second.
+#[gpui_kit::test]
+fn clicking_outside_the_popup_closes_it(cx: &mut TestAppContext) {
+    let (view, handle) = open_app(cx, "popup-outside");
+    let junk = key("/root/junk.bin");
+    cx.update(|cx| {
+        seed_directory(
+            &view,
+            cx,
+            "/root",
+            vec![
+                entry("/root/junk.bin", 8192, false, true),
+                entry("/root/cache", 4096, true, true),
+            ],
+        );
+    });
+    let _alive = cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        view.update(cx, |view, cx| view.open_candidates(cx));
+        window.render_frame(cx);
+        assert!(view.read(cx).model().read(cx).drawer_open(), "the popup is open");
+
+        // A row that is behind the popup's scrim.
+        window.click(format!("row-{}", junk.raw()), cx);
+        window.render_frame(cx);
+
+        assert!(
+            !view.read(cx).model().read(cx).drawer_open(),
+            "a click outside the popup closes it"
+        );
+        assert!(
+            view.read(cx).model().read(cx).selection().is_empty(),
+            "and the row behind the scrim must not act on it"
+        );
+
+        // The scrim covers the whole window, so the title bar counts as outside
+        // too — and the control under it must not fire on the dismissing click.
+        view.update(cx, |view, cx| view.open_candidates(cx));
+        window.render_frame(cx);
+        window.click("ai-settings-open", cx);
+        window.render_frame(cx);
+        assert!(
+            !view.read(cx).model().read(cx).drawer_open(),
+            "a click on the title bar closes the popup"
+        );
+        assert!(
+            !view.read(cx).model().read(cx).settings_open(),
+            "and does not also press the control underneath"
+        );
+    });
+}
+
+/// A click inside the popup is not a click outside it.
+#[gpui_kit::test]
+fn clicking_inside_the_popup_keeps_it_open(cx: &mut TestAppContext) {
+    let (view, handle) = open_app(cx, "popup-inside");
+    cx.update(|cx| {
+        seed_directory(
+            &view,
+            cx,
+            "/root",
+            vec![entry("/root/junk.bin", 8192, false, true)],
+        );
+    });
+    let _alive = cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        view.update(cx, |view, cx| view.open_candidates(cx));
+        window.render_frame(cx);
+
+        // The panel's own furniture is the nearest observable thing inside it.
+        // The queue is empty, so the commit button is disabled and pressing it
+        // does nothing — which makes it a safe probe for the one thing that
+        // matters here: without stop-propagation the click would fall through to
+        // the scrim and dismiss the panel it is inside.
+        assert!(
+            view.read(cx).model().read(cx).selection().is_empty(),
+            "the probe only works with an empty queue"
+        );
+        window.click("clean", cx);
+        window.render_frame(cx);
+        assert!(
+            view.read(cx).model().read(cx).drawer_open(),
+            "a click inside the panel must not dismiss it"
+        );
+    });
+}

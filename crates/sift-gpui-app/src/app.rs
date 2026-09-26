@@ -692,6 +692,7 @@ impl AppView {
                         model.set_settings_open(false);
                         cx.notify();
                     });
+                    cx.stop_propagation();
                 }))
                 .child(
                     v_flex()
@@ -1486,7 +1487,13 @@ impl AppView {
             }))
     }
 
-    /// The design's backdrop: a scrim over the workspace that closes the popup.
+    /// The design's backdrop: a scrim over the window that closes the popup.
+    ///
+    /// It spans the window rather than the workspace so that a click anywhere
+    /// outside the panel dismisses it, and it stops propagation: an `on_click`
+    /// does not by itself keep the event from the elements underneath, and
+    /// without this a click meant for the backdrop also pressed whatever row it
+    /// happened to cover.
     fn render_scrim(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.model.read(cx).drawer_open() {
             return None;
@@ -1499,7 +1506,10 @@ impl AppView {
                 // `oklch(0 0 0 / 0.34)` with a blur. GPUI has no backdrop blur,
                 // so the scrim carries slightly more weight instead.
                 .bg(Hsla::from(rgb(0x00_00_00)).opacity(0.42))
-                .on_click(cx.listener(|view, _, _, cx| view.close_candidates(cx)))
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.close_candidates(cx);
+                    cx.stop_propagation();
+                }))
                 .into_any_element(),
         )
     }
@@ -1752,6 +1762,9 @@ impl AppView {
                 .absolute()
                 .left(px(metrics::WORKSPACE_PAD))
                 .bottom(px(POPUP_BOTTOM))
+                // A click on the panel's own padding is not a click outside it,
+                // so it must not reach the scrim behind.
+                .on_click(|_, _, cx| cx.stop_propagation())
                 .w(px(POPUP_W))
                 .h(px(popup_height))
                 .min_h_0()
@@ -1955,11 +1968,15 @@ impl Render for AppView {
                     .p(px(metrics::WORKSPACE_PAD))
                     .child(self.render_nav(window, cx))
                     .child(self.render_body(window, cx))
-                    .child(self.render_capsule(cx))
-                    .children(scrim)
-                    .children(candidates)
-                    .children(settings),
+                    .child(self.render_capsule(cx)),
             )
+            // The scrims and their panels live at the window level, above the
+            // title bar as well as the workspace: "outside the panel" means the
+            // whole window, and the popup has to be painted after the scrim that
+            // dims everything behind it.
+            .children(scrim)
+            .children(candidates)
+            .children(settings)
             .children(dialogs)
             .children(sheets)
             .children(notifications)
