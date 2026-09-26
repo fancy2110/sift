@@ -997,7 +997,6 @@ impl AppView {
 
     fn render_body(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
-        let pending = self.model.read(cx).is_scanning();
         let started = self.model.read(cx).has_started();
 
         h_flex()
@@ -1041,22 +1040,6 @@ impl AppView {
                                         ),
                                 )
                             })
-                            .when(pending, |stage| {
-                                stage.child(
-                                    h_flex()
-                                        .absolute()
-                                        .left(px(12.))
-                                        .top(px(8.))
-                                        .items_center()
-                                        .gap_1()
-                                        .text_size(px(10.5))
-                                        .text_color(p.faint)
-                                        .child(
-                                            icon("refresh", 11., p.faint),
-                                        )
-                                        .child("正在扫描…"),
-                                )
-                            }),
                     )
                     .child(self.render_file_list(cx)),
             )
@@ -1390,15 +1373,9 @@ impl AppView {
     fn capsule_spans(&self, cx: &App) -> Vec<CapsuleSpan> {
         let p = palette(cx);
         let model = self.model.read(cx);
-        if model.is_scanning() {
-            vec![
-                CapsuleSpan::text("正在扫描："),
-                CapsuleSpan::number(model.progress().files.to_string(), p.fg),
-                CapsuleSpan::text(" 文件 · "),
-                CapsuleSpan::number(model.progress().dirs.to_string(), p.fg),
-                CapsuleSpan::text(" 文件夹"),
-            ]
-        } else if !model.selection().is_empty() {
+        // The capsule stays what it is — the way into the cleanup list — so the
+        // scan's progress has its own element beside it.
+        if !model.selection().is_empty() {
             vec![
                 CapsuleSpan::text("待清理 "),
                 CapsuleSpan::number(format_bytes(model.selected_bytes()), p.accent_hi),
@@ -1422,6 +1399,60 @@ impl AppView {
             .iter()
             .map(|span| span.text.as_str())
             .collect()
+    }
+
+    /// The running scan's progress, beside the capsule, with a stop control.
+    ///
+    /// Walking a whole disk takes minutes; before this, the only way out of a
+    /// walk started by mistake was to quit the application.
+    fn render_scan_progress(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette(cx);
+        let (files, dirs) = {
+            let model = self.model.read(cx);
+            (model.progress().files, model.progress().dirs)
+        };
+        h_flex()
+            .id("scan-progress")
+            .items_center()
+            .gap_2()
+            .rounded(px(metrics::CAPSULE_RADIUS))
+            .px(px(metrics::CAPSULE_PAD_X))
+            .py(px(metrics::CAPSULE_PAD_Y))
+            .bg(p.surface.opacity(0.86))
+            .border_1()
+            .border_color(p.border_strong.opacity(0.7))
+            .shadow(elevation::glass())
+            .child(icon("refresh", 13., p.faint))
+            .child(
+                h_flex()
+                    .gap_1()
+                    .text_size(px(text::CAPSULE))
+                    .text_color(p.muted)
+                    .child("正在扫描：")
+                    .child(
+                        div()
+                            .font_family("Menlo")
+                            .font_weight(weight::HEADING)
+                            .text_color(p.fg)
+                            .child(files.to_string()),
+                    )
+                    .child(" 文件 · ")
+                    .child(
+                        div()
+                            .font_family("Menlo")
+                            .font_weight(weight::HEADING)
+                            .text_color(p.fg)
+                            .child(dirs.to_string()),
+                    )
+                    .child(" 文件夹"),
+            )
+            .child(
+                gpui_kit::component::button::Button::new("cancel-scan")
+                    .label("停止")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|view, _, _, cx| view.services.cancel_scan(cx))),
+            )
     }
 
     /// The summary capsule, drawn from the spans above.
@@ -2046,6 +2077,7 @@ impl Render for AppView {
         let dialogs = gpui_kit::component::Root::render_dialog_layer(window, cx);
         let sheets = gpui_kit::component::Root::render_sheet_layer(window, cx);
         let notifications = gpui_kit::component::Root::render_notification_layer(window, cx);
+        let scanning = self.model.read(cx).is_scanning();
         let scrim = self.render_scrim(cx);
         let candidates = self.render_candidates(window, cx);
         let settings = self.render_ai_settings(cx);
@@ -2082,7 +2114,18 @@ impl Render for AppView {
                     .p(px(metrics::WORKSPACE_PAD))
                     .child(self.render_nav(window, cx))
                     .child(self.render_body(window, cx))
-                    .child(self.render_capsule(cx)),
+                    .child(
+                        // Progress and its stop control sit beside the cleanup
+                        // entry rather than on top of the map: the map is what
+                        // the scan is filling in, so a status line over it covers
+                        // the very thing being watched.
+                        h_flex()
+                            .self_start()
+                            .items_center()
+                            .gap(px(metrics::WORKSPACE_GAP))
+                            .child(self.render_capsule(cx))
+                            .when(scanning, |row| row.child(self.render_scan_progress(cx))),
+                    ),
             )
             // The scrims and their panels live at the window level, above the
             // title bar as well as the workspace: "outside the panel" means the

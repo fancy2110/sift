@@ -406,6 +406,30 @@ impl Services {
         // at another disk is not charged a multi-minute scan for it.
     }
 
+    /// Stop the running scan, keeping whatever it has already found.
+    ///
+    /// Cancellation is not abandonment: the tree the walk built so far stays
+    /// browsable, which is what makes stopping a long walk useful rather than a
+    /// way to lose it.
+    pub fn cancel_scan(&mut self, cx: &mut Context<AppView>) {
+        // Guarding on the session alone is not enough: if the model believes a
+        // scan is running while the session is gone, the window would keep saying
+        // "scanning" with a stop control that does nothing. Either side believing
+        // it is running is reason enough to end it.
+        let session = self.scan.is_some();
+        let reported = self.model.read(cx).is_scanning();
+        if !session && !reported {
+            return;
+        }
+        self.stop_scan();
+        let now = now_ms();
+        self.model.update(cx, |model, cx| {
+            model.note_scan_stopped(sift_core::ScanOutcome::Cancelled);
+            model.toast("已停止扫描", ToastLevel::Info, now);
+            cx.notify();
+        });
+    }
+
     /// Show every mounted volume as one summary surface.
     pub fn show_all_volumes(&mut self, cx: &mut Context<AppView>) {
         self.stop_scan();

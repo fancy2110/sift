@@ -646,3 +646,55 @@ fn clicking_inside_the_popup_keeps_it_open(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// A running scan reports progress beside the cleanup entry, and can be stopped.
+///
+/// The progress element is a plain `div`, which a test cannot look up, so the
+/// position is asserted through the stop control inside it: that control is a
+/// component button, and its bounds are enough to prove the status sits in the
+/// bottom band next to the capsule rather than over the map.
+#[gpui_kit::test]
+fn a_running_scan_can_be_stopped_from_its_progress(cx: &mut TestAppContext) {
+    let (view, handle) = open_app(cx, "cancel-scan");
+    let _alive = cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("cancel-scan").is_none(),
+            "nothing to stop when nothing is running"
+        );
+
+        // A scan in flight, as the engine reports it.
+        view.update(cx, |view, cx| {
+            view.model().update(cx, |model, cx| {
+                model.begin_scan();
+                cx.notify();
+            });
+        });
+        window.render_frame(cx);
+
+        let cancel = window.find("cancel-scan").bounds();
+        // The window is 1180x760; the workspace's bottom band starts after the
+        // map, and the capsule occupies the first ~200px of it.
+        assert!(
+            cancel.origin.y > px(660.),
+            "the stop control belongs to the bottom band, not the map: y={:?}",
+            cancel.origin.y
+        );
+        assert!(
+            cancel.origin.x > px(200.),
+            "and to the right of the capsule: x={:?}",
+            cancel.origin.x
+        );
+
+        window.click("cancel-scan", cx);
+        window.render_frame(cx);
+        assert!(
+            !view.read(cx).model().read(cx).is_scanning(),
+            "stopping ends the walk"
+        );
+        assert!(
+            window.try_find("cancel-scan").is_none(),
+            "and the progress goes with it"
+        );
+    });
+}

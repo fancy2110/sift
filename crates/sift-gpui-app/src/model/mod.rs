@@ -428,20 +428,33 @@ impl WorkspaceModel {
             ScanEvent::Progress { progress, .. } => {
                 self.progress = progress;
             }
-            ScanEvent::Finished { outcome, .. } => {
-                self.scanning = false;
-                self.outcome = Some(outcome);
-                // Nothing is still measuring once the scan has stopped: a
-                // cancelled scan must not leave rows claiming to be pending.
-                for node in self.nodes.values_mut() {
-                    node.pending = false;
-                }
-            }
+            ScanEvent::Finished { outcome, .. } => self.finish_scan(outcome),
             ScanEvent::Warning { message, .. } => {
                 self.toast(message, ToastLevel::Warning, 0);
             }
             // Non-exhaustive: an unknown future event changes nothing.
             _ => {}
+        }
+    }
+
+    /// Stop treating the scan as running, when the user cancelled it.
+    ///
+    /// The engine confirms a cancellation with `Finished { Cancelled }`, but the
+    /// window has to stop saying "scanning" at the moment of the click rather
+    /// than whenever the coordinator gets around to reporting. The later event
+    /// runs the same code and changes nothing.
+    pub fn note_scan_stopped(&mut self, outcome: ScanOutcome) {
+        self.finish_scan(outcome);
+    }
+
+    /// The one place that decides what "the scan is over" means.
+    fn finish_scan(&mut self, outcome: ScanOutcome) {
+        self.scanning = false;
+        self.outcome = Some(outcome);
+        // Nothing is still measuring once the scan has stopped: a cancelled scan
+        // must not leave rows claiming to be pending.
+        for node in self.nodes.values_mut() {
+            node.pending = false;
         }
     }
 
