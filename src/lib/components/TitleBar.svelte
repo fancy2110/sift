@@ -18,13 +18,14 @@
 </script>
 
 <header
-  class="relative z-30 flex h-[46px] shrink-0 items-center gap-3"
+  data-tauri-drag-region
+  class="titlebar relative z-30 flex h-[46px] shrink-0 cursor-default items-center gap-3 select-none"
   class:pl-[84px]={platform === 'mac'}
   class:pr-4={platform === 'mac'}
   class:px-4={platform !== 'mac'}
   style="background: color-mix(in oklch, var(--color-bg) 55%, transparent); backdrop-filter: blur(16px); border-bottom: 1px solid color-mix(in oklch, var(--color-border) 60%, transparent)"
 >
-  <div class="flex items-center gap-2">
+  <div data-tauri-drag-region class="flex items-center gap-2">
     <span
       class="flex h-6 w-6 items-center justify-center rounded-md"
       style="background: var(--color-accent); color: var(--color-accent-contrast); box-shadow: 0 4px 12px -4px var(--color-accent)"
