@@ -1,11 +1,9 @@
 # Sift workspace.
 #
-# Two front ends share one core:
-#   * src-tauri/  — the original Tauri v2 + Svelte application (kept, unchanged in behaviour)
-#   * crates/sift-gpui-app — the native GPUI Kit application
-#
+# The single front end is the Tauri v2 + Svelte application in src-tauri/.
 # Dependencies point downward only:
-#   ui (tauri | gpui) -> sift-analyze -> sift-scan -> sift-platform / sift-core
+#   src-tauri -> sift-monitor -> sift-analyze -> sift-scan -> sift-platform / sift-core
+#                                sift-store
 [workspace]
 resolver = "2"
 members = [
@@ -16,7 +14,6 @@ members = [
     "crates/sift-analyze",
     "crates/sift-store",
     "crates/sift-monitor",
-    "crates/sift-gpui-app",
 ]
 
 [workspace.package]
@@ -40,9 +37,6 @@ serde_json = "1"
 sysinfo = "0.33"
 trash = "5"
 notify = "7"
-
-# The single UI dependency of the native front end.
-gpui-kit = "0.6.6"
 
 [profile.release]
 panic = "abort"

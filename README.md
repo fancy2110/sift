@@ -1,13 +1,6 @@
 # Sift — AI 原生的磁盘空间管理器
 
-跨平台（macOS / Windows / Linux）磁盘空间管理与清理工具。**一套 Rust 核心，两个前端**：
-
-| 前端 | 技术 | 状态 |
-|---|---|---|
-| `src-tauri/` + `src/` | Tauri v2 + Svelte 5 | 原有方案，完整保留（`pnpm check` 0 错误、`pnpm build` 通过） |
-| `crates/sift-gpui-app/` | [GPUI Kit](https://gpui-kit.com) 原生桌面 | 新增方案 |
-
-两个前端共享扫描引擎、分析判定、本地持久化与后台监控——同一个结论在两边显示的数字与理由必然一致。
+跨平台（macOS / Windows / Linux）磁盘空间管理与清理工具，基于 **Tauri v2 + Svelte 5**，产品逻辑全部在共享 Rust crate 中。
 
 ## 现在能做什么
 
@@ -21,14 +14,10 @@
 ## 快速开始
 
 ```bash
-# 1) 原生 GPUI 应用
-cargo run --release -p sift-gpui-app
-
-# 2) 原有 Tauri + Svelte 应用
 pnpm install
 pnpm tauri dev            # 或 pnpm dev 只跑前端
 
-# 3) 扫描性能基准（直接验证 <60s 目标）
+# 扫描性能基准（直接验证 <60s 目标）
 cargo run --release -p sift-scan --example scan_bench -- /Applications
 cargo run --release -p sift-scan --example scan_bench -- / --workers 8
 ```
@@ -38,9 +27,7 @@ cargo run --release -p sift-scan --example scan_bench -- / --workers 8
 ### 常用校验
 
 ```bash
-cargo test                      # 单元 + 集成 + GPUI 交互级 UI 测试
-cargo test -p sift-gpui-app --test rendering   # 渲染真实窗口到 PNG（shell/idle/popup/scanning）
-python3 tools/png_sample.py crates/sift-gpui-app/target/ui-shots/shell.png 30 900   # 读像素
+cargo test                      # 单元 + 集成测试
 cargo clippy --all-targets
 pnpm check                      # Svelte 类型检查
 cargo run --release -p sift-scan --example scan_bench -- <path>
@@ -61,13 +48,11 @@ crates/
 ├── sift-scan/       扫描引擎：优先级调度、内存预算、事件流
 ├── sift-analyze/    智能分析：候选规则、判定器契约、隐私路由、习惯挖掘
 ├── sift-store/      本地持久化：结论缓存、可清理清单、决策日志、设置
-├── sift-monitor/    后台监控：阈值策略、安全自动清理
-└── sift-gpui-app/   GPUI 原生前端
-src/                 Svelte 前端（配套 src-tauri）
+└── sift-monitor/    后台监控：阈值策略、安全自动清理
+src/                 Svelte 前端
 src-tauri/           Tauri 适配层（命令 + 事件翻译）
 docs/
 ├── architecture/overview.md        分层、关键决策、实测数据
-├── architecture/gpui-kit-api-cheatsheet.md  gpui-kit 0.6.6 精确 API（含陷阱）
 └── research/fast-disk-scan.md      2TB/60s 快速扫描调研（三平台 API、内存架构、引用）
 ```
 
