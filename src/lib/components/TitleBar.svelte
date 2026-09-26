@@ -6,18 +6,24 @@
     onScan,
     scanning
   }: { onScan: () => void; scanning: boolean } = $props();
+
+  // Native window controls are overlaid on top of the web view:
+  //  macOS → traffic lights on the left; Windows → caption buttons on the right.
+  const platform = (() => {
+    const p = ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform ?? '').toLowerCase();
+    if (p.includes('mac')) return 'mac' as const;
+    if (p.includes('win')) return 'win' as const;
+    return 'linux' as const;
+  })();
 </script>
 
 <header
-  class="relative z-30 flex h-[46px] shrink-0 items-center gap-3 px-4"
+  class="relative z-30 flex h-[46px] shrink-0 items-center gap-3"
+  class:pl-[84px]={platform === 'mac'}
+  class:pr-4={platform === 'mac'}
+  class:px-4={platform !== 'mac'}
   style="background: color-mix(in oklch, var(--color-bg) 55%, transparent); backdrop-filter: blur(16px); border-bottom: 1px solid color-mix(in oklch, var(--color-border) 60%, transparent)"
 >
-  <div class="flex gap-2 pr-1">
-    <span class="h-3 w-3 rounded-full" style="background: oklch(0.68 0.17 25)"></span>
-    <span class="h-3 w-3 rounded-full" style="background: oklch(0.78 0.14 85)"></span>
-    <span class="h-3 w-3 rounded-full" style="background: oklch(0.74 0.17 145)"></span>
-  </div>
-
   <div class="flex items-center gap-2">
     <span
       class="flex h-6 w-6 items-center justify-center rounded-md"
@@ -53,7 +59,7 @@
         <span style="animation: switch-spin 0.9s linear infinite; display: inline-flex">
           <Icon name="refresh" size={13} />
         </span>
-        {store.autoOn ? '正在扫描' : '正在扫描'}
+        正在扫描
       {:else}
         <Icon name="spark" size={13} />
         {store.autoOn ? '智能扫描' : '磁盘扫描'}
