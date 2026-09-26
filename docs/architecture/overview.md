@@ -320,7 +320,30 @@ python3 tools/png_sample.py <png> X Y ...      # 读任意像素/区域均值
 
 **仍未同步的一处**：右侧列表行的 `row-dim`（`opacity: 0.34`）保留了设计稿行为。也就是说，把指针放到某个方块上时，treemap 不再变暗，但**列表其余行仍会变暗**——同一套"veil"手法。这一条你没提，我按你明确的范围只改了 treemap；要一并去掉说一声。
 
-### 8.7 仍未实现
+### 8.7 候选面板与设计稿逐项对齐
+
+反馈是"待删除面板的菜单没有与 tauri 的设计方案对齐"。把设计稿那一段（`CleanerView.svelte` 197–265 行）连同 `popupGeom`、`.sheet-hairline`、`.check-box`、`frameMorph` 一起读完，逐项比对后的差异与处理：
+
+| 设计稿 | 之前 | 现在 |
+|---|---|---|
+| 页脚分隔是 `.sheet-hairline`：**左右各内缩 14px** 的 1px 线 | 通栏实线边框 | 内缩 1px 线（设计稿两端还有渐变淡出；GPUI 的 `linear_gradient` 只接受两个停靠点，所以画成等强度的实线，已在文档说明） |
+| `.check-box`：accent 底 + **`box-shadow: 0 0 0 3px accent/22%` 光环** | 只有 accent 底 | 加了 3px 光环（`BoxShadow` 的 `spread_radius`） |
+| 勾的 `stroke={2.4}` | 图标集统一 1.7 | 新增 `check-strong.svg`（2.4），并在资源测试里把这一处例外写明 |
+| 列表 `overflow-y-auto` | **不可滚动**，候选多时会裁掉 | 加了滚动 |
+| 空态文案「暂未选择项目，可在左侧区块或列表中右键加入」 | 「还没有选择项目…」 | 逐字对齐 |
+| `width = min(520, ws.width-24)`、`left` 溢出时回夹 | 固定 520 / 固定 left | 按公式 |
+| `height = min(560, cap.top - ws.top - 8)` | 少减一层 padding（矮 12px） | 按公式 |
+| 主按钮：`trash` 图标 + 「清理 X」；清理中换成旋转 `refresh` + 「清理中」并禁用 | 无图标、无清理中态，**点击立刻关面板** | 图标 + 清理中态；点击**不关闭**，由服务在回收站操作真正结束后关闭（与设计稿 `clean()` 一致：`cleaning=false; drawerOpen=false`） |
+| `in:frameMorph` | 我接的是 `panelIn`（那是 Treemap「其他项目」面板用的） | 改为 `frameMorph`：从胶囊矩形形变长出 |
+
+**frameMorph 的还原**值得单说：它从底部胶囊的矩形出发，`translate + 双轴 scale`（`transform-origin: 0 0`），同时插值圆角 16→20 与阴影 `0 (8+26t) / (20+50t) / -16 black(0.35+0.25t)`，320ms `cubicOut`。GPUI 有两处限制：容器不能 `transform`（只有 `Svg` 有 `with_transformation`），且**没有公开 API 读取已布局 `div` 的边界**。所以：
+- 形变用**矩形本身的插值**表达（`Morph::between(start, end)`，纯函数 + 单元测试：起点等于胶囊、终点等于面板、两轴缩放与偏移）；
+- 胶囊宽度靠**塑造它自己显示的那段文字**量出来（`text_system().shape_line(...).width` + 固定外框 32/28/10+10/14）。为此把胶囊摘要重构成 `capsule_spans()` 单一来源：渲染与量测用同一份文案，不会各写一套而漂移。
+- `cubicOut` 框架没有，但它是闭式 `1-(1-t)³`，直接实现并测试。
+
+**保留的两处有意偏离**：候选项分成「待清理 / 分析建议」两个 Tab（设计稿只有一个列表，第二个 Tab 是你上一轮要求的）；遮罩覆盖整窗而非只盖工作区（你上一轮要求"点外面都关闭"）。两者都已在 §8.8 记录。
+
+### 8.8 仍未实现
 
 | 后续项 | 说明 |
 |---|---|

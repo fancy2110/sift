@@ -209,6 +209,9 @@ pub struct WorkspaceModel {
     current_dir: Option<NodeKey>,
 
     scanning: bool,
+    /// A trash operation is in flight. The candidate panel stays open and says
+    /// so, which is what the design does, instead of vanishing on the click.
+    cleaning: bool,
     /// Set once the user has started a scan for the current selection. The
     /// design稿 starts one on launch; this application waits to be asked, so the
     /// views must tell "not asked yet" from "scanned and empty".
@@ -337,6 +340,15 @@ impl WorkspaceModel {
 
     pub fn is_scanning(&self) -> bool {
         self.scanning
+    }
+
+    /// Whether a move-to-trash is in flight.
+    pub fn is_cleaning(&self) -> bool {
+        self.cleaning
+    }
+
+    pub fn set_cleaning(&mut self, cleaning: bool) {
+        self.cleaning = cleaning;
     }
 
     pub fn scan_outcome(&self) -> Option<ScanOutcome> {

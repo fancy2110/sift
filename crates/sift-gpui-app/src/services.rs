@@ -337,6 +337,12 @@ impl Services {
 
         let _ = self.store.flush_if_dirty();
         self.cleaning = false;
+        // The work is over, so the panel has nothing left to report.
+        self.model.update(cx, |model, cx| {
+            model.set_cleaning(false);
+            model.set_drawer_open(false);
+            cx.notify();
+        });
 
         let message = if failed == 0 {
             format!(
@@ -640,8 +646,10 @@ impl Services {
         }
 
         self.cleaning = true;
+        // The panel stays open and reports progress; the design closes it when
+        // the move finishes, not when it starts.
         self.model.update(cx, |model, cx| {
-            model.set_drawer_open(false);
+            model.set_cleaning(true);
             cx.notify();
         });
 

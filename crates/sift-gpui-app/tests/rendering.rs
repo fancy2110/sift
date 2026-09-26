@@ -200,10 +200,10 @@ mod macos {
         shoot("shell", true, 0, |_, _| {});
         // Before the user asks: no walk, and the window has to say so.
         shoot("idle", false, 0, |_, _| {});
-        // Mid-flight: at 45 ms of a 320 ms entrance the panel is still ~96% of
-        // its size and ~54% opaque (backOut covers most of its distance early),
-        // and the rows have not started their staggered arrival yet.
-        shoot("popup-enter", true, 45, |cx, view| {
+        // Mid-flight:  starts at the capsule's rectangle, so at 25 ms
+        // the panel is still a small box sitting where the capsule is, opening
+        // outwards from it.
+        shoot("popup-enter", true, 25, |cx, view| {
             view.update(cx, |view, cx| {
                 view.model().update(cx, |model, cx| {
                     model.toggle_selected(key("/Users/dev/node_modules"));

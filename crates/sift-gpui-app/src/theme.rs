@@ -269,6 +269,56 @@ pub mod motion {
     /// How many rows take part in the stagger before it stops growing.
     pub const STAGGER_CAP: usize = 8;
 
+    /// `cubicOut` — Svelte's `1 - (1 - t)^3`, which is what `frameMorph` eases
+    /// with. It is a closed form, so it needs no solver.
+    pub fn cubic_out(t: f32) -> f32 {
+        let inverse = 1.0 - t.clamp(0.0, 1.0);
+        1.0 - inverse * inverse * inverse
+    }
+
+    /// `frameMorph`: the candidate panel grows out of the summary capsule.
+    ///
+    /// The design reads the capsule's rectangle from the DOM and interpolates
+    /// from it. GPUI has no public API for a laid-out `div`'s bounds, so the
+    /// capsule's own geometry is reconstructed from its parts; the start width
+    /// comes from shaping the same summary text the capsule renders.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct Morph {
+        /// Translation applied at t = 0, easing to zero.
+        pub dx: f32,
+        pub dy: f32,
+        /// Scale along each axis at t = 0, easing to one.
+        pub kx: f32,
+        pub ky: f32,
+    }
+
+    impl Morph {
+        /// The morph from `start` to `end`, both in window coordinates.
+        pub fn between(start: (f32, f32, f32, f32), end: (f32, f32, f32, f32)) -> Self {
+            let (start_x, start_y, start_w, start_h) = start;
+            let (end_x, end_y, end_w, end_h) = end;
+            Self {
+                dx: start_x - end_x,
+                dy: start_y - end_y,
+                kx: if end_w > 0.0 { start_w / end_w } else { 1.0 },
+                ky: if end_h > 0.0 { start_h / end_h } else { 1.0 },
+            }
+        }
+
+        /// The scale factors at `t`.
+        pub fn scale_at(&self, t: f32) -> (f32, f32) {
+            (
+                self.kx + (1.0 - self.kx) * t,
+                self.ky + (1.0 - self.ky) * t,
+            )
+        }
+
+        /// The translation at `t`.
+        pub fn offset_at(&self, t: f32) -> (f32, f32) {
+            (self.dx * (1.0 - t), self.dy * (1.0 - t))
+        }
+    }
+
     /// `backOut` — the standard ease-out-back, which overshoots 1.0 before
     /// settling: `1 + c3*(t-1)^3 + c1*(t-1)^2`.
     pub fn back_out(t: f32) -> f32 {
@@ -603,6 +653,30 @@ mod tests {
             .fold(f32::MIN, f32::max);
         assert!(peak > 1.0, "backOut must overshoot, peaked at {peak}");
         assert!(peak < 1.2, "and not by much, peaked at {peak}");
+    }
+
+    #[test]
+    fn cubic_out_is_the_design_s_frame_morph_curve() {
+        assert!(motion::cubic_out(0.0).abs() < 1e-6);
+        assert!((motion::cubic_out(1.0) - 1.0).abs() < 1e-6);
+        // Decelerating: most of the distance is covered early.
+        assert!(motion::cubic_out(0.5) > 0.85, "got {}", motion::cubic_out(0.5));
+        assert!(motion::cubic_out(0.25) > 0.5);
+    }
+
+    #[test]
+    fn a_morph_starts_at_the_capsule_and_ends_at_the_panel() {
+        // A 190x48 capsule at (12, 772) growing into a 520x560 panel at (12, 260).
+        let morph = motion::Morph::between((12.0, 772.0, 190.0, 48.0), (12.0, 260.0, 520.0, 560.0));
+        assert_eq!(morph.dx, 0.0, "the two left edges line up");
+        assert_eq!(morph.dy, 512.0);
+        assert!((morph.kx - 190.0 / 520.0).abs() < 1e-6);
+        assert!((morph.ky - 48.0 / 560.0).abs() < 1e-6);
+        // At the end it is the panel exactly; at the start it is the capsule.
+        assert_eq!(morph.offset_at(1.0), (0.0, 0.0));
+        assert_eq!(morph.scale_at(1.0), (1.0, 1.0));
+        assert_eq!(morph.offset_at(0.0), (0.0, 512.0));
+        assert_eq!(morph.scale_at(0.0), (190.0 / 520.0, 48.0 / 560.0));
     }
 
     #[test]

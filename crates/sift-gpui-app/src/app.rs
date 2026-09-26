@@ -91,12 +91,10 @@ pub mod weight {
 /// The capsule is pad 10 + a 28 px icon box + pad 10, so the popup that sits
 /// above it starts at the workspace pad plus the capsule plus the design's gap.
 const CAPSULE_H: f32 = metrics::CAPSULE_ICON_BOX + metrics::CAPSULE_PAD_Y * 2.0;
-const POPUP_BOTTOM: f32 = metrics::WORKSPACE_PAD + CAPSULE_H + 8.0;
 const POPUP_W: f32 = 520.0;
 const POPUP_MAX_H: f32 = 560.0;
-/// The design's window height. The popup's height is derived from it, so this
-/// is the number to change if the window's default size ever moves.
-const POPUP_WINDOW_H: f32 = 832.0;
+/// The design's `POPUP_GAP`: the space between the capsule and the panel.
+const POPUP_GAP: f32 = 8.0;
 
 /// The AI settings form's text fields.
 ///
@@ -1383,71 +1381,63 @@ impl AppView {
 
     // ---- bottom capsule: the design's summary, and the popup's anchor ------
 
+    /// One span of the summary capsule.
+    ///
+    /// The summary is built once and used twice: to render the capsule, and to
+    /// measure it. The candidate panel morphs out of the capsule, and GPUI
+    /// exposes no laid-out bounds for a `div`, so the width has to come from the
+    /// text the capsule actually shows rather than from a guess.
+    fn capsule_spans(&self, cx: &App) -> Vec<CapsuleSpan> {
+        let p = palette(cx);
+        let model = self.model.read(cx);
+        if model.is_scanning() {
+            vec![
+                CapsuleSpan::text("正在扫描："),
+                CapsuleSpan::number(model.progress().files.to_string(), p.fg),
+                CapsuleSpan::text(" 文件 · "),
+                CapsuleSpan::number(model.progress().dirs.to_string(), p.fg),
+                CapsuleSpan::text(" 文件夹"),
+            ]
+        } else if !model.selection().is_empty() {
+            vec![
+                CapsuleSpan::text("待清理 "),
+                CapsuleSpan::number(format_bytes(model.selected_bytes()), p.accent_hi),
+                CapsuleSpan::faint(format!(" · {} 项", model.selection().len()), palette(cx).faint),
+            ]
+        } else {
+            let available = model
+                .current_volume()
+                .map(|volume| volume.available_bytes)
+                .unwrap_or(0);
+            vec![
+                CapsuleSpan::number(format_bytes(available), p.fg),
+                CapsuleSpan::faint(" 可用空间", p.faint),
+            ]
+        }
+    }
+
+    /// The capsule's summary as one string, for measuring.
+    fn capsule_summary_text(&self, cx: &App) -> String {
+        self.capsule_spans(cx)
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect()
+    }
+
+    /// The summary capsule, drawn from the spans above.
     fn render_capsule(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
-        let (scanning, files, dirs, selected_bytes, selected_count, available) = {
-            let model = self.model.read(cx);
-            (
-                model.is_scanning(),
-                model.progress().files,
-                model.progress().dirs,
-                model.selected_bytes(),
-                model.selection().len(),
-                model.current_volume().map(|volume| volume.available_bytes),
-            )
-        };
-
-        let summary: AnyElement = if scanning {
-            h_flex()
-                .gap_1()
-                .text_size(px(text::CAPSULE))
-                .child("正在扫描：")
-                .child(
-                    div()
-                        .font_family("Menlo")
-                        .font_weight(weight::HEADING)
-                        .child(files.to_string()),
-                )
-                .child(" 文件 · ")
-                .child(
-                    div()
-                        .font_family("Menlo")
-                        .font_weight(weight::HEADING)
-                        .child(dirs.to_string()),
-                )
-                .child(" 文件夹")
-                .into_any_element()
-        } else if selected_count > 0 {
-            h_flex()
-                .gap_1()
-                .text_size(px(text::CAPSULE))
-                .child("待清理 ")
-                .child(
-                    div()
-                        .font_family("Menlo")
-                        .font_weight(weight::HEADING)
-                        .text_color(p.accent_hi)
-                        .child(format_bytes(selected_bytes)),
-                )
-                .child(
-                    div()
-                        .text_color(p.faint)
-                        .child(format!(" · {selected_count} 项")),
-                )
-                .into_any_element()
-        } else {
-            h_flex()
-                .gap_1()
-                .text_size(px(text::CAPSULE))
-                .child(
-                    div()
-                        .font_family("Menlo")
-                        .font_weight(weight::HEADING)
-                        .child(format_bytes(available.unwrap_or(0))),
-                )
-                .child(div().text_color(p.faint).child(" 可用空间"))
-                .into_any_element()
-        };
+        let mut summary = h_flex().gap_1().text_size(px(text::CAPSULE));
+        for span in self.capsule_spans(cx) {
+            let mut element = div().child(span.text);
+            if span.mono {
+                element = element.font_family("Menlo").font_weight(weight::HEADING);
+            }
+            if let Some(color) = span.color {
+                element = element.text_color(color);
+            }
+            summary = summary.child(element);
+        }
 
         h_flex()
             .id("ai-summary")
@@ -1470,14 +1460,10 @@ impl AppView {
                     .justify_center()
                     .rounded(px(metrics::CAPSULE_ICON_RADIUS))
                     .bg(p.accent.opacity(0.22))
-                    .child(
-                        icon("layers", 15., p.accent_hi),
-                    ),
+                    .child(icon("layers", 15., p.accent_hi)),
             )
             .child(summary)
-            .child(
-                icon("chevron-right", 14., p.faint),
-            )
+            .child(icon("chevron-right", 14., p.faint))
             .on_click(cx.listener(|view, _, _, cx| {
                 if view.model.read(cx).drawer_open() {
                     view.close_candidates(cx);
@@ -1562,12 +1548,26 @@ impl AppView {
                     .items_center()
                     .justify_center()
                     .rounded(px(5.))
-                    .when(queued, |box_| box_.bg(p.accent))
+                    // `.check-box`: accent fill, a hairline of the same accent,
+                    // and the design's soft ring — `box-shadow: 0 0 0 3px
+                    // accent/22%`. The unchecked suggestion is the bare box.
+                    .when(queued, |box_| {
+                        box_.bg(p.accent).border_1().border_color(p.accent).shadow(vec![
+                            BoxShadow {
+                                color: p.accent.opacity(0.22),
+                                offset: point(px(0.), px(0.)),
+                                blur_radius: px(0.),
+                                spread_radius: px(3.),
+                                inset: false,
+                            },
+                        ])
+                    })
                     .when(!queued, |box_| {
                         box_.border_1().border_color(p.border_strong)
                     })
                     .child(icon(
-                        "check",
+                        // The design strokes this tick at 2.4, not the set's 1.7.
+                        if queued { "check-strong" } else { "check" },
                         12.,
                         if queued { p.accent_contrast } else { p.muted },
                     ))
@@ -1672,18 +1672,58 @@ impl AppView {
 
     /// The design's candidate popup: anchored above the capsule, 520 × 560 max,
     /// with a header, the tab strip, the rows and a footer that commits.
-    fn render_candidates(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_candidates(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         if !self.model.read(cx).drawer_open() {
             return None;
         }
         let p = palette(cx);
-        // `min(560, capsule top - workspace top - 8)`: the design's popup is a
-        // fixed-height frame, so an empty list still shows the panel a user
-        // expects rather than a box that shrinks to its content.
-        let popup_height = (POPUP_WINDOW_H - metrics::TITLE_BAR_H - metrics::WORKSPACE_PAD * 2.0
-            - CAPSULE_H
-            - 8.0)
-            .min(POPUP_MAX_H);
+        let window_size = window.bounds().size;
+        let window_w: f32 = window_size.width.into();
+        let window_h: f32 = window_size.height.into();
+        let workspace_h = window_h - metrics::TITLE_BAR_H;
+
+        // The design's `popupGeom`, in full:
+        //   width  = min(520, workspace - 24)
+        //   left   = capsule.left, pulled back if it would overflow
+        //   height = min(560, capsule.top - workspace.top - 8)
+        // The capsule sits `popup_side` from the window's left and bottom edges,
+        // so its top is what bounds the panel.
+        let width = POPUP_W.min(window_w - 24.0);
+        let mut left = metrics::WORKSPACE_PAD;
+        if left + width > window_w - 12.0 {
+            left = window_w - 12.0 - width;
+        }
+        let capsule_bottom = metrics::WORKSPACE_PAD;
+        let popup_height = POPUP_MAX_H.min(workspace_h - capsule_bottom - CAPSULE_H - POPUP_GAP);
+        let bottom = capsule_bottom + CAPSULE_H + POPUP_GAP;
+
+        // `frameMorph` starts at the capsule's rectangle. GPUI has no laid-out
+        // bounds for a `div`, so the capsule's width comes from shaping the same
+        // summary text it renders; everything else about it is fixed.
+        let summary = self.capsule_summary_text(cx);
+        let runs = vec![window.text_style().to_run(summary.len())];
+        let summary_width: f32 = window
+            .text_system()
+            .shape_line(summary.into(), px(text::CAPSULE), &runs, None)
+            .width
+            .into();
+        let capsule_width = (metrics::CAPSULE_PAD_X * 2.0
+            + metrics::CAPSULE_ICON_BOX
+            + metrics::CAPSULE_GAP * 2.0
+            + 14.0
+            + summary_width)
+            .min(width);
+        let capsule_top = window_h - capsule_bottom - CAPSULE_H;
+        let panel_top = window_h - bottom - popup_height;
+        let morph = motion::Morph::between(
+            (left, capsule_top, capsule_width, CAPSULE_H),
+            (left, panel_top, width, popup_height),
+        );
+        let cleaning = self.model.read(cx).is_cleaning();
         let (queued, suggestions, selected_bytes, tab) = {
             let model = self.model.read(cx);
             let queued: Vec<CandidateRow> = model
@@ -1731,7 +1771,13 @@ impl AppView {
             CandidateTab::Queue => &queued,
             CandidateTab::Suggestions => &suggestions,
         };
-        let mut rows = v_flex().flex_1().min_h_0().px(px(12.)).pt_2();
+        let mut rows = v_flex()
+            .id("candidate-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(12.))
+            .pt_2();
         if active.is_empty() {
             rows = rows.child(
                 v_flex()
@@ -1742,7 +1788,7 @@ impl AppView {
                     .text_size(px(12.))
                     .text_color(p.faint)
                     .child(match tab {
-                        CandidateTab::Queue => "还没有选择项目，可在左侧区块或列表中右键加入",
+                        CandidateTab::Queue => "暂未选择项目，可在左侧区块或列表中右键加入",
                         CandidateTab::Suggestions => "分析没有给出可清理的建议",
                     }),
             );
@@ -1760,12 +1806,12 @@ impl AppView {
             v_flex()
                 .id("candidate-popup")
                 .absolute()
-                .left(px(metrics::WORKSPACE_PAD))
-                .bottom(px(POPUP_BOTTOM))
+                .left(px(left))
+                .bottom(px(bottom))
                 // A click on the panel's own padding is not a click outside it,
                 // so it must not reach the scrim behind.
                 .on_click(|_, _, cx| cx.stop_propagation())
-                .w(px(POPUP_W))
+                .w(px(width))
                 .h(px(popup_height))
                 .min_h_0()
                 .rounded(px(metrics::CANVAS_RADIUS))
@@ -1773,7 +1819,6 @@ impl AppView {
                 .bg(p.surface.opacity(0.95))
                 .border_1()
                 .border_color(p.border_strong)
-                .shadow(elevation::glass_strong())
                 .child(
                     h_flex()
                         .flex_shrink_0()
@@ -1810,6 +1855,11 @@ impl AppView {
                 )
                 .child(strip)
                 .child(rows)
+                // `.sheet-hairline`: the rule above the actions is inset 14 px
+                // rather than full width. The design fades its ends as well; GPUI
+                // gradients take two stops, so the line is drawn flat at the same
+                // strength instead.
+                .child(div().h(px(1.)).mx(px(14.)).bg(p.border_strong.opacity(0.42)))
                 .child(
                     h_flex()
                         .flex_shrink_0()
@@ -1817,8 +1867,6 @@ impl AppView {
                         .gap_3()
                         .px(px(16.))
                         .py(px(12.))
-                        .border_t_1()
-                        .border_color(p.border)
                         .child(
                             div()
                                 .text_size(px(text::PANEL_SUB))
@@ -1826,37 +1874,69 @@ impl AppView {
                                 .child("移入回收站，可恢复"),
                         )
                         .child(
+                            // The design's commit action: a trash icon and the
+                            // amount, or a spinner and "清理中" while the move is
+                            // in flight — and the panel stays open until it
+                            // finishes, so the click does not look like it did
+                            // nothing.
                             gpui_kit::component::button::Button::new("clean")
-                                .label(format!("清理 {}", format_bytes(selected_bytes)))
+                                .icon(
+                                    gpui_kit::component::Icon::default()
+                                        .path(crate::assets::path(if cleaning {
+                                            "refresh"
+                                        } else {
+                                            "trash"
+                                        })),
+                                )
+                                .label(if cleaning {
+                                    "清理中".to_string()
+                                } else {
+                                    format!("清理 {}", format_bytes(selected_bytes))
+                                })
                                 .small()
                                 .primary()
-                                .disabled(queue_count == 0)
+                                .disabled(queue_count == 0 || cleaning)
                                 .ml_auto()
                                 .min_w(px(150.))
                                 .on_click(cx.listener(|view, _, _, cx| {
+                                    // No close here: the service closes the panel
+                                    // when the trashing has actually finished.
                                     view.services.trash_selection(cx);
-                                    view.close_candidates(cx);
                                 })),
                         ),
                 )
-                // `panelIn`: 320 ms of ease-out-back, opacity with the phase and
-                // a 0.92 → 1 arrival. GPUI transforms `Svg` only, so the scale is
-                // the same motion expressed as size about the panel's centre —
-                // width, height and the offsets that keep that centre still.
+                // `frameMorph`: the panel grows out of the summary capsule —
+                // translate and both axis scales from the capsule's rectangle to
+                // the panel's own, with the radius opening from 16 to 20 and the
+                // shadow deepening as it rises. 320 ms of `cubicOut`.
+                //
+                // GPUI transforms `Svg` only, so the morph is expressed the same
+                // way the design's `transform-origin: 0 0` behaves: the panel's
+                // rectangle is placed and sized by the interpolated transform.
                 .with_animation(
                     "candidates-in",
                     Animation::new(std::time::Duration::from_millis(motion::PANEL_MS))
-                        .with_easing(motion::back_out),
-                    move |el, phase| {
-                        let scale =
-                            motion::PANEL_SCALE_FROM + (1.0 - motion::PANEL_SCALE_FROM) * phase;
-                        let width = POPUP_W * scale;
-                        let height = popup_height * scale;
-                        el.opacity(phase.clamp(0.0, 1.0))
-                            .w(px(width))
-                            .h(px(height))
-                            .left(px(metrics::WORKSPACE_PAD + (POPUP_W - width) / 2.0))
-                            .bottom(px(POPUP_BOTTOM + (popup_height - height) / 2.0))
+                        .with_easing(motion::cubic_out),
+                    move |el, t| {
+                        let (scale_x, scale_y) = morph.scale_at(t);
+                        let (offset_x, offset_y) = morph.offset_at(t);
+                        let animated_w = width * scale_x;
+                        let animated_h = popup_height * scale_y;
+                        let animated_left = left + offset_x;
+                        let animated_top = panel_top + offset_y;
+                        let animated_bottom = window_h - (animated_top + animated_h);
+                        el.w(px(animated_w))
+                            .h(px(animated_h))
+                            .left(px(animated_left))
+                            .bottom(px(animated_bottom))
+                            .rounded(px(16.0 + 4.0 * t))
+                            .shadow(vec![BoxShadow {
+                                color: Hsla::from(rgb(0x00_00_00)).opacity(0.35 + 0.25 * t),
+                                offset: point(px(0.), px(8.0 + 26.0 * t)),
+                                blur_radius: px(20.0 + 50.0 * t),
+                                spread_radius: px(-16.),
+                                inset: false,
+                            }])
                     },
                 )
                 .into_any_element(),
@@ -1906,6 +1986,40 @@ fn icon(name: &str, size: f32, color: Hsla) -> impl IntoElement {
         .text_color(color)
 }
 
+/// One span of the summary capsule's text.
+struct CapsuleSpan {
+    text: String,
+    /// Numbers are set in the mono face at the heading weight.
+    mono: bool,
+    color: Option<Hsla>,
+}
+
+impl CapsuleSpan {
+    fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            mono: false,
+            color: None,
+        }
+    }
+
+    fn number(text: impl Into<String>, color: Hsla) -> Self {
+        Self {
+            text: text.into(),
+            mono: true,
+            color: Some(color),
+        }
+    }
+
+    fn faint(text: impl Into<String>, color: Hsla) -> Self {
+        Self {
+            text: text.into(),
+            mono: false,
+            color: Some(color),
+        }
+    }
+}
+
 /// One row of a candidate list: what the popup needs to draw it.
 struct CandidateRow {
     key: NodeKey,
@@ -1933,7 +2047,7 @@ impl Render for AppView {
         let sheets = gpui_kit::component::Root::render_sheet_layer(window, cx);
         let notifications = gpui_kit::component::Root::render_notification_layer(window, cx);
         let scrim = self.render_scrim(cx);
-        let candidates = self.render_candidates(cx);
+        let candidates = self.render_candidates(window, cx);
         let settings = self.render_ai_settings(cx);
 
         v_flex()
@@ -2036,9 +2150,24 @@ mod tests {
 
     #[test]
     fn the_popup_sits_above_the_capsule() {
-        // 12 (workspace pad) + 48 (capsule) + 8 (design gap) = 68.
+        // 12 (workspace pad) + 48 (capsule) + 8 (design gap) = 68 px from the
+        // window's bottom edge, which is what `popupGeom` computes as
+        // `ws.height - (cap.top - ws.top - POPUP_GAP)`.
         assert_eq!(CAPSULE_H, 48.0);
-        assert_eq!(POPUP_BOTTOM, 68.0);
+        assert_eq!(metrics::WORKSPACE_PAD + CAPSULE_H + POPUP_GAP, 68.0);
+    }
+
+    #[test]
+    fn the_panel_is_capped_by_the_space_above_the_capsule() {
+        // `min(560, cap.top - ws.top - 8)` for the design's 832 px window: the
+        // workspace is 786 px tall, the capsule occupies the last 60, so 560 fits.
+        let workspace_h = 832.0 - metrics::TITLE_BAR_H;
+        let height = POPUP_MAX_H.min(workspace_h - metrics::WORKSPACE_PAD - CAPSULE_H - POPUP_GAP);
+        assert_eq!(height, 560.0);
+        // A short window caps it instead of overflowing the title bar.
+        let short = 640.0 - metrics::TITLE_BAR_H;
+        let capped = POPUP_MAX_H.min(short - metrics::WORKSPACE_PAD - CAPSULE_H - POPUP_GAP);
+        assert!(capped < POPUP_MAX_H && capped > 0.0, "got {capped}");
     }
 
     #[test]

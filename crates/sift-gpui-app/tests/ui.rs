@@ -69,6 +69,17 @@ fn open_app(
     (captured.expect("view built"), handle)
 }
 
+/// Let the popup's entrance finish before touching what is inside it.
+///
+/// The panel morphs out of the capsule over 320 ms, so for the first frames it
+/// is still the capsule's size and its controls are outside the visible area.
+/// The animation is driven by real time, so waiting is the way to settle it.
+fn settle_entrance(window: &mut gpui_kit::Window, cx: &mut gpui_kit::App) {
+    window.render_frame(cx);
+    std::thread::sleep(std::time::Duration::from_millis(360));
+    window.render_frame(cx);
+}
+
 /// Seed the model with one directory listing, as the scanner would.
 fn seed_directory(view: &Entity<AppView>, cx: &mut gpui_kit::App, dir: &str, entries: Vec<DirectoryEntry>) {
     view.update(cx, |view, cx| {
@@ -134,7 +145,7 @@ fn clicking_a_row_queues_it_and_the_cleanup_control_opens_the_sheet(
         // Now the capsule opens the popup, which carries the commit action.
         window.render_frame(cx);
         view.update(cx, |view, cx| view.open_candidates(cx));
-        window.render_frame(cx);
+        settle_entrance(window, cx);
         assert!(view.read(cx).candidates_open(cx));
         assert!(
             window.find("clean").bounds().size.width > px(0.),
@@ -568,7 +579,7 @@ fn clicking_outside_the_popup_closes_it(cx: &mut TestAppContext) {
     let _alive = cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         view.update(cx, |view, cx| view.open_candidates(cx));
-        window.render_frame(cx);
+        settle_entrance(window, cx);
         assert!(view.read(cx).model().read(cx).drawer_open(), "the popup is open");
 
         // A row that is behind the popup's scrim.
@@ -616,7 +627,7 @@ fn clicking_inside_the_popup_keeps_it_open(cx: &mut TestAppContext) {
     let _alive = cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         view.update(cx, |view, cx| view.open_candidates(cx));
-        window.render_frame(cx);
+        settle_entrance(window, cx);
 
         // The panel's own furniture is the nearest observable thing inside it.
         // The queue is empty, so the commit button is disabled and pressing it

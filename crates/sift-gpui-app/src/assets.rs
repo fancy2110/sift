@@ -23,6 +23,8 @@ const ICONS: &[(&str, &str)] = &[
     ("alert", include_str!("../assets/sift-icons/alert.svg")),
     ("bolt", include_str!("../assets/sift-icons/bolt.svg")),
     ("check", include_str!("../assets/sift-icons/check.svg")),
+    // The design strokes the candidate check box tick at 2.4, not the set's 1.7.
+    ("check-strong", include_str!("../assets/sift-icons/check-strong.svg")),
     ("chevron-down", include_str!("../assets/sift-icons/chevron-down.svg")),
     ("chevron-right", include_str!("../assets/sift-icons/chevron-right.svg")),
     ("chevron-up", include_str!("../assets/sift-icons/chevron-up.svg")),
@@ -92,8 +94,13 @@ mod tests {
                 .unwrap_or_else(|| panic!("{path} must load"));
             let text = std::str::from_utf8(&loaded).expect("utf-8");
             assert!(text.contains("<path d=\""), "{name} has a path");
-            // The design's own stroke, not Lucide's 2.
-            assert!(text.contains("stroke-width=\"1.7\""), "{name} keeps the design's stroke");
+            // The design's own stroke, not Lucide's 2 — with one exception: the
+            // candidate check box draws its tick at 2.4.
+            let stroke = if *name == "check-strong" { "2.4" } else { "1.7" };
+            assert!(
+                text.contains(&format!("stroke-width=\"{stroke}\"")),
+                "{name} keeps the design's stroke"
+            );
             assert!(text.contains("stroke=\"currentColor\""), "{name} takes the text colour");
             assert_eq!(text, *body);
         }
