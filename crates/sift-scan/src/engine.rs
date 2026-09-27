@@ -77,6 +77,7 @@ pub struct ScanHandle {
     /// under the same lock.
     pub tree: Arc<Mutex<ScanTree>>,
     cancel: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     focus: Arc<Mutex<PathBuf>>,
     focus_generation: Arc<AtomicU64>,
     /// Set when the coordinator thread exits.
@@ -91,6 +92,7 @@ pub struct ScanHandle {
 #[derive(Clone)]
 pub struct ScanControl {
     cancel: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     focus: Arc<Mutex<PathBuf>>,
     focus_generation: Arc<AtomicU64>,
 }
@@ -105,6 +107,22 @@ impl ScanControl {
     /// Whether cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
         self.cancel.load(AtomicOrdering::SeqCst)
+    }
+
+    /// Pause discovery. Jobs already dispatched finish (so sizes stay exact),
+    /// but no new directories are dispatched until [`ScanControl::resume`].
+    pub fn pause(&self) {
+        self.paused.store(true, AtomicOrdering::SeqCst);
+    }
+
+    /// Resume a paused scan.
+    pub fn resume(&self) {
+        self.paused.store(false, AtomicOrdering::SeqCst);
+    }
+
+    /// Whether discovery is currently paused.
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(AtomicOrdering::SeqCst)
     }
 
     /// Move the scan's priority to `focus` for directories not yet queued.
@@ -133,6 +151,7 @@ impl ScanHandle {
     pub fn control(&self) -> ScanControl {
         ScanControl {
             cancel: Arc::clone(&self.cancel),
+            paused: Arc::clone(&self.paused),
             focus: Arc::clone(&self.focus),
             focus_generation: Arc::clone(&self.focus_generation),
         }
@@ -195,6 +214,7 @@ impl ScanEngine {
 
         let tree = Arc::new(Mutex::new(ScanTree::new(root_key, &request.root, config)));
         let cancel = Arc::new(AtomicBool::new(false));
+        let paused = Arc::new(AtomicBool::new(false));
         let focus = Arc::new(Mutex::new(request.focus.clone()));
         let focus_generation = Arc::new(AtomicU64::new(0));
         let finished = Arc::new(AtomicBool::new(false));
@@ -231,6 +251,7 @@ impl ScanEngine {
         // Coordinator: owns the queue, the tree, and the event stream.
         let tree_co = Arc::clone(&tree);
         let cancel_co = Arc::clone(&cancel);
+        let paused_co = Arc::clone(&paused);
         let focus_co = Arc::clone(&focus);
         let focus_generation_co = Arc::clone(&focus_generation);
         let finished_co = Arc::clone(&finished);
@@ -246,6 +267,7 @@ impl ScanEngine {
                     volume_used: request.volume_used_bytes,
                     tree: tree_co,
                     cancel: cancel_co,
+                    paused: paused_co,
                     focus: focus_co,
                     focus_generation: focus_generation_co,
                     dispatch_tx,
@@ -260,6 +282,7 @@ impl ScanEngine {
             events: event_rx,
             tree,
             cancel,
+            paused,
             focus,
             focus_generation,
             finished,
@@ -276,6 +299,7 @@ struct CoordinatorInputs {
     volume_used: Option<u64>,
     tree: Arc<Mutex<ScanTree>>,
     cancel: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     focus: Arc<Mutex<PathBuf>>,
     focus_generation: Arc<AtomicU64>,
     dispatch_tx: mpsc::Sender<DirJob>,
@@ -307,6 +331,7 @@ struct CoordinatorState {
     initial_focus: PathBuf,
     focus_processed: bool,
     cancelled: bool,
+    paused: bool,
     volume_used: Option<u64>,
     event_tx: mpsc::Sender<ScanEvent>,
     scan_id: ScanId,
@@ -322,6 +347,7 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         volume_used,
         tree,
         cancel,
+        paused,
         focus,
         focus_generation,
         dispatch_tx,
@@ -345,6 +371,7 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         initial_focus: focus_path.clone(),
         focus_processed: focus_path == root_path,
         cancelled: false,
+        paused: false,
         volume_used,
         event_tx,
         scan_id,
@@ -368,6 +395,7 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         &mut state,
         &tree,
         &cancel,
+        &paused,
         &focus,
         &focus_generation,
         &dispatch_tx,
@@ -406,6 +434,7 @@ fn coordinator_loop(
     state: &mut CoordinatorState,
     tree: &Arc<Mutex<ScanTree>>,
     cancel: &Arc<AtomicBool>,
+    paused: &Arc<AtomicBool>,
     focus: &Arc<Mutex<PathBuf>>,
     focus_generation: &Arc<AtomicU64>,
     dispatch_tx: &mpsc::Sender<DirJob>,
@@ -428,9 +457,18 @@ fn coordinator_loop(
             break;
         }
 
+        state.paused = paused.load(AtomicOrdering::SeqCst);
+
         // Dispatch work while workers are free. Until the focus directory is
         // listed, keep one job in flight so focus-first is deterministic.
-        let dispatch_limit = if state.focus_processed { workers } else { 1 };
+        // While paused, let in-flight jobs finish but dispatch nothing new.
+        let dispatch_limit = if state.paused {
+            0
+        } else if state.focus_processed {
+            workers
+        } else {
+            1
+        };
         while state.in_flight < dispatch_limit {
             let Some(job) = state.queue.pop() else { break };
             let dispatch = match job.queued.kind {
@@ -451,6 +489,16 @@ fn coordinator_loop(
         }
 
         if state.in_flight == 0 {
+            if state.paused {
+                // Paused with every in-flight job settled. Do not treat the
+                // idle state as completion: wait here, polling for resume or
+                // cancel, so an indefinitely paused scan never finishes.
+                while !cancel.load(AtomicOrdering::SeqCst) && paused.load(AtomicOrdering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                }
+                state.last_flush = Instant::now();
+                continue;
+            }
             // Queue empty and nothing in flight: every reachable directory was
             // walked.
             break;
@@ -1074,18 +1122,44 @@ mod tests {
     }
 
     #[test]
-    fn set_focus_repopulates_priority() {
-        // Focus-priority ordering is a pure function tested in priority.rs;
-        // this just verifies the handle wires it through without panicking.
-        let base = temp_tree("focus2");
+    fn pause_holds_completion_until_resume() {
+        // A broad tree (many leaf dirs) so a scan is still in flight when we
+        // pause immediately after `scan()` returns.
+        let tag = "pause";
+        let base = std::env::temp_dir().join(format!("sift-scan-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for i in 0..60 {
+            let dir = base.join(format!("d{i}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("f.bin"), vec![b'z'; 4000]).unwrap();
+        }
+
         let engine = ScanEngine::with_workers(2);
         let handle = engine
-            .scan(ScanRequest::new(ScanId(5), base.clone()))
+            .scan(ScanRequest::new(ScanId(6), base.clone()))
             .unwrap();
-        handle.set_focus(base.join("x"));
-        handle.cancel();
-        let _ = drain(&handle);
+        let control = handle.control();
+        control.pause();
+        assert!(control.is_paused());
+
+        // Give the in-flight jobs time to settle; the scan must NOT finish.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            !handle.finished.load(AtomicOrdering::SeqCst),
+            "a paused scan must never complete"
+        );
+
+        control.resume();
+        let events = drain(&handle);
         handle.join();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            ScanEvent::Finished {
+                outcome: ScanOutcome::Completed,
+                ..
+            }
+        )));
+
         let _ = std::fs::remove_dir_all(&base);
     }
 }

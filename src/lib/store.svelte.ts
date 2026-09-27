@@ -14,7 +14,9 @@ import {
   onMonitorEvent,
   onScanBatch,
   onScanDone,
+  pauseScan,
   routineSuggestions,
+  resumeScan,
   runRoutine,
   setAutoCleanMode,
   setScanFocus,
@@ -68,6 +70,7 @@ class AppStore {
   currentNodeId = $state<string | null>(null);
 
   scanning = $state(false);
+  scanPaused = $state(false);
   scannedFiles = $state(0);
   scannedDirs = $state(0);
 
@@ -273,7 +276,24 @@ class AppStore {
     if (!this.scanning) return;
     await cancelScan();
     this.scanning = false;
+    this.scanPaused = false;
     this.toast(t('toast.scanCancelled'));
+  }
+
+  /** Pause the running scan from the UI. */
+  async pauseCurrentScan() {
+    if (!this.scanning || this.scanPaused) return;
+    await pauseScan();
+    this.scanPaused = true;
+    this.toast(t('toast.scanPaused'));
+  }
+
+  /** Resume the paused scan. */
+  async resumeCurrentScan() {
+    if (!this.scanning || !this.scanPaused) return;
+    await resumeScan();
+    this.scanPaused = false;
+    this.toast(t('toast.scanResumed'));
   }
 
   private resetScanState() {
@@ -283,6 +303,7 @@ class AppStore {
     this.currentNodeId = null;
     this.selectedIds = new Set();
     this.scanning = true;
+    this.scanPaused = false;
     this.scannedFiles = 0;
     this.scannedDirs = 0;
     this.analysedScan = false;
@@ -423,6 +444,7 @@ class AppStore {
 
   private async handleScanDone(cancelled: boolean) {
     this.scanning = false;
+    this.scanPaused = false;
     if (cancelled) return;
     if (this.analysedScan) return;
     this.analysedScan = true;

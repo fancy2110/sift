@@ -184,6 +184,23 @@ pub fn cancel_scan(manager: State<'_, ScanManager>) {
     }
 }
 
+/// Pause the running scan. In-flight directory reads finish, then discovery
+/// stops until [`resume_scan`].
+#[tauri::command]
+pub fn pause_scan(manager: State<'_, ScanManager>) {
+    if let Some(control) = manager.control.lock().unwrap().as_ref() {
+        control.pause();
+    }
+}
+
+/// Resume a paused scan.
+#[tauri::command]
+pub fn resume_scan(manager: State<'_, ScanManager>) {
+    if let Some(control) = manager.control.lock().unwrap().as_ref() {
+        control.resume();
+    }
+}
+
 /// Whether a scan is currently running.
 #[tauri::command]
 pub fn scan_running(manager: State<'_, ScanManager>) -> bool {

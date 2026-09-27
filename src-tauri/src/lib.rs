@@ -17,7 +17,9 @@ mod watcher;
 use analyze::AppServices;
 use disks::list_volumes;
 use places::list_places;
-use scanner::{cancel_scan, scan_running, set_scan_focus, start_scan, ScanManager};
+use scanner::{
+    cancel_scan, pause_scan, resume_scan, scan_running, set_scan_focus, start_scan, ScanManager,
+};
 use tauri::Manager as _;
 use watcher::{unwatch_fs, watch_fs, FsWatcherState};
 
@@ -41,6 +43,8 @@ pub fn run() {
             list_places,
             start_scan,
             cancel_scan,
+            pause_scan,
+            resume_scan,
             set_scan_focus,
             scan_running,
             // deletion and filesystem awareness
