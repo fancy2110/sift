@@ -486,7 +486,6 @@
   .entry-row { transition: color 0.14s ease, background 0.16s ease, opacity 0.18s ease; }
   .entry-row.row-focus {
     background: color-mix(in oklch, var(--color-surface-2) 78%, transparent);
-    box-shadow: 0 1px 2px oklch(0% 0 0 / 0.22), 0 6px 16px -10px oklch(0% 0 0 / 0.5);
   }
   .entry-row.row-dim { opacity: 0.34; }
 
