@@ -25,64 +25,64 @@
     </linearGradient>
     <radialGradient id="glowViolet" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
       gradientTransform="translate(790 190) rotate(132) scale(560)">
-      <stop offset="0" stop-color="#7c5cf0" stop-opacity="0.40"/>
-      <stop offset="1" stop-color="#7c5cf0" stop-opacity="0"/>
+      <stop offset="0" stop-color="#7c5cf0" stop-opacity="0.34" />
+      <stop offset="1" stop-color="#7c5cf0" stop-opacity="0" />
     </radialGradient>
     <radialGradient id="glowBlue" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
       gradientTransform="translate(230 880) rotate(-52) scale(520)">
-      <stop offset="0" stop-color="#3b7be8" stop-opacity="0.26"/>
-      <stop offset="1" stop-color="#3b7be8" stop-opacity="0"/>
+      <stop offset="0" stop-color="#3b7be8" stop-opacity="0.22" />
+      <stop offset="1" stop-color="#3b7be8" stop-opacity="0" />
     </radialGradient>
 
-    <linearGradient id="gBlue" x1="152" y1="196" x2="496" y2="828" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#6f97f2"/>
-      <stop offset="1" stop-color="#3a63d0"/>
+    <linearGradient id="gBlue" x1="0" y1="0" x2="360" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6f97f2" />
+      <stop offset="1" stop-color="#3a63d0" />
     </linearGradient>
-    <linearGradient id="gViolet" x1="528" y1="196" x2="872" y2="472" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#b46ee0"/>
-      <stop offset="1" stop-color="#8344c4"/>
+    <linearGradient id="gViolet" x1="360" y1="0" x2="1024" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b46ee0" />
+      <stop offset="1" stop-color="#8344c4" />
     </linearGradient>
-    <linearGradient id="gTeal" x1="528" y1="508" x2="690" y2="828" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#58c3d4"/>
-      <stop offset="1" stop-color="#2a93ac"/>
+    <linearGradient id="gTeal" x1="360" y1="300" x2="692" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#58c3d4" />
+      <stop offset="1" stop-color="#2a93ac" />
     </linearGradient>
-    <linearGradient id="gIndigo" x1="712" y1="508" x2="872" y2="828" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#9a82f0"/>
-      <stop offset="1" stop-color="#6550d6"/>
+    <linearGradient id="gIndigo" x1="692" y1="300" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9a82f0" />
+      <stop offset="1" stop-color="#6550d6" />
     </linearGradient>
 
-    <linearGradient id="sheen" x1="512" y1="6" x2="512" y2="520" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
-      <stop offset="0.4" stop-color="#ffffff" stop-opacity="0.03"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    <linearGradient id="sheen" x1="512" y1="0" x2="512" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.12" />
+      <stop offset="0.4" stop-color="#ffffff" stop-opacity="0.025" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
     </linearGradient>
   </defs>
 
   <g clip-path="url(#iconClip)">
-    <rect width="1024" height="1024" fill="url(#bgGrad)"/>
-    <rect width="1024" height="1024" fill="url(#glowViolet)"/>
-    <rect width="1024" height="1024" fill="url(#glowBlue)"/>
+    <rect width="1024" height="1024" fill="url(#bgGrad)" />
+    <rect width="1024" height="1024" fill="url(#glowViolet)" />
+    <rect width="1024" height="1024" fill="url(#glowBlue)" />
 
-    <!-- Treemap blocks: area-proportional, 16px gaps, 28px corners -->
-    <rect x="152" y="196" width="344" height="632" rx="28" fill="url(#gBlue)"/>
-    <rect x="528" y="196" width="344" height="276" rx="28" fill="url(#gViolet)"/>
-    <rect x="528" y="508" width="162" height="320" rx="28" fill="url(#gTeal)"/>
-    <rect x="710" y="508" width="162" height="320" rx="28" fill="url(#gIndigo)"/>
+    <!-- Treemap blocks: edge to edge, no gaps, no padding -->
+    <rect x="0" y="0" width="360" height="1024" fill="url(#gBlue)" />
+    <rect x="360" y="0" width="664" height="300" fill="url(#gViolet)" />
+    <rect x="360" y="300" width="332" height="724" fill="url(#gTeal)" />
+    <rect x="692" y="300" width="332" height="724" fill="url(#gIndigo)" />
 
     <!-- AI sparkle on the main block -->
-    <path d="M324 440
-      C330 486 350 506 396 512
-      C350 518 330 538 324 584
-      C318 538 298 518 252 512
-      C298 506 318 486 324 440 Z"
-      fill="#ffffff" fill-opacity="0.92"/>
+    <path d="M180 440
+      C186 486 206 506 252 512
+      C206 518 186 538 180 584
+      C174 538 154 518 108 512
+      C154 506 174 486 180 440 Z"
+      fill="#ffffff" fill-opacity="0.92" />
 
     <!-- top sheen across the whole icon -->
-    <rect width="1024" height="1024" fill="url(#sheen)"/>
+    <rect width="1024" height="1024" fill="url(#sheen)" />
   </g>
 
   <!-- crisp edge: hairline inner stroke following the squircle -->
-  <use href="#squircle" stroke="#ffffff" stroke-opacity="0.10" stroke-width="2"/>
+  <use href="#squircle" stroke="#ffffff" stroke-opacity="0.10" stroke-width="2" />
 </svg>
 </body>
 </html>
