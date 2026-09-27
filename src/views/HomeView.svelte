@@ -9,17 +9,39 @@
 
   let reviewRequested = $state(false);
 
-  // Measure the total label so the dashed ring always wraps it with padding.
-  let totalEl = $state<HTMLElement>();
-  let totalW = $state(0);
+  // Measure the whole text stack so the dashed ring wraps everything (eyebrow,
+  // number, state, button) with generous padding — adapting to the real content.
+  let stackEl = $state<HTMLElement>();
+  let centerEl = $state<HTMLElement>();
+  let stackW = $state(280);
+  let stackH = $state(260);
+  let centerH = $state(560);
   $effect(() => {
-    const el = totalEl;
-    if (!el) return;
-    const ro = new ResizeObserver(() => (totalW = el.offsetWidth));
-    ro.observe(el);
-    totalW = el.offsetWidth;
+    const stack = stackEl;
+    const center = centerEl;
+    if (!stack || !center) return;
+    const measure = () => {
+      stackW = stack.offsetWidth;
+      stackH = stack.offsetHeight;
+      centerH = center.clientHeight;
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(stack);
+    ro.observe(center);
+    measure();
     return () => ro.disconnect();
   });
+
+  // The dashed circle renders at 80% of the stage width (r=80 in a 200 box),
+  // so divide the required inner diameter by 0.8. Cap to the stage height so
+  // the ring never spills into the entry cards.
+  const RING_PAD = 88;
+  let ringW = $derived(
+    Math.min(
+      Math.max(300, (Math.max(stackW, stackH) + RING_PAD * 2) / 0.8),
+      Math.max(300, centerH - 8)
+    )
+  );
 
   // Once a review-triggered scan finishes and produces findings, enter smart.
   $effect(() => {
@@ -66,13 +88,13 @@
   </div>
 
   <!-- center stage -->
-  <div class="hub-center">
+  <div class="hub-center" bind:this={centerEl}>
     <div
       class="ring-stage"
       class:scanning={store.scanning}
       class:paused={store.scanPaused}
       in:fade={{ duration: 640, delay: 120 }}
-      style:width={`${Math.min(560, Math.max(320, (totalW + 56) / 0.8))}px`}
+      style:width={`${ringW}px`}
       aria-hidden="true"
     >
       {#if store.scanning}
@@ -130,6 +152,7 @@
       <span class="ring-glow"></span>
     </div>
 
+    <div class="hub-stack" bind:this={stackEl}>
     <p class="hub-eyebrow" in:fade={{ duration: 480, delay: 120 }}>
       {store.scanPaused
         ? t('home.paused')
@@ -142,7 +165,7 @@
         {store.scannedFiles.toLocaleString()}<span class="hub-pct">{t('home.itemsUnit')}</span>
       </h1>
     {:else}
-      <h1 class="hub-total num" bind:this={totalEl} in:fly={{ y: 16, duration: 620, delay: 180, easing: cubicOut }}>
+      <h1 class="hub-total num" in:fly={{ y: 16, duration: 620, delay: 180, easing: cubicOut }}>
         {formatSize(store.totalReclaimable)}
       </h1>
     {/if}
@@ -178,6 +201,7 @@
         <Icon name="arrowRight" size={15} />
       {/if}
     </button>
+    </div>
   </div>
 
   <!-- entry cards -->
@@ -293,7 +317,7 @@
     position: absolute;
     top: 50%;
     left: 50%;
-    width: clamp(320px, 32vw, 440px);
+    /* Width is set inline from the measured label width. */
     aspect-ratio: 1;
     transform: translate(-50%, -50%);
     pointer-events: none;
@@ -417,6 +441,11 @@
   .hub-center > :not(.ring-stage) {
     position: relative;
     z-index: 1;
+  }
+  .hub-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
   }
   .hub-eyebrow {
     margin: 0 0 14px;
