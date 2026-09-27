@@ -35,8 +35,7 @@ fn main() {
             }
             "--lean" => {
                 // Directories only, no hardlink table: the cheapest mode.
-                policy = ScanPolicy::thorough()
-                    .with_file_detail(u64::MAX);
+                policy = ScanPolicy::thorough().with_file_detail(u64::MAX);
                 policy.dedupe_hardlinks = false;
             }
             other => root = Some(PathBuf::from(other)),
@@ -44,15 +43,10 @@ fn main() {
     }
 
     let root = root.unwrap_or_else(|| PathBuf::from("/"));
-    let root = root
-        .canonicalize()
-        .unwrap_or_else(|_| root.clone());
+    let root = root.canonicalize().unwrap_or_else(|_| root.clone());
 
     println!("root      : {}", root.display());
-    println!(
-        "reader    : {}",
-        describe_reader(&root)
-    );
+    println!("reader    : {}", describe_reader(&root));
 
     let engine = if workers > 0 {
         ScanEngine::with_workers(workers)
@@ -125,7 +119,16 @@ fn main() {
     sampler.join().ok();
 
     let progress = last_progress.unwrap_or_default();
-    let (nodes, unrecorded, resident, node_bytes, interner_bytes, hardlink_bytes, hardlinks, table_full) = {
+    let (
+        nodes,
+        unrecorded,
+        resident,
+        node_bytes,
+        interner_bytes,
+        hardlink_bytes,
+        hardlinks,
+        table_full,
+    ) = {
         let guard = handle.tree.lock().unwrap();
         let stats = guard.stats();
         (
@@ -149,10 +152,7 @@ fn main() {
         "bytes     : {} logical",
         format_bytes(progress.bytes.logical)
     );
-    println!(
-        "time      : {:.3} s",
-        elapsed.as_secs_f64()
-    );
+    println!("time      : {:.3} s", elapsed.as_secs_f64());
     println!(
         "throughput: {:.0} entries/s, {:.0} files/s, {:.1} MB/s (by files)",
         progress.entries_per_sec(),
@@ -177,9 +177,7 @@ fn main() {
         println!("budget    : {unrecorded} directories counted but not recorded");
     }
     if hardlinks > 0 || table_full {
-        println!(
-            "hardlinks : {hardlinks} considered, table full = {table_full}"
-        );
+        println!("hardlinks : {hardlinks} considered, table full = {table_full}");
     }
 
     // Extrapolate honestly to the 2 TB target using the measured file rate.
@@ -190,7 +188,10 @@ fn main() {
         secs_for_2m_files
     );
     if progress.coverage > 0.0 {
-        println!("coverage  : {:.1}% of the volume's used bytes", progress.coverage * 100.0);
+        println!(
+            "coverage  : {:.1}% of the volume's used bytes",
+            progress.coverage * 100.0
+        );
     }
 }
 

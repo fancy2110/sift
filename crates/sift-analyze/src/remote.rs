@@ -19,9 +19,7 @@
 
 use std::time::Duration;
 
-use crate::adjudicate::{
-    apply_remote_verdicts, parse_raw_verdicts, AdjudicateError, Guardrails,
-};
+use crate::adjudicate::{apply_remote_verdicts, parse_raw_verdicts, AdjudicateError, Guardrails};
 use crate::candidate::Candidate;
 use crate::reason::Verdict;
 use crate::route::RemoteAdjudicator;
@@ -145,7 +143,11 @@ It is shown verbatim in the interface.\n\
         .map(|candidate| PromptCandidate {
             id: candidate.key.to_string(),
             path: candidate.display_path.as_str(),
-            entry_type: if candidate.is_dir { "directory" } else { "file" },
+            entry_type: if candidate.is_dir {
+                "directory"
+            } else {
+                "file"
+            },
             size_bytes: candidate.size.dominant(),
             age_days: crate::rules::age_days(candidate.mtime_ms, now_ms),
             family: candidate.kind.token(),
@@ -351,10 +353,7 @@ mod tests {
 
         // The privacy property: no absolute path, no user name, no home dir.
         for leak in ["/Users/", "realuser", "秘密", "/Users/realuser"] {
-            assert!(
-                !user.contains(leak),
-                "payload leaked {leak:?}: {user}"
-            );
+            assert!(!user.contains(leak), "payload leaked {leak:?}: {user}");
             assert!(!system.contains(leak));
         }
     }
@@ -362,11 +361,26 @@ mod tests {
     #[test]
     fn prompt_payload_is_valid_json_with_the_expected_fields() {
         let batch = vec![
-            candidate(CandidateKind::Archive { extension: "zip".into() }, "file.archive", "~/a.zip", 10),
-            candidate(CandidateKind::StaleLargeFile, "file.stale_large", "~/b.iso", 20),
+            candidate(
+                CandidateKind::Archive {
+                    extension: "zip".into(),
+                },
+                "file.archive",
+                "~/a.zip",
+                10,
+            ),
+            candidate(
+                CandidateKind::StaleLargeFile,
+                "file.stale_large",
+                "~/b.iso",
+                20,
+            ),
         ];
         let (_, user) = build_prompt_at(&batch, "en", 86_400_000 * 30);
-        let json = user.split_once('\n').map(|(_, rest)| rest).unwrap_or(user.as_str());
+        let json = user
+            .split_once('\n')
+            .map(|(_, rest)| rest)
+            .unwrap_or(user.as_str());
         let parsed: Vec<serde_json::Value> = serde_json::from_str(json.trim()).expect("valid JSON");
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0]["entry_type"], "file");

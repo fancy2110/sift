@@ -36,12 +36,8 @@ pub use adjudicate::{
     Guardrails, RawVerdict, RuleAdjudicator, VerdictCache,
 };
 pub use analyzer::{AnalysisPolicy, AnalysisStage, Analyzer};
-pub use candidate::{
-    redact_path, Candidate, CandidateKind, Evidence, Nomination,
-};
-pub use habits::{
-    Decision, DecisionLog, DecisionOutcome, RoutineSuggestion, SuggestionReason,
-};
+pub use candidate::{redact_path, Candidate, CandidateKind, Evidence, Nomination};
+pub use habits::{Decision, DecisionLog, DecisionOutcome, RoutineSuggestion, SuggestionReason};
 pub use reason::{
     clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource,
 };

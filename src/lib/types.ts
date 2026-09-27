@@ -1,5 +1,4 @@
 export type Risk = 'safe' | 'review' | 'keep';
-export type AutoMode = 'approve' | 'auto';
 
 /** A live filesystem node streamed in by the backend scanner. */
 export interface Node {
@@ -13,38 +12,95 @@ export interface Node {
   deletable: boolean;
   /** Directory whose subtree scan hasn't finished. */
   pending: boolean;
+  ext?: string;
 
   // ---- client-assembled fields ----
-  /** Direct children, attached as they stream in. */
   children?: Node[];
-  /** Aggregated AI finding this node belongs to. */
+  /** AI finding id this node belongs to. */
   insightId?: string;
   risk?: Risk;
-  note?: string;
-  ext?: string;
 }
 
+/** One analyzed candidate, exactly the backend FindingDto shape. */
 export interface Finding {
   id: string;
-  title: string;
-  /** One-line AI conclusion: why this is here and what happens on clean. */
-  reason: string;
-  size: number;
+  name: string;
   path: string;
-  risk: Risk;
-  confidence: number; // 0..1
-  /** learned from the user's repeated decisions */
-  learned?: boolean;
-  /** added ad-hoc by the user via the context menu */
-  manual?: boolean;
+  displayPath: string;
+  size: number;
+  isDir: boolean;
+  safety: Risk;
+  confidence: number;
+  reason: string;
+  reasonKind: 'key' | 'text';
+  reasonParams: string[];
+  source: string;
+  kind: string;
+  knownCleanable: boolean;
+  approvedForAuto: boolean;
 }
 
+export interface AnalysisSummary {
+  findings: Finding[];
+  reclaimableBytes: number;
+  safeBytes: number;
+  knownCleanableBytes: number;
+  sourceCounts: Record<string, number>;
+  usedRemote: boolean;
+  remoteNeedsConsent: boolean;
+}
+
+export interface RoutineSuggestion {
+  name: string;
+  kind: string;
+  occurrences: number;
+  distinctDays: number;
+  averageBytes: number;
+  totalBytes: number;
+  destructive: boolean;
+  reason: string;
+  cadence: string;
+}
+
+/** One quick scan location on the user's own volume. */
+export interface Place {
+  id: string;
+  labelKey: string;
+  icon: string;
+  path: string;
+  volumeId: string;
+}
+
+/** One finished cleanup session from the backend timeline. */
+export interface HistoryEntry {
+  id: string;
+  atMs: number;
+  bytes: number;
+  items: number;
+  automatic: boolean;
+  titles: string[];
+}
+
+/** One saved routine. */
 export interface Routine {
   id: string;
   title: string;
+  kind: string;
   cadence: string;
-  avgSize: number;
-  autoMode: AutoMode;
+  averageBytes: number;
+  mode: 'auto' | 'approve';
+}
+
+export interface MonitorStatus {
+  running: boolean;
+  enabled: boolean;
+  autoMode: 'off' | 'notify' | 'auto';
+  cleanableItems: number;
+  autoEligibleItems: number;
+  autoEligibleBytes: number;
+  lastLevel: string;
+  lastAvailableBytes: number;
+  lastTotalBytes: number;
 }
 
 export interface VolumeInfo {
@@ -56,3 +112,16 @@ export interface VolumeInfo {
   isRemovable: boolean;
   fileSystem: string;
 }
+
+/** A load problem reported by the local store. */
+export interface StoreWarning {
+  key: string;
+  what: string;
+  reason: ResetReason;
+  backup: string | null;
+}
+
+export type ResetReason =
+  | { kind: 'io'; message: string }
+  | { kind: 'jsonParse'; message: string }
+  | { kind: 'schemaMismatch'; found: number; expected: number };

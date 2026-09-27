@@ -117,7 +117,13 @@ impl Reason {
     pub fn sanitized_text(text: &str) -> Option<Reason> {
         let cleaned: String = text
             .chars()
-            .map(|ch| if ch == '\n' || ch == '\r' || ch == '\t' { ' ' } else { ch })
+            .map(|ch| {
+                if ch == '\n' || ch == '\r' || ch == '\t' {
+                    ' '
+                } else {
+                    ch
+                }
+            })
             .collect();
         let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
         let trimmed = collapsed.trim();
@@ -170,10 +176,7 @@ impl VerdictSource {
 
     /// Whether this conclusion came from the user (explicitly or by habit).
     pub fn is_user_derived(&self) -> bool {
-        matches!(
-            self,
-            VerdictSource::UserDecision | VerdictSource::Learned
-        )
+        matches!(self, VerdictSource::UserDecision | VerdictSource::Learned)
     }
 
     pub fn label(&self) -> String {
@@ -235,8 +238,7 @@ impl Verdict {
 
     /// Whether an unattended cleanup may act on this verdict under `policy`.
     pub fn is_automatically_removable(&self, policy: &ConfidencePolicy) -> bool {
-        self.safety.is_automatic()
-            && self.confidence >= policy.minimum_for_source(&self.source)
+        self.safety.is_automatic() && self.confidence >= policy.minimum_for_source(&self.source)
     }
 }
 
@@ -445,8 +447,14 @@ mod tests {
     fn fingerprint_requires_every_field_to_match() {
         let base = fingerprint(100, 1000);
         assert!(base.still_describes(&fingerprint(100, 1000)));
-        assert!(!base.still_describes(&fingerprint(101, 1000)), "size changed");
-        assert!(!base.still_describes(&fingerprint(100, 1001)), "mtime changed");
+        assert!(
+            !base.still_describes(&fingerprint(101, 1000)),
+            "size changed"
+        );
+        assert!(
+            !base.still_describes(&fingerprint(100, 1001)),
+            "mtime changed"
+        );
         let as_file = PathFingerprint::new(NodeKey::from_bytes(b"/x"), 100, 1000, false);
         assert!(!base.still_describes(&as_file), "kind changed");
     }

@@ -289,9 +289,7 @@ mod tests {
 
     #[test]
     fn rebuildable_caches_are_not_sent_to_a_model() {
-        let node_modules = CandidateKind::RebuildableCache {
-            tool: "npm".into(),
-        };
+        let node_modules = CandidateKind::RebuildableCache { tool: "npm".into() };
         assert!(!node_modules.is_model_adjudicable());
         assert!(!node_modules.model_may_authorize_safe());
         let stale = CandidateKind::StaleLargeFile;
@@ -365,9 +363,7 @@ mod tests {
                 copies: 2,
             },
             CandidateKind::Trash,
-            CandidateKind::Log {
-                family: "x".into(),
-            },
+            CandidateKind::Log { family: "x".into() },
             CandidateKind::TempFile,
             CandidateKind::UserMarked,
         ];

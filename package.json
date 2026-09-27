@@ -12,16 +12,16 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-autostart": "^2",
-    "@tauri-apps/plugin-dialog": "^2",
-    "@tauri-apps/plugin-notification": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/api": "3.0.0-alpha.2",
+    "@tauri-apps/plugin-autostart": "3.0.0-alpha.1",
+    "@tauri-apps/plugin-dialog": "3.0.0-alpha.1",
+    "@tauri-apps/plugin-notification": "3.0.0-alpha.1",
+    "@tauri-apps/plugin-opener": "3.0.0-alpha.1"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tailwindcss/vite": "^4.0.6",
-    "@tauri-apps/cli": "^2",
+    "@tauri-apps/cli": "3.0.0-alpha.3",
     "@types/node": "^26.6.2",
     "svelte": "^5.20.4",
     "svelte-check": "^4.1.4",

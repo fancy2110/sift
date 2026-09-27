@@ -183,7 +183,9 @@ pub(crate) fn allocated_bytes(meta: &fs::Metadata) -> u64 {
 #[cfg(unix)]
 pub(crate) fn modified_ms(meta: &fs::Metadata) -> i64 {
     use std::os::unix::fs::MetadataExt;
-    meta.mtime().saturating_mul(1000).saturating_add(meta.mtime_nsec() / 1_000_000)
+    meta.mtime()
+        .saturating_mul(1000)
+        .saturating_add(meta.mtime_nsec() / 1_000_000)
 }
 
 #[cfg(windows)]
@@ -261,9 +263,9 @@ mod macos {
 
     // --- attribute bits (from <sys/attr.h>; libc exposes these as constants) ---
     use libc::{
-        attrlist, ATTR_CMN_DEVID, ATTR_CMN_FILEID, ATTR_CMN_MODTIME, ATTR_CMN_NAME,
-        ATTR_CMN_OBJTYPE, ATTR_CMN_RETURNED_ATTRS, ATTR_FILE_DATAALLOCSIZE, ATTR_FILE_DATALENGTH,
-        ATTR_FILE_LINKCOUNT, ATTR_BIT_MAP_COUNT,
+        attrlist, ATTR_BIT_MAP_COUNT, ATTR_CMN_DEVID, ATTR_CMN_FILEID, ATTR_CMN_MODTIME,
+        ATTR_CMN_NAME, ATTR_CMN_OBJTYPE, ATTR_CMN_RETURNED_ATTRS, ATTR_FILE_DATAALLOCSIZE,
+        ATTR_FILE_DATALENGTH, ATTR_FILE_LINKCOUNT,
     };
 
     /// Values of `enum vtype` from `<sys/vnode.h>`:
@@ -380,7 +382,9 @@ mod macos {
 
             let count = ret as usize;
             let bytes = &backing[..backing.len()];
-            let buf = unsafe { std::slice::from_raw_parts(backing.as_ptr() as *const u8, backing.len() * 8) };
+            let buf = unsafe {
+                std::slice::from_raw_parts(backing.as_ptr() as *const u8, backing.len() * 8)
+            };
 
             let mut cursor = 0usize;
             for _ in 0..count {
@@ -438,8 +442,7 @@ mod macos {
 
         let group_len = cursor
             .u32()
-            .ok_or(BulkError::Fallback("truncated group length"))?
-            as usize;
+            .ok_or(BulkError::Fallback("truncated group length"))? as usize;
         let group_start = pos;
         let group_end = group_start
             .checked_add(group_len)
@@ -489,13 +492,9 @@ mod macos {
                         let raw = raw.strip_suffix(&[0]).unwrap_or(raw);
                         name = Some(raw.to_vec());
                     }
-                    ATTR_CMN_DEVID => {
-                        dev = cursor.u32().ok_or(BulkError::Fallback("dev"))? as u64
-                    }
+                    ATTR_CMN_DEVID => dev = cursor.u32().ok_or(BulkError::Fallback("dev"))? as u64,
                     ATTR_CMN_OBJTYPE => {
-                        obj_type = cursor
-                            .u32()
-                            .ok_or(BulkError::Fallback("objtype"))?
+                        obj_type = cursor.u32().ok_or(BulkError::Fallback("objtype"))?
                     }
                     ATTR_CMN_MODTIME => {
                         let secs = cursor
@@ -509,9 +508,7 @@ mod macos {
                             .saturating_add((nsecs as i64) / 1_000_000);
                     }
                     ATTR_CMN_FILEID => {
-                        file_id = cursor
-                            .u64()
-                            .ok_or(BulkError::Fallback("file id"))?
+                        file_id = cursor.u64().ok_or(BulkError::Fallback("file id"))?
                     }
                     _ => {
                         // Unknown returned bit: skip a conservative fixed size.
@@ -533,20 +530,18 @@ mod macos {
                 let attr = 1u32 << file_bit;
                 match attr {
                     ATTR_FILE_DATALENGTH => {
-                        logical_size = cursor
-                            .u64()
-                            .ok_or(BulkError::Fallback("datalength"))?
+                        logical_size = cursor.u64().ok_or(BulkError::Fallback("datalength"))?
                     }
                     ATTR_FILE_DATAALLOCSIZE => {
-                        physical_size = cursor
-                            .u64()
-                            .ok_or(BulkError::Fallback("allocsize"))?
+                        physical_size = cursor.u64().ok_or(BulkError::Fallback("allocsize"))?
                     }
                     ATTR_FILE_LINKCOUNT => {
                         nlink = cursor.u32().ok_or(BulkError::Fallback("linkcount"))?
                     }
                     _ => {
-                        cursor.skip(8).ok_or(BulkError::Fallback("unknown file attr"))?;
+                        cursor
+                            .skip(8)
+                            .ok_or(BulkError::Fallback("unknown file attr"))?;
                     }
                 }
             }
@@ -585,7 +580,6 @@ mod macos {
             Some(u64::from_le_bytes(bytes.try_into().unwrap()))
         }
     }
-
 }
 
 #[cfg(test)]
@@ -628,7 +622,10 @@ mod tests {
         for (name, fast_entry) in &fast_map {
             let port = &portable_map[name];
             assert_eq!(fast_entry.is_dir, port.is_dir, "{name:?} is_dir");
-            assert_eq!(fast_entry.is_symlink, port.is_symlink, "{name:?} is_symlink");
+            assert_eq!(
+                fast_entry.is_symlink, port.is_symlink,
+                "{name:?} is_symlink"
+            );
             // A directory's st_size is filesystem-defined and meaningless (the
             // engine never aggregates it); only files must agree on bytes.
             if !fast_entry.is_dir {
@@ -732,10 +729,7 @@ mod tests {
             nlink: 1,
         };
         assert!(e.file_id().is_none(), "ino 0 must not dedupe");
-        let e2 = RawEntry {
-            ino: 42,
-            ..e
-        };
+        let e2 = RawEntry { ino: 42, ..e };
         assert_eq!(e2.file_id(), Some(FileId::new(1, 42)));
         assert_eq!(e2.size().logical, 10);
         assert_eq!(e2.size().physical, 4096);

@@ -63,10 +63,9 @@ pub fn is_protected_location(path: &Path) -> bool {
     #[cfg(unix)]
     {
         let text = path.to_string_lossy();
-        REFUSED_PREFIXES_UNIX.iter().any(|prefix| {
-            text == *prefix
-                || text.starts_with(&format!("{prefix}/"))
-        })
+        REFUSED_PREFIXES_UNIX
+            .iter()
+            .any(|prefix| text == *prefix || text.starts_with(&format!("{prefix}/")))
     }
     #[cfg(windows)]
     {
@@ -96,8 +95,16 @@ pub fn is_traversal(path: &Path) -> bool {
 
 /// Bundle and OS-container suffixes.
 const BUNDLE_SUFFIXES: [&str; 10] = [
-    ".app", ".framework", ".kext", ".bundle", ".xpc", ".appex", ".plugin", ".prefpane",
-    ".mdimporter", ".qlgenerator",
+    ".app",
+    ".framework",
+    ".kext",
+    ".bundle",
+    ".xpc",
+    ".appex",
+    ".plugin",
+    ".prefpane",
+    ".mdimporter",
+    ".qlgenerator",
 ];
 
 /// Whether the entry itself is an application bundle or OS-owned container that a
@@ -255,8 +262,14 @@ mod tests {
         // A mount point under /Volumes is a volume root; its contents are not.
         #[cfg(target_os = "macos")]
         {
-            assert_eq!(classify(Path::new("/Volumes/Backup")), Deletable::VolumeRoot);
-            assert_eq!(classify(Path::new("/Volumes")), Deletable::ProtectedLocation);
+            assert_eq!(
+                classify(Path::new("/Volumes/Backup")),
+                Deletable::VolumeRoot
+            );
+            assert_eq!(
+                classify(Path::new("/Volumes")),
+                Deletable::ProtectedLocation
+            );
             assert!(classify(Path::new("/Volumes/Backup/Users/me")).is_yes());
         }
     }
@@ -314,12 +327,12 @@ mod tests {
     #[test]
     fn bundle_membership_is_checked_through_the_whole_path() {
         assert!(inside_bundle(Path::new("/Applications/ChatGPT.app")));
-        assert!(inside_bundle(
-            Path::new("/Applications/ChatGPT.app/Contents/Resources/node_modules")
-        ));
-        assert!(inside_bundle(
-            Path::new("/System/Library/Frameworks/AppKit.framework/Versions/A")
-        ));
+        assert!(inside_bundle(Path::new(
+            "/Applications/ChatGPT.app/Contents/Resources/node_modules"
+        )));
+        assert!(inside_bundle(Path::new(
+            "/System/Library/Frameworks/AppKit.framework/Versions/A"
+        )));
         // A directory merely named like one is not inside a bundle.
         assert!(!inside_bundle(Path::new("/Users/me/project/node_modules")));
         assert!(!inside_bundle(Path::new("/Users/me/apples")));
@@ -334,10 +347,7 @@ mod tests {
         assert!(is_traversal(Path::new("../../etc/passwd")));
         assert!(is_traversal(Path::new("./relative")));
         assert!(!is_traversal(Path::new("/Users/me/file")));
-        assert_eq!(
-            classify(Path::new("../escape")),
-            Deletable::UnresolvedPath
-        );
+        assert_eq!(classify(Path::new("../escape")), Deletable::UnresolvedPath);
     }
 
     #[test]

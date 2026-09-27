@@ -1,0 +1,592 @@
+import { getLanguage, setLanguage as persistLanguage } from './ipc';
+import type { StoreWarning } from './types';
+
+export type Locale = 'zh' | 'en';
+
+const zh: Record<string, string> = {
+  'common.app': '应用',
+  'common.close': '关闭',
+  'common.disk': '磁盘',
+
+  'titlebar.auto': '自动整理',
+  'titlebar.scan': '磁盘扫描',
+  'titlebar.smartScan': '智能扫描',
+  'titlebar.cancelScan': '取消扫描',
+
+  'location.available': '{0} 可用',
+  'location.disks': '磁盘',
+  'location.used': '{0}% 已使用 · {1}',
+
+  'list.panel': '文件列表',
+  'list.title': '文件与文件夹',
+  'list.removedFromQueue': '已将「{0}」移出删除队列',
+  'list.folderEmpty': '此文件夹没有可整理的内容',
+  'list.protected': 'AI 已保护，不可删除',
+
+  'ctx.add': '添加到删除队列',
+  'ctx.remove': '从删除队列移除',
+  'ctx.noPermission': '无权限',
+
+  'detail.title': '清理候选',
+  'detail.panel': '详情面板',
+  'detail.candidates': '清理候选',
+  'detail.routines': '例行任务',
+  'detail.fromHabit': '来自习惯',
+  'detail.empty': '没有待处理内容',
+  'detail.trashHint': '移入回收站，可恢复',
+  'detail.cleaning': '清理中',
+  'detail.clean': '清理 {0}',
+
+  'routines.intro': 'AI 记录你每次扫描后的选择，重复的整理决策会沉淀为例行任务；自动整理{0}。',
+  'routines.stateOn': '已开启',
+  'routines.stateOff': '关闭中、仅提醒',
+  'routines.weekly': '建议每周执行',
+  'routines.monthly': '建议每月执行',
+  'routines.cadence': '· {0} 天内 {1} 次决策',
+  'routines.runTitle': '立即清理同类安全项',
+  'routines.runAria': '清理{0}',
+  'routines.ignoreTitle': '忽略此建议',
+  'routines.ignoreAria': '忽略{0}',
+  'routines.empty1': '暂无疑似例行任务',
+  'routines.empty2': '重复的整理决策会在这里自动沉淀',
+
+  'summary.safeRelease': '可安全释放 ',
+  'summary.reviewPre': ' · ',
+  'summary.reviewPost': ' 建议确认',
+  'summary.keepPre': ' · ',
+  'summary.keepPost': ' 已保护',
+  'summary.released': '已释放 ',
+  'summary.queue': '{0} 项 · {1}',
+
+  'treemap.aria': '磁盘空间方块面积图',
+  'treemap.otherN': '其他 {0} 项',
+  'treemap.otherNItems': '其他 · {0} 项',
+  'treemap.otherAria': '其他 {0} 项，共 {1}，查看明细',
+  'treemap.ariaFinding': '{0}, {1}, {2}',
+  'treemap.ariaFolder': '，双击进入文件夹',
+  'treemap.ariaDrill': '{0}, {1}, 下钻',
+  'treemap.chosen': '已选，点击移出',
+  'treemap.clickClean': '点击加入清理',
+  'treemap.clickDetail': '点击查看明细',
+  'treemap.safe': '可安全清理',
+  'treemap.review': '建议人工确认',
+  'treemap.addToList': '添加到删除列表',
+  'treemap.closeOther': '关闭其他明细',
+  'treemap.otherDetail': '其他文件明细',
+  'treemap.otherBytes': '共 {0} · 小于方块最小显示尺寸，已聚合',
+  'treemap.filterPlaceholder': '筛选文件…',
+  'treemap.noMatch': '没有匹配「{0}」的项目',
+
+  'kind.rebuildableCache': '依赖与构建缓存',
+  'kind.cacheDirectory': '应用缓存',
+  'kind.packageInstaller': '安装镜像',
+  'kind.archive': '压缩归档',
+  'kind.staleLargeFile': '久未改动的大文件',
+  'kind.duplicateGroup': '疑似重复文件',
+  'kind.trash': '回收站',
+  'kind.log': '日志文件',
+  'kind.tempFile': '临时文件',
+  'kind.userMarked': '手动加入',
+
+  'reason.rebuildableCache': '可由 {0} 工具链重新生成，删除不影响源代码。',
+  'reason.cacheDirectory': '{0} 运行时缓存，下次使用会自动重建。',
+  'reason.packageInstaller': '{0} 安装镜像，对应软件通常已安装。',
+  'reason.archive': '{0} 压缩归档，确认已解压或不再需要后可删。',
+  'reason.staleLargeFile': '已 {0} 天没有改动的大文件，确认无用后可清理。',
+  'reason.duplicate': '存在同名且同大小的副本，可保留一份。',
+  'reason.insideBundle': '位于已安装应用包内部，删除会损坏该应用，不建议清理。',
+  'reason.log': '{0} 日志文件，仅用于排查问题，可安全删除。',
+  'reason.trash': '回收站中的内容，清空是其常规用途。',
+  'reason.tempFile': '系统自动生成的临时文件，删除无影响。',
+  'reason.userMarked': '你手动加入的项目，将移入回收站，可恢复。',
+  'reason.unjudged': '暂未得出可靠结论，需要你人工判断。',
+
+  'toast.noKindSafe': '当前没有可清理的同类安全项',
+  'toast.analyzeFailed': '分析失败：{0}',
+  'toast.scanStartFailed': '扫描启动失败：{0}',
+  'toast.scanCancelled': '已取消扫描',
+  'toast.deleteFailed': '删除失败：{0}',
+  'toast.cannotDelete': '无法删除「{0}」：{1}',
+  'toast.autoCleanDone': '自动整理完成，释放 {0}（文件在回收站，可恢复）',
+  'toast.cleanDone': '已释放 {0}（文件在回收站，可恢复）',
+  'toast.noDeletePermission': '你没有删除「{0}」的权限',
+  'toast.addedToQueue': '已将「{0}」加入删除队列',
+  'toast.cannotAdd': '无法加入「{0}」：{1}',
+  'toast.autoOn': '自动整理已开启，仅清理你确认过的安全项',
+  'toast.autoOff': '自动整理已关闭，仅保留提醒',
+  'toast.settingsFailed': '设置失败：{0}',
+  'toast.lowSpace': '磁盘空间偏低，建议查看清理建议',
+  'toast.confirmationNeeded': '有大批可清理项，需要你确认后执行',
+
+  'err.noScanYet': '还没有可分析的扫描结果',
+  'err.invalidNodeId': '无效的节点 id',
+  'err.deleteNotConfirmed': '未经过分析确认，拒绝删除',
+  'err.keepRefused': '判定应保留，拒绝删除',
+  'err.noDiskSelected': '请先选择一个磁盘',
+  'err.diskNotFound': '找不到该路径所在的磁盘',
+  'err.unknownAutoMode': '未知的自动清理模式：{0}',
+  'err.monitorNoHome': '无法确定用户主目录，自动清理已停用，仅做提醒',
+  'err.monitorUnreadable': '无法读取磁盘剩余空间',
+  'err.unknownLanguage': '未知的语言：{0}',
+
+  'store.resetWithBackup': '{0}无法读取（{1}），已重置；原文件备份于 {2}',
+  'store.reset': '{0}无法读取（{1}），已重置',
+  'store.what.verdicts': '历史判定缓存',
+  'store.what.cleanable': '可清理清单',
+  'store.what.decisions': '决策记录',
+  'store.what.settings': '设置',
+  'store.reason.io': '{0}',
+  'store.reason.jsonParse': 'JSON 解析失败：{0}',
+  'store.reason.schemaMismatch': 'schema 版本 {0} 与当前 {1} 不一致',
+
+  'tray.tooltip': 'Sift 磁盘空间管理',
+  'tray.open': '打开 Sift',
+  'tray.scan': '立即扫描',
+  'tray.autoOn': '自动整理：开',
+  'tray.autoOff': '自动整理：关',
+  'tray.autostartOn': '开机自启：开',
+  'tray.autostartOff': '开机自启：关',
+  'tray.quit': '退出'
+  ,
+  'common.back': '返回',
+
+  'location.places': '快捷位置',
+  'place.home': '用户文件夹',
+  'place.downloads': '下载',
+  'place.desktop': '桌面',
+  'place.movies': '影片',
+  'place.trash': '废纸篓',
+
+  'routine.cadence.weekly': '每周',
+  'routine.cadence.monthly': '每月',
+  'routine.mode.auto': '自动',
+  'routine.mode.approve': '确认',
+
+  'time.today': '今天',
+  'time.yesterday': '昨天',
+  'time.daysAgo': '{0} 天前',
+
+  'home.siftAi': 'Sift AI',
+  'home.engineActive': '引擎运行中',
+  'home.settings': '系统设置',
+  'home.scanning': '正在扫描',
+  'home.total': '可整理总量',
+  'home.itemsUnit': '项',
+  'home.stateScanning': '正在检查磁盘…',
+  'home.stateReady': '已达最佳整理状态',
+  'home.ctaScanning': '正在检查',
+  'home.ctaScan': '检查并整理',
+  'home.browse': '浏览',
+  'home.card.dashboard': '仪表盘',
+  'home.card.dashboardSub': '磁盘健康与总览',
+  'home.card.smart': '智能建议',
+  'home.card.smartSub': 'AI 推荐删除 · {0} 项待确认',
+  'home.card.explorer': '磁盘浏览',
+  'home.card.explorerSub': '手动目录清理与下钻',
+  'home.card.history': '清理历史',
+  'home.card.historySub': '回顾已完成的优化',
+
+  'dash.title': '仪表盘',
+  'dash.sub': '磁盘健康、AI 分析与例行任务的总览',
+  'dash.engineRunning': '引擎运行中',
+  'dash.kpi.reclaimable': '可释放总量',
+  'dash.kpi.safe': '安全 {0}',
+  'dash.kpi.review': '待你确认',
+  'dash.kpi.items': '{0} 个项目',
+  'dash.kpi.protected': 'AI 已保护',
+  'dash.kpi.inUse': '近期仍在使用',
+  'dash.kpi.totalFreed': '累计释放',
+  'dash.kpi.cleanups': '{0} 次整理',
+  'dash.volumes': '磁盘',
+  'dash.browse': '浏览',
+  'dash.available': '可用',
+  'dash.composition': 'AI 判定构成',
+  'dash.comp.safe': '安全清理',
+  'dash.comp.review': '建议确认',
+  'dash.comp.protected': '已保护',
+  'dash.routines': '例行任务',
+  'dash.itemCount': '{0} 项',
+  'dash.average': '平均 {0}',
+  'dash.recent': '最近整理',
+  'dash.all': '全部',
+  'dash.defaultTitle': '整理',
+  'dash.noHistory': '还没有清理记录',
+
+  'sub.pending': '待删除',
+  'sub.confirm': '确认清除',
+  'sub.cleaning': '清理中',
+  'sub.tabsLabel': '子页面导航',
+  'sub.tab.smart': '智能',
+  'sub.tab.explorer': '浏览',
+  'sub.tab.history': '历史',
+  'sub.aiBadge': 'AI 推荐',
+  'sub.reviewBadge': '待确认',
+  'sub.smartEmpty': '没有待处理的内容',
+  'sub.col.name': '名称',
+  'sub.col.note': '说明',
+  'sub.col.size': '大小',
+  'sub.col.action': '操作',
+  'sub.goUp': '返回上级目录',
+  'sub.parentNote': '上一级目录',
+  'sub.noteProtected': '系统目录，受保护',
+  'sub.notePersonal': '个人文件与数据',
+  'sub.protected': '已保护',
+  'sub.noPermission': '无权限',
+  'sub.remove': '移出',
+  'sub.clean': '清理',
+  'sub.add': '加入',
+  'sub.statusOrder': '按大小降序排列',
+  'sub.statusConfidence': 'AI 引擎持续分析中',
+  'sub.selectAll': '全选',
+  'sub.deselectAll': '取消全选',
+
+  'hist.autoTitle': '定时深度清理',
+  'hist.manualTitle': '手动整理',
+  'hist.autoBadge': '自动',
+  'hist.when': '完成于 {0} · {1} · {2} 项',
+  'hist.released': '已释放',
+  'hist.empty': '还没有清理记录',
+
+  'settings.title': '系统设置',
+  'settings.sub': '配置 AI 整理引擎与自动化',
+  'settings.general': '通用',
+  'settings.language': '界面语言',
+  'settings.languageDesc': '在中文与 English 之间切换',
+  'settings.automation': '自动化',
+  'settings.dailyTitle': '每日自动整理',
+  'settings.dailyDesc': '每天凌晨自动运行引擎，清理安全项',
+  'settings.routines': '例行任务',
+  'settings.toggleMode': '切换自动 / 确认',
+  'settings.runNow': '立即启动',
+  'settings.delete': '删除',
+  'settings.save': '保存更改'
+};
+
+const en: Record<string, string> = {
+  'common.app': 'App',
+  'common.close': 'Close',
+  'common.disk': 'Disk',
+
+  'titlebar.auto': 'Auto-clean',
+  'titlebar.scan': 'Disk Scan',
+  'titlebar.smartScan': 'Smart Scan',
+  'titlebar.cancelScan': 'Cancel Scan',
+
+  'location.available': '{0} available',
+  'location.disks': 'Disks',
+  'location.used': '{0}% used · {1}',
+
+  'list.panel': 'File list',
+  'list.title': 'Files and Folders',
+  'list.removedFromQueue': 'Moved “{0}” out of the delete queue',
+  'list.folderEmpty': 'Nothing to organize in this folder',
+  'list.protected': 'Protected by Sift; cannot be deleted',
+
+  'ctx.add': 'Add to delete queue',
+  'ctx.remove': 'Remove from delete queue',
+  'ctx.noPermission': 'No permission',
+
+  'detail.title': 'Cleanup candidates',
+  'detail.panel': 'Detail panel',
+  'detail.candidates': 'Cleanup candidates',
+  'detail.routines': 'Routines',
+  'detail.fromHabit': 'From habits',
+  'detail.empty': 'Nothing to do',
+  'detail.trashHint': 'Moved to Trash, recoverable',
+  'detail.cleaning': 'Cleaning',
+  'detail.clean': 'Clean {0}',
+
+  'routines.intro':
+    'Sift remembers the choices you make after each scan; repeated decisions settle into routines. Auto-clean is {0}.',
+  'routines.stateOn': 'on',
+  'routines.stateOff': 'off, reminders only',
+  'routines.weekly': 'Suggested weekly',
+  'routines.monthly': 'Suggested monthly',
+  'routines.cadence': '· {1} decisions across {0} days',
+  'routines.runTitle': 'Clean safe items of this kind now',
+  'routines.runAria': 'Clean {0}',
+  'routines.ignoreTitle': 'Ignore this suggestion',
+  'routines.ignoreAria': 'Ignore {0}',
+  'routines.empty1': 'No routine candidates yet',
+  'routines.empty2': 'Repeated cleanup decisions will settle here',
+
+  'summary.safeRelease': 'Safe to free ',
+  'summary.reviewPre': ' · ',
+  'summary.reviewPost': ' needs review',
+  'summary.keepPre': ' · ',
+  'summary.keepPost': ' protected',
+  'summary.released': 'Freed ',
+  'summary.queue': '{0} items · {1}',
+
+  'treemap.aria': 'Disk space treemap',
+  'treemap.otherN': '{0} other items',
+  'treemap.otherNItems': 'Other · {0} items',
+  'treemap.otherAria': '{0} other items, {1} total, view details',
+  'treemap.ariaFinding': '{0}, {1}, {2}',
+  'treemap.ariaFolder': ', double-click to open folder',
+  'treemap.ariaDrill': '{0}, {1}, drill in',
+  'treemap.chosen': 'Selected, click to remove',
+  'treemap.clickClean': 'Click to add to cleanup',
+  'treemap.clickDetail': 'Click to view details',
+  'treemap.safe': 'Safe to clean',
+  'treemap.review': 'Needs your review',
+  'treemap.addToList': 'Add to delete list',
+  'treemap.closeOther': 'Close other details',
+  'treemap.otherDetail': 'Other file details',
+  'treemap.otherBytes': '{0} total · aggregated, below the minimum tile size',
+  'treemap.filterPlaceholder': 'Filter files…',
+  'treemap.noMatch': 'No items match “{0}”',
+
+  'kind.rebuildableCache': 'Dependency & build caches',
+  'kind.cacheDirectory': 'App caches',
+  'kind.packageInstaller': 'Installers',
+  'kind.archive': 'Archives',
+  'kind.staleLargeFile': 'Large files unchanged for a while',
+  'kind.duplicateGroup': 'Possible duplicates',
+  'kind.trash': 'Trash',
+  'kind.log': 'Log files',
+  'kind.tempFile': 'Temporary files',
+  'kind.userMarked': 'Added manually',
+
+  'reason.rebuildableCache': 'Can be regenerated by the {0} toolchain; deleting it does not affect source code.',
+  'reason.cacheDirectory': 'Runtime cache used by {0}; rebuilt automatically next time.',
+  'reason.packageInstaller': '{0} installer image; the app is likely already installed.',
+  'reason.archive': '{0} archive; safe to remove once extracted or no longer needed.',
+  'reason.staleLargeFile': 'Large file unchanged for {0} days; remove if you no longer need it.',
+  'reason.duplicate': 'Copies with the same name and size exist; keep just one.',
+  'reason.insideBundle': 'Inside an installed app bundle; deleting it would damage the app.',
+  'reason.log': '{0} log file, used only for troubleshooting; safe to delete.',
+  'reason.trash': 'Contents of the Trash; emptying it is its normal use.',
+  'reason.tempFile': 'Temporary file created by the system; deleting it is harmless.',
+  'reason.userMarked': 'Item you added manually; moved to Trash and recoverable.',
+  'reason.unjudged': 'No reliable conclusion yet; this needs your judgment.',
+
+  'toast.noKindSafe': 'No safe items of this kind to clean right now',
+  'toast.analyzeFailed': 'Analysis failed: {0}',
+  'toast.scanStartFailed': 'Failed to start scan: {0}',
+  'toast.scanCancelled': 'Scan cancelled',
+  'toast.deleteFailed': 'Deletion failed: {0}',
+  'toast.cannotDelete': 'Cannot delete “{0}”: {1}',
+  'toast.autoCleanDone': 'Automatic cleanup finished, freed {0} (files in Trash, recoverable)',
+  'toast.cleanDone': 'Freed {0} (files in Trash, recoverable)',
+  'toast.noDeletePermission': 'You don’t have permission to delete “{0}”',
+  'toast.addedToQueue': 'Added “{0}” to the delete queue',
+  'toast.cannotAdd': 'Cannot add “{0}”: {1}',
+  'toast.autoOn': 'Auto-clean enabled; only your confirmed safe items are cleaned',
+  'toast.autoOff': 'Auto-clean disabled; only reminders remain',
+  'toast.settingsFailed': 'Failed to update settings: {0}',
+  'toast.lowSpace': 'Disk space is low; review cleanup suggestions',
+  'toast.confirmationNeeded': 'Many cleanable items found; your confirmation is required',
+
+  'err.noScanYet': 'No scan results available to analyze yet',
+  'err.invalidNodeId': 'Invalid node id',
+  'err.deleteNotConfirmed': 'Refused: the item was not confirmed by analysis',
+  'err.keepRefused': 'Refused: the item is marked to keep',
+  'err.noDiskSelected': 'Select a disk first',
+  'err.diskNotFound': 'Cannot find the disk that contains this path',
+  'err.unknownAutoMode': 'Unknown auto-clean mode: {0}',
+  'err.monitorNoHome': 'Cannot determine the home directory; auto-clean is disabled, reminders only',
+  'err.monitorUnreadable': 'Cannot read free disk space',
+  'err.unknownLanguage': 'Unknown language: {0}',
+
+  'store.resetWithBackup': '{0} could not be read ({1}) and was reset; the original is backed up at {2}',
+  'store.reset': '{0} could not be read ({1}) and was reset',
+  'store.what.verdicts': 'Verdict cache',
+  'store.what.cleanable': 'Cleanable list',
+  'store.what.decisions': 'Decision log',
+  'store.what.settings': 'Settings',
+  'store.reason.io': '{0}',
+  'store.reason.jsonParse': 'JSON parse failed: {0}',
+  'store.reason.schemaMismatch': 'Schema version {0} differs from the current {1}',
+
+  'tray.tooltip': 'Sift Disk Space Manager',
+  'tray.open': 'Open Sift',
+  'tray.scan': 'Scan Now',
+  'tray.autoOn': 'Auto-Clean: On',
+  'tray.autoOff': 'Auto-Clean: Off',
+  'tray.autostartOn': 'Launch at Login: On',
+  'tray.autostartOff': 'Launch at Login: Off',
+  'tray.quit': 'Quit'
+  ,
+  'common.back': 'Back',
+
+  'location.places': 'Quick Places',
+  'place.home': 'Home',
+  'place.downloads': 'Downloads',
+  'place.desktop': 'Desktop',
+  'place.movies': 'Movies',
+  'place.trash': 'Trash',
+
+  'routine.cadence.weekly': 'Weekly',
+  'routine.cadence.monthly': 'Monthly',
+  'routine.mode.auto': 'Auto',
+  'routine.mode.approve': 'Approve',
+
+  'time.today': 'Today',
+  'time.yesterday': 'Yesterday',
+  'time.daysAgo': '{0} days ago',
+
+  'home.siftAi': 'Sift AI',
+  'home.engineActive': 'ENGINE ACTIVE',
+  'home.settings': 'Settings',
+  'home.scanning': 'SCANNING',
+  'home.total': 'RECLAIMABLE',
+  'home.itemsUnit': 'items',
+  'home.stateScanning': 'Checking the disk…',
+  'home.stateReady': 'Everything is tidy',
+  'home.ctaScanning': 'Checking',
+  'home.ctaScan': 'Scan & Clean',
+  'home.browse': 'Browse',
+  'home.card.dashboard': 'Dashboard',
+  'home.card.dashboardSub': 'Disk health at a glance',
+  'home.card.smart': 'Smart Suggestions',
+  'home.card.smartSub': 'AI-recommended · {0} to review',
+  'home.card.explorer': 'Disk Explorer',
+  'home.card.explorerSub': 'Manual folder cleanup & drill-down',
+  'home.card.history': 'Cleanup History',
+  'home.card.historySub': 'Review finished cleanups',
+
+  'dash.title': 'Dashboard',
+  'dash.sub': 'Disk health, AI analysis and routines at a glance',
+  'dash.engineRunning': 'Engine running',
+  'dash.kpi.reclaimable': 'Reclaimable',
+  'dash.kpi.safe': '{0} safe',
+  'dash.kpi.review': 'Needs review',
+  'dash.kpi.items': '{0} items',
+  'dash.kpi.protected': 'AI protected',
+  'dash.kpi.inUse': 'Recently used',
+  'dash.kpi.totalFreed': 'Freed to date',
+  'dash.kpi.cleanups': '{0} cleanups',
+  'dash.volumes': 'Volumes',
+  'dash.browse': 'Browse',
+  'dash.available': 'free',
+  'dash.composition': 'AI verdict composition',
+  'dash.comp.safe': 'Safe',
+  'dash.comp.review': 'Review',
+  'dash.comp.protected': 'Protected',
+  'dash.routines': 'Routines',
+  'dash.itemCount': '{0} items',
+  'dash.average': 'avg {0}',
+  'dash.recent': 'Recent cleanups',
+  'dash.all': 'All',
+  'dash.defaultTitle': 'Cleanup',
+  'dash.noHistory': 'No cleanups yet',
+
+  'sub.pending': 'Pending',
+  'sub.confirm': 'Confirm Cleanup',
+  'sub.cleaning': 'Cleaning',
+  'sub.tabsLabel': 'Sub page navigation',
+  'sub.tab.smart': 'Smart',
+  'sub.tab.explorer': 'Explorer',
+  'sub.tab.history': 'History',
+  'sub.aiBadge': 'AI pick',
+  'sub.reviewBadge': 'Review',
+  'sub.smartEmpty': 'Nothing to do',
+  'sub.col.name': 'Name',
+  'sub.col.note': 'Note',
+  'sub.col.size': 'Size',
+  'sub.col.action': 'Action',
+  'sub.goUp': 'Go up',
+  'sub.parentNote': 'Parent directory',
+  'sub.noteProtected': 'Protected system directory',
+  'sub.notePersonal': 'Personal files & data',
+  'sub.protected': 'Protected',
+  'sub.noPermission': 'No permission',
+  'sub.remove': 'Remove',
+  'sub.clean': 'Clean',
+  'sub.add': 'Add',
+  'sub.statusOrder': 'Sorted by size',
+  'sub.statusConfidence': 'AI engine analyzing',
+  'sub.selectAll': 'Select all',
+  'sub.deselectAll': 'Deselect all',
+
+  'hist.autoTitle': 'Scheduled deep cleanup',
+  'hist.manualTitle': 'Manual cleanup',
+  'hist.autoBadge': 'Auto',
+  'hist.when': 'Finished {0} · {1} · {2} items',
+  'hist.released': 'FREED',
+  'hist.empty': 'No cleanups yet',
+
+  'settings.title': 'Settings',
+  'settings.sub': 'Configure the AI engine and automation',
+  'settings.general': 'General',
+  'settings.language': 'Language',
+  'settings.languageDesc': 'Switch between 中文 and English',
+  'settings.automation': 'Automation',
+  'settings.dailyTitle': 'Daily cleanup',
+  'settings.dailyDesc': 'Run the engine every morning and clean safe items',
+  'settings.routines': 'Routines',
+  'settings.toggleMode': 'Toggle auto / approve',
+  'settings.runNow': 'Run now',
+  'settings.delete': 'Delete',
+  'settings.save': 'Save'
+};
+
+type ParamValue = string | number;
+type Params = Record<string, ParamValue> | ParamValue[];
+
+class I18nState {
+  current = $state<Locale>('zh');
+}
+
+export const i18n = new I18nState();
+
+export async function initI18n() {
+  try {
+    i18n.current = await getLanguage();
+  } catch {
+    i18n.current = 'zh';
+  }
+}
+
+export async function setLocale(next: Locale) {
+  const previous = i18n.current;
+  i18n.current = next;
+  try {
+    await persistLanguage(next);
+  } catch {
+    i18n.current = previous;
+  }
+}
+
+export function t(key: string, params?: Params, fallback?: string): string {
+  const template = dictionaries[i18n.current][key] ?? dictionaries.zh[key];
+  if (!template) return fallback ?? key;
+  if (!params) return template;
+  return template.replace(/\{(\w+)\}/g, (match, name: string) => {
+    const value = Array.isArray(params) ? params[Number(name)] : params[name];
+    return value === undefined || value === null ? '' : String(value);
+  });
+}
+
+/**
+ * Translate a backend message: a bare translation key, or `key|arg|arg`
+ * produced by a Rust `format!`. Plain strings that do not look like keys are
+ * returned untouched so free-text model output still renders.
+ */
+const KEY_PATTERN = /^[a-z][a-zA-Z]*(?:\.[a-zA-Z0-9]+)+$/;
+
+function resolveSegment(segment: string): string {
+  const bar = segment.indexOf('|');
+  const head = bar < 0 ? segment : segment.slice(0, bar);
+  if (!KEY_PATTERN.test(head)) return segment;
+  if (!(head in dictionaries[i18n.current] || head in dictionaries.zh)) return segment;
+  const params =
+    bar < 0 ? [] : segment.slice(bar + 1).split('|').map((part) => resolveSegment(part));
+  return t(head, params.length > 0 ? params : undefined);
+}
+
+export function tr(message: string): string {
+  return resolveSegment(message);
+}
+
+/** Render a structured load warning reported by the local store. */
+export function renderStoreWarning(warning: StoreWarning): string {
+  const reason =
+    warning.reason.kind === 'schemaMismatch'
+      ? t('store.reason.schemaMismatch', [warning.reason.found, warning.reason.expected])
+      : t(`store.reason.${warning.reason.kind}`, [warning.reason.message]);
+  return t(warning.key, [t(warning.what), reason, warning.backup ?? '']);
+}
+
+const dictionaries: Record<Locale, Record<string, string>> = { zh, en };

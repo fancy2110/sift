@@ -22,9 +22,7 @@ use sift_core::deletable::classify;
 use sift_core::{ByteSize, ScanTree};
 use sift_platform::dir::DirReader;
 
-use crate::adjudicate::{
-    adjudicate_all, Adjudicator, AnalysisReport, AnalyzedItem,
-};
+use crate::adjudicate::{adjudicate_all, Adjudicator, AnalysisReport, AnalyzedItem};
 use crate::candidate::{redact_path, Candidate, CandidateKind, Evidence};
 use crate::rules::{self, RuleThresholds};
 
@@ -143,7 +141,9 @@ impl Analyzer {
 
         for index in 0..node_count {
             // Copy everything needed before taking a mutable borrow for `path`.
-            let Some(node) = tree.node(index) else { continue };
+            let Some(node) = tree.node(index) else {
+                continue;
+            };
             if !node.is_dir() {
                 continue;
             }
@@ -336,7 +336,11 @@ impl Analyzer {
             let dirs = self.default_file_search_dirs();
             on_progress(AnalysisStage::FilePass, 0, dirs.len().max(1));
             let file_candidates = self.file_candidates(&dirs, now_ms);
-            on_progress(AnalysisStage::FilePass, dirs.len().max(1), dirs.len().max(1));
+            on_progress(
+                AnalysisStage::FilePass,
+                dirs.len().max(1),
+                dirs.len().max(1),
+            );
             candidates.extend(file_candidates);
             candidates = self.finish(candidates);
         }
@@ -457,7 +461,10 @@ mod tests {
         assert!(names.contains(&"backup.zip"), "{names:?}");
         assert!(!names.contains(&"small.txt"), "tiny files are ignored");
 
-        let dmg = candidates.iter().find(|c| c.name == "Installer.dmg").unwrap();
+        let dmg = candidates
+            .iter()
+            .find(|c| c.name == "Installer.dmg")
+            .unwrap();
         assert!(matches!(dmg.kind, CandidateKind::PackageInstaller { .. }));
         let zip = candidates.iter().find(|c| c.name == "backup.zip").unwrap();
         assert!(matches!(zip.kind, CandidateKind::Archive { .. }));
@@ -544,10 +551,14 @@ mod tests {
         add_dir(&mut tree, root, "node_modules", 600 * 1024 * 1024);
 
         let analyzer = Analyzer::new(AnalysisPolicy::directory_only(), None);
-        let cached = crate::adjudicate::CachedAdjudicator::new(RuleAdjudicator::new(), MemCache::default());
+        let cached =
+            crate::adjudicate::CachedAdjudicator::new(RuleAdjudicator::new(), MemCache::default());
 
         let first = analyzer.analyze(&cached, &mut tree, 0, |_, _, _| {});
-        assert_eq!(first.items[0].verdict.source.label(), "rule:dir.node_modules");
+        assert_eq!(
+            first.items[0].verdict.source.label(),
+            "rule:dir.node_modules"
+        );
         let second = analyzer.analyze(&cached, &mut tree, 1, |_, _, _| {});
         assert_eq!(second.items[0].verdict.source.label(), "cached");
         assert_eq!(cached.stats(), (1, 1));

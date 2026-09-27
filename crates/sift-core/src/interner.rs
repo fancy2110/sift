@@ -210,8 +210,14 @@ mod tests {
             interner.intern(&bytes)
         };
         assert_ne!(a, b);
-        assert_eq!(interner.lookup(a), &[b'x'; 7].iter().copied().chain([1]).collect::<Vec<_>>()[..]);
-        assert_eq!(interner.lookup(b), &[b'y'; 7].iter().copied().chain([2]).collect::<Vec<_>>()[..]);
+        assert_eq!(
+            interner.lookup(a),
+            &[b'x'; 7].iter().copied().chain([1]).collect::<Vec<_>>()[..]
+        );
+        assert_eq!(
+            interner.lookup(b),
+            &[b'y'; 7].iter().copied().chain([2]).collect::<Vec<_>>()[..]
+        );
         assert_eq!(interner.len(), 2);
     }
 

@@ -94,8 +94,19 @@ mod tests {
                 .iter()
                 .find(|(path, _)| path == p)
                 .expect("parallel result present");
-            let mut par_names: Vec<&[u8]> = par.1.as_ref().unwrap().iter().map(|e| e.name.as_slice()).collect();
-            let mut seq_names: Vec<&[u8]> = seq.as_ref().unwrap().iter().map(|e| e.name.as_slice()).collect();
+            let mut par_names: Vec<&[u8]> = par
+                .1
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|e| e.name.as_slice())
+                .collect();
+            let mut seq_names: Vec<&[u8]> = seq
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|e| e.name.as_slice())
+                .collect();
             par_names.sort_unstable();
             seq_names.sort_unstable();
             assert_eq!(par_names, seq_names, "results disagree for {p:?}");

@@ -214,17 +214,15 @@ impl ScanEngine {
             let cancel = Arc::clone(&cancel);
             std::thread::Builder::new()
                 .name("sift-worker".into())
-                .spawn(move || {
-                    loop {
-                        let job = dispatch_rx.lock().unwrap().recv();
-                        let Ok(job) = job else { break };
-                        if cancel.load(AtomicOrdering::SeqCst) {
-                            break;
-                        }
-                        let result = read_job(job, want_physical);
-                        if result_tx.send(result).is_err() {
-                            break;
-                        }
+                .spawn(move || loop {
+                    let job = dispatch_rx.lock().unwrap().recv();
+                    let Ok(job) = job else { break };
+                    if cancel.load(AtomicOrdering::SeqCst) {
+                        break;
+                    }
+                    let result = read_job(job, want_physical);
+                    if result_tx.send(result).is_err() {
+                        break;
                     }
                 })?;
         }
@@ -366,7 +364,16 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         focus: focus_path,
     });
 
-    let outcome = coordinator_loop(&mut state, &tree, &cancel, &focus, &focus_generation, &dispatch_tx, &result_rx, workers);
+    let outcome = coordinator_loop(
+        &mut state,
+        &tree,
+        &cancel,
+        &focus,
+        &focus_generation,
+        &dispatch_tx,
+        &result_rx,
+        workers,
+    );
 
     // Fold unrecorded totals so even a cancelled scan adds up.
     {
@@ -488,7 +495,11 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
             }
             drop(tree_guard);
         }
-        DirResult::Sized { parent, size, files } => {
+        DirResult::Sized {
+            parent,
+            size,
+            files,
+        } => {
             let mut tree_guard = tree.lock().unwrap();
             let finished_all = {
                 let entry = state.size_only_pending.entry(*parent).or_insert(0);
@@ -601,7 +612,11 @@ fn process_dir_entries(
             // not report a link count (`nlink == 0`) simply over-counts a
             // hardlinked file, which is the safe direction.
             let size = entry.size();
-            let file_id = if entry.nlink > 1 { entry.file_id() } else { None };
+            let file_id = if entry.nlink > 1 {
+                entry.file_id()
+            } else {
+                None
+            };
             let counted = tree.record_file(index, size, file_id);
             if counted {
                 state.progress.files += 1;
@@ -674,7 +689,9 @@ fn process_dir_entries(
 fn close_and_cascade(state: &mut CoordinatorState, tree: &mut ScanTree, index: u32) {
     let mut cursor = index;
     loop {
-        let Some(node) = tree.node(cursor) else { return };
+        let Some(node) = tree.node(cursor) else {
+            return;
+        };
         let parent = node.parent;
         let key = node.key;
 
@@ -737,7 +754,9 @@ fn flush_progress(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>) {
     let dirty: Vec<u32> = state.dirty.iter().copied().collect();
     state.dirty.clear();
     for index in dirty {
-        let Some(node) = tree_guard.node(index) else { continue };
+        let Some(node) = tree_guard.node(index) else {
+            continue;
+        };
         let _ = state.event_tx.send(ScanEvent::DirectorySized {
             scan: state.scan_id,
             key: node.key,
@@ -770,8 +789,15 @@ enum DirJob {
 }
 
 enum DirResult {
-    Tracked { index: u32, entries: Option<Vec<RawEntry>> },
-    Sized { parent: u32, size: ByteSize, files: u32 },
+    Tracked {
+        index: u32,
+        entries: Option<Vec<RawEntry>>,
+    },
+    Sized {
+        parent: u32,
+        size: ByteSize,
+        files: u32,
+    },
 }
 
 fn read_job(job: DirJob, want_physical: bool) -> DirResult {
@@ -784,7 +810,11 @@ fn read_job(job: DirJob, want_physical: bool) -> DirResult {
         }
         DirJob::SizeOnly { parent, path } => {
             let (size, files) = size_only_walk(&path, want_physical);
-            DirResult::Sized { parent, size, files }
+            DirResult::Sized {
+                parent,
+                size,
+                files,
+            }
         }
     }
 }
@@ -968,7 +998,9 @@ mod tests {
             })
             .expect("Finished event");
         assert_eq!(finished, ScanOutcome::Completed);
-        assert!(events.iter().any(|e| matches!(e, ScanEvent::Progress { progress, .. } if progress.dirs >= 3)));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ScanEvent::Progress { progress, .. } if progress.dirs >= 3)));
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -977,17 +1009,17 @@ mod tests {
     fn cancel_stops_with_partial_results() {
         let base = temp_tree("cancel");
         let engine = ScanEngine::with_workers(4);
-        let handle = engine.scan(ScanRequest::new(ScanId(4), base.clone())).unwrap();
+        let handle = engine
+            .scan(ScanRequest::new(ScanId(4), base.clone()))
+            .unwrap();
         // Cancel quickly; the coordinator must emit Cancelled eventually.
         handle.cancel();
         let events = drain(&handle);
         handle.join();
-        let outcome = events
-            .iter()
-            .find_map(|e| match e {
-                ScanEvent::Finished { outcome, .. } => Some(*outcome),
-                _ => None,
-            });
+        let outcome = events.iter().find_map(|e| match e {
+            ScanEvent::Finished { outcome, .. } => Some(*outcome),
+            _ => None,
+        });
         assert_eq!(outcome, Some(ScanOutcome::Cancelled));
 
         let _ = std::fs::remove_dir_all(&base);
@@ -1026,7 +1058,10 @@ mod tests {
         // pair and 1024 for the extra file. Were the second name counted too, the
         // total would be 10216.
         let expected = 100 + 200 + 300 + 400 + 4096 + 1024;
-        assert_eq!(expected, 6120, "the fixture arithmetic is the point of the test");
+        assert_eq!(
+            expected, 6120,
+            "the fixture arithmetic is the point of the test"
+        );
         let tree = handle.tree.lock().unwrap();
         assert_eq!(tree.total().logical, expected);
         assert!(
@@ -1044,7 +1079,9 @@ mod tests {
         // this just verifies the handle wires it through without panicking.
         let base = temp_tree("focus2");
         let engine = ScanEngine::with_workers(2);
-        let handle = engine.scan(ScanRequest::new(ScanId(5), base.clone())).unwrap();
+        let handle = engine
+            .scan(ScanRequest::new(ScanId(5), base.clone()))
+            .unwrap();
         handle.set_focus(base.join("x"));
         handle.cancel();
         let _ = drain(&handle);

@@ -1,7 +1,7 @@
 //! Volumes, scan policy and the progress/event contract shared by every front
 //! end.
 //!
-//! Nothing here knows about Tauri, GPUI, or any particular scan implementation:
+//! Nothing here knows about Tauri or any particular scan implementation:
 //! the engine publishes these types, the adapters translate them into their own
 //! event vocabulary, and both front ends describe the disk in the same words.
 
@@ -310,12 +310,12 @@ pub enum ScanEvent {
     /// A directory's contents are known and its own total is final. It may
     /// still gain bytes from unvisited subdirectories, so `pending` stays true
     /// for the UI until `DirectoryClosed` or the scan ends.
-    DirectoryListed {
-        scan: ScanId,
-        dir: DirectorySummary,
-    },
+    DirectoryListed { scan: ScanId, dir: DirectorySummary },
     /// A directory's subtree is fully accounted for.
-    DirectoryClosed { scan: ScanId, key: crate::id::NodeKey },
+    DirectoryClosed {
+        scan: ScanId,
+        key: crate::id::NodeKey,
+    },
     /// An interim total for a directory that is still filling in.
     DirectorySized {
         scan: ScanId,

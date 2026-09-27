@@ -131,12 +131,24 @@ mod tests {
         let focus = PathBuf::from("/root/a/focus");
         let mut heap = std::collections::BinaryHeap::new();
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root/b"), depth: 1, seq: 1, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root/b"),
+                depth: 1,
+                seq: 1,
+                kind: JobKind::Tracked,
+            },
             category: 4,
             focus: focus.clone(),
         });
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root/a/focus"), depth: 3, seq: 2, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root/a/focus"),
+                depth: 3,
+                seq: 2,
+                kind: JobKind::Tracked,
+            },
             category: 0,
             focus: focus.clone(),
         });
@@ -149,12 +161,24 @@ mod tests {
         let focus = PathBuf::from("/root/a/focus");
         let mut heap = std::collections::BinaryHeap::new();
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root"), depth: 0, seq: 1, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root"),
+                depth: 0,
+                seq: 1,
+                kind: JobKind::Tracked,
+            },
             category: 1,
             focus: focus.clone(),
         });
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root/a"), depth: 1, seq: 2, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root/a"),
+                depth: 1,
+                seq: 2,
+                kind: JobKind::Tracked,
+            },
             category: 1,
             focus: focus.clone(),
         });
@@ -166,12 +190,24 @@ mod tests {
         let focus = PathBuf::from("/root/a/focus");
         let mut heap = std::collections::BinaryHeap::new();
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root/b/deep/deeper"), depth: 4, seq: 1, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root/b/deep/deeper"),
+                depth: 4,
+                seq: 1,
+                kind: JobKind::Tracked,
+            },
             category: 4,
             focus: focus.clone(),
         });
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root/b"), depth: 1, seq: 2, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root/b"),
+                depth: 1,
+                seq: 2,
+                kind: JobKind::Tracked,
+            },
             category: 4,
             focus: focus.clone(),
         });

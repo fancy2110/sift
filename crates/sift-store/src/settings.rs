@@ -22,7 +22,6 @@ pub enum AutoCleanMode {
     AutoApproved,
 }
 
-
 impl AutoCleanMode {
     pub const fn may_delete(self) -> bool {
         matches!(self, AutoCleanMode::AutoApproved)
@@ -55,8 +54,22 @@ pub struct MonitorSettings {
     /// Approve structural, rule-sourced findings for unattended cleanup as soon
     /// as they are discovered. Off by default: convenience must be asked for.
     pub auto_approve_structural: bool,
+    /// Run the engine daily and clean remembered safe items unattended.
+    #[serde(default = "default_scheduled_cleanup")]
+    pub scheduled_cleanup_enabled: bool,
+    /// Local hour the daily cleanup runs at.
+    #[serde(default = "default_scheduled_hour")]
+    pub scheduled_hour: u32,
     /// How long a notification stays relevant before the monitor may repeat it.
     pub notify_cooldown_secs: u64,
+}
+
+fn default_scheduled_cleanup() -> bool {
+    true
+}
+
+fn default_scheduled_hour() -> u32 {
+    4
 }
 
 impl Default for MonitorSettings {
@@ -72,6 +85,8 @@ impl Default for MonitorSettings {
             max_auto_clean_bytes: 20 * 1024 * 1024 * 1024,
             home_only: true,
             auto_approve_structural: false,
+            scheduled_cleanup_enabled: true,
+            scheduled_hour: 4,
             notify_cooldown_secs: 1800,
         }
     }
@@ -94,6 +109,7 @@ impl MonitorSettings {
             // machine can never reach a warning without also being critical.
             self.critical_free_ratio = (self.warn_free_ratio / 2.0).max(0.001);
         }
+        self.scheduled_hour = self.scheduled_hour.clamp(0, 23);
         self
     }
 }
@@ -202,7 +218,9 @@ impl AiSettings {
         if name.is_empty() {
             return None;
         }
-        std::env::var(name).ok().filter(|key| !key.trim().is_empty())
+        std::env::var(name)
+            .ok()
+            .filter(|key| !key.trim().is_empty())
     }
 }
 

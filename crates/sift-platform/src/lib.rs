@@ -44,8 +44,17 @@ mod volume_probe {
                 volume.file_system
             );
         }
-        println!("system_volume: {:?}", super::system_volume(&volumes).map(|v| v.name.clone()));
-        println!("free_space(/): {:?}", crate::volume::free_space(std::path::Path::new("/")));
-        println!("free_space(/Users): {:?}", crate::volume::free_space(std::path::Path::new("/Users")));
+        println!(
+            "system_volume: {:?}",
+            super::system_volume(&volumes).map(|v| v.name.clone())
+        );
+        println!(
+            "free_space(/): {:?}",
+            crate::volume::free_space(std::path::Path::new("/"))
+        );
+        println!(
+            "free_space(/Users): {:?}",
+            crate::volume::free_space(std::path::Path::new("/Users"))
+        );
     }
 }

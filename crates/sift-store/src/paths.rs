@@ -57,6 +57,16 @@ impl StorePaths {
     pub fn settings(&self) -> PathBuf {
         self.root.join("settings.json")
     }
+
+    /// The user-facing cleanup timeline, one session per finished cleanup.
+    pub fn history(&self) -> PathBuf {
+        self.root.join("history.json")
+    }
+
+    /// Saved routines accepted from habit mining.
+    pub fn routines(&self) -> PathBuf {
+        self.root.join("routines.json")
+    }
 }
 
 #[cfg(test)]
@@ -71,6 +81,8 @@ mod tests {
             paths.cleanable(),
             paths.decisions(),
             paths.settings(),
+            paths.history(),
+            paths.routines(),
         ];
         for path in &all {
             assert_eq!(path.parent().unwrap(), paths.root());

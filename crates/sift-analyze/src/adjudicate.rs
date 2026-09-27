@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use crate::candidate::Candidate;
-use crate::reason::{clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource};
+use crate::reason::{
+    clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource,
+};
 
 /// Why an adjudication run failed.
 #[derive(Debug)]
@@ -93,7 +95,10 @@ impl Adjudicator for RuleAdjudicator {
         batch: &[Candidate],
         now_ms: i64,
     ) -> Result<Vec<Verdict>, AdjudicateError> {
-        Ok(batch.iter().map(|candidate| rule_verdict(candidate, now_ms)).collect())
+        Ok(batch
+            .iter()
+            .map(|candidate| rule_verdict(candidate, now_ms))
+            .collect())
     }
 }
 
@@ -232,7 +237,8 @@ impl<A: Adjudicator, C: VerdictCache> Adjudicator for CachedAdjudicator<A, C> {
                     });
                 }
                 None => {
-                    self.misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.misses
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     pending.push(index);
                 }
             }
@@ -249,7 +255,6 @@ impl<A: Adjudicator, C: VerdictCache> Adjudicator for CachedAdjudicator<A, C> {
 
         Ok(verdicts
             .into_iter()
-            
             .map(|verdict| verdict.unwrap_or_else(|| Verdict::unknown(now_ms)))
             .collect())
     }
@@ -280,10 +285,7 @@ pub fn parse_raw_verdicts(text: &str) -> Result<Vec<RawVerdict>, AdjudicateError
     // Tolerate a fenced code block around the JSON.
     let json = if let Some(rest) = trimmed.strip_prefix("```") {
         let rest = rest.strip_prefix("json").unwrap_or(rest);
-        rest.trim_start()
-            .strip_suffix("```")
-            .unwrap_or(rest)
-            .trim()
+        rest.trim_start().strip_suffix("```").unwrap_or(rest).trim()
     } else {
         trimmed
     };
@@ -428,8 +430,10 @@ pub fn apply_remote_verdicts(
     guardrails: &Guardrails,
     now_ms: i64,
 ) -> Vec<Verdict> {
-    let by_id: HashMap<&str, &RawVerdict> =
-        raw.iter().map(|verdict| (verdict.id.as_str(), verdict)).collect();
+    let by_id: HashMap<&str, &RawVerdict> = raw
+        .iter()
+        .map(|verdict| (verdict.id.as_str(), verdict))
+        .collect();
 
     batch
         .iter()
@@ -615,7 +619,9 @@ mod tests {
             0,
             kind,
         );
-        candidate.evidence.push(Evidence::new(rule, "detail.patternMatch"));
+        candidate
+            .evidence
+            .push(Evidence::new(rule, "detail.patternMatch"));
         candidate.with_nomination(crate::candidate::Nomination {
             rule: rule.to_string(),
             safety: nominated_safety(rule),
@@ -739,14 +745,24 @@ mod tests {
     #[test]
     fn missing_answers_and_invented_ids_are_handled() {
         let a = candidate(CandidateKind::StaleLargeFile, "file.stale_large");
-        let mut b = candidate(CandidateKind::Archive { extension: "zip".into() }, "file.archive");
+        let mut b = candidate(
+            CandidateKind::Archive {
+                extension: "zip".into(),
+            },
+            "file.archive",
+        );
         b.key = NodeKey::from_bytes(b"second");
         let batch = vec![a.clone(), b];
 
         let raw_answers = vec![
             raw(&a.key.to_string(), "safe", 0.99, "old installer"),
             // An id that was never asked about must not create anything.
-            raw("n-00000000000000000000000000000000", "safe", 1.0, "invented"),
+            raw(
+                "n-00000000000000000000000000000000",
+                "safe",
+                1.0,
+                "invented",
+            ),
         ];
         let verdicts = apply_remote_verdicts(&batch, &raw_answers, &Guardrails::default(), 0);
         assert_eq!(verdicts.len(), 2);
@@ -779,9 +795,7 @@ mod tests {
     #[test]
     fn rule_adjudicator_restates_the_rule() {
         let node_modules = candidate(
-            CandidateKind::RebuildableCache {
-                tool: "npm".into(),
-            },
+            CandidateKind::RebuildableCache { tool: "npm".into() },
             "dir.node_modules",
         );
         let verdict = rule_verdict(&node_modules, 7);
@@ -832,11 +846,18 @@ mod tests {
         let candidates = vec![
             candidate(CandidateKind::Trash, "dir.trash"),
             candidate(CandidateKind::StaleLargeFile, "file.stale_large"),
-            candidate(CandidateKind::Archive { extension: "zip".into() }, "file.archive"),
+            candidate(
+                CandidateKind::Archive {
+                    extension: "zip".into(),
+                },
+                "file.archive",
+            ),
         ];
         let verdicts = adjudicate_all(&Failing, &candidates, 2, 0, |_, _| {});
         assert_eq!(verdicts.len(), 3);
-        assert!(verdicts.iter().all(|verdict| verdict.safety == Safety::Review));
+        assert!(verdicts
+            .iter()
+            .all(|verdict| verdict.safety == Safety::Review));
         assert!(verdicts
             .iter()
             .all(|verdict| !verdict.is_automatically_removable(&ConfidencePolicy::default())));

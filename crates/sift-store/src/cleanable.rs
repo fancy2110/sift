@@ -179,7 +179,9 @@ impl CleanableList {
                     return Upsert::Removed;
                 }
                 let entry = &mut self.entries[index];
-                let was_same_object = entry.fingerprint.still_describes(&item.candidate.fingerprint());
+                let was_same_object = entry
+                    .fingerprint
+                    .still_describes(&item.candidate.fingerprint());
                 // An approval belongs to the exact object it was granted for.
                 if !was_same_object {
                     entry.approved_for_auto = false;
@@ -330,7 +332,13 @@ mod tests {
     use sift_analyze::{Candidate, CandidateKind, Evidence};
     use sift_core::ByteSize;
 
-    fn item(name: &str, kind: CandidateKind, rule: &str, safety: Safety, size: u64) -> AnalyzedItem {
+    fn item(
+        name: &str,
+        kind: CandidateKind,
+        rule: &str,
+        safety: Safety,
+        size: u64,
+    ) -> AnalyzedItem {
         let mut candidate = Candidate::new(
             NodeKey::from_bytes(name.as_bytes()),
             PathBuf::from("/Users/me/project").join(name),
@@ -347,13 +355,7 @@ mod tests {
         let verdict = if verdict.safety == safety {
             verdict
         } else {
-            sift_analyze::Verdict::new(
-                safety,
-                0.9,
-                Reason::key("k"),
-                VerdictSource::rule(rule),
-                0,
-            )
+            sift_analyze::Verdict::new(safety, 0.9, Reason::key("k"), VerdictSource::rule(rule), 0)
         };
         AnalyzedItem::new(candidate, verdict)
     }
@@ -361,9 +363,7 @@ mod tests {
     fn cache_item(name: &str, size: u64) -> AnalyzedItem {
         item(
             name,
-            CandidateKind::RebuildableCache {
-                tool: "npm".into(),
-            },
+            CandidateKind::RebuildableCache { tool: "npm".into() },
             "dir.node_modules",
             Safety::Safe,
             size,
@@ -373,7 +373,10 @@ mod tests {
     #[test]
     fn only_safe_conclusions_are_remembered() {
         let mut list = CleanableList::default();
-        assert_eq!(list.upsert(&cache_item("node_modules", 100), 0), Upsert::Inserted);
+        assert_eq!(
+            list.upsert(&cache_item("node_modules", 100), 0),
+            Upsert::Inserted
+        );
         let review = item(
             "build",
             CandidateKind::RebuildableCache {
@@ -392,7 +395,10 @@ mod tests {
     fn refresh_keeps_a_single_row_and_counts_sightings() {
         let mut list = CleanableList::default();
         list.upsert(&cache_item("node_modules", 100), 10);
-        assert_eq!(list.upsert(&cache_item("node_modules", 100), 20), Upsert::Refreshed);
+        assert_eq!(
+            list.upsert(&cache_item("node_modules", 100), 20),
+            Upsert::Refreshed
+        );
         assert_eq!(list.len(), 1);
         let entry = &list.entries()[0];
         assert_eq!(entry.times_seen, 2);
@@ -406,9 +412,7 @@ mod tests {
         list.upsert(&cache_item("node_modules", 100), 0);
         let downgraded = item(
             "node_modules",
-            CandidateKind::RebuildableCache {
-                tool: "npm".into(),
-            },
+            CandidateKind::RebuildableCache { tool: "npm".into() },
             "dir.node_modules",
             Safety::Review,
             100,

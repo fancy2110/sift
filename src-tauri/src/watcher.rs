@@ -32,9 +32,10 @@ pub fn watch_fs(
     app: AppHandle,
     state: State<'_, FsWatcherState>,
     root: String,
+    recursive: bool,
 ) -> Result<(), String> {
-    let (handle, receiver) =
-        FsWatcherHandle::watch(PathBuf::from(&root)).map_err(|err| err.to_string())?;
+    let (handle, receiver) = FsWatcherHandle::watch_with_mode(PathBuf::from(&root), recursive)
+        .map_err(|err| err.to_string())?;
 
     let app_for_pump = app.clone();
     std::thread::Builder::new()

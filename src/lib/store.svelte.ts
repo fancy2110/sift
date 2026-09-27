@@ -1,39 +1,66 @@
 import {
+  analyzeCurrent,
+  cancelScan,
+  cleanPaths,
+  deleteRoutine,
+  dismissRoutineSuggestion,
+  listHistory,
+  listPlaces,
+  listRoutines,
   listVolumes,
-  moveToTrash,
-  onDiscovered,
+  markPath,
+  monitorStatus,
   onFsDeleted,
-  onProgress,
+  onMonitorEvent,
+  onScanBatch,
   onScanDone,
-  onSized,
+  routineSuggestions,
+  runRoutine,
+  setAutoCleanMode,
   setScanFocus,
+  startMonitor,
   startScan,
+  takeStoreWarnings,
+  toggleRoutineMode,
   watchFs,
+  acceptRoutineSuggestion,
+  type BatchUpdate,
   type DeleteResultItem
 } from './ipc';
-import { classify, INSIGHT_SPECS, type InsightKey } from './analyze';
-import type { Node, Finding, Routine, VolumeInfo } from './types';
+import type {
+  Finding,
+  HistoryEntry,
+  MonitorStatus as MonitorStatusInfo,
+  Node,
+  Place,
+  Routine,
+  RoutineSuggestion,
+  VolumeInfo
+} from './types';
+import { t, tr, renderStoreWarning } from './i18n.svelte';
 
 export interface Toast {
   id: number;
   message: string;
 }
 
-const ROUTINE_SEED: Routine[] = [
-  { id: 'rt-downloads', title: '下载文件夹整理', cadence: '每周五 18:00', avgSize: 5.6 * 1024 ** 3, autoMode: 'auto' },
-  { id: 'rt-cache', title: '开发缓存清理', cadence: '每周一 09:00', avgSize: 11.8 * 1024 ** 3, autoMode: 'approve' },
-  { id: 'rt-space-guard', title: '空间守卫', cadence: '可用空间低于 15% 时', avgSize: 8.4 * 1024 ** 3, autoMode: 'auto' }
-];
-
 /**
- * Live, event-driven state. Nodes stream in from the backend scanner and
- * the current directory renders as soon as entries exist — never waiting
- * for the whole volume. AI findings are client-side aggregates whose
- * members are classified once per node (on discover / re-size).
+ * Live, event-driven state behind the three-view hub (home / dashboard / sub).
+ * Nodes stream in through batched scan updates; the explorer renders the
+ * current folder as soon as its first batch arrives. Candidates, history and
+ * routines all come from the backend so the same guardrails run everywhere.
  */
 class AppStore {
+  // ---- hub navigation ----
+  view = $state<'home' | 'dashboard' | 'sub'>('home');
+  subTab = $state<'smart' | 'explorer' | 'history'>('smart');
+  settingsOpen = $state(false);
+
+  // ---- scan scopes ----
   volumes = $state<VolumeInfo[]>([]);
-  currentVolumeId = $state<string | null>(null);
+  places = $state<Place[]>([]);
+  scopeKind = $state<'disk' | 'place'>('disk');
+  scopeId = $state<string | null>(null);
 
   /** All discovered nodes keyed by stable id (per active scan). */
   nodes = $state<Map<string, Node>>(new Map());
@@ -45,35 +72,48 @@ class AppStore {
   scannedDirs = $state(0);
 
   toasts = $state<Toast[]>([]);
-  autoOn = $state(true);
+  autoOn = $state(false);
+  monitorRunning = $state(false);
 
-  routines = $state<Routine[]>(ROUTINE_SEED);
-  runningRoutineId = $state<string | null>(null);
-  cleanedBytes = $state(0);
+  /** Analyzed candidates from the backend. */
+  findings = $state<Finding[]>([]);
+  routineSuggestions = $state<RoutineSuggestion[]>([]);
+  routines = $state<Routine[]>([]);
+  history = $state<HistoryEntry[]>([]);
 
   /** Selected finding ids (deletion candidates). */
   selectedIds = $state<Set<string>>(new Set());
-
   cleaning = $state(false);
 
-  drawerOpen = $state(false);
-
-  /** Member node ids per aggregated AI insight. */
-  private members = $state<Map<InsightKey, Set<string>>>(new Map());
-  /** Manual findings keyed by id; each holds one node id. */
-  private manualMembers = $state<Map<string, string>>(new Map());
-  private manualSeq = 0;
-
-  /** Bumped on volume switch so transitions can reset. */
+  /** Bumped on scope switch so transitions can reset. */
   treeVersion = $state(0);
 
   private toastSeq = 0;
   private started = false;
+  private analysedScan = false;
 
-  // ---- lookups -------------------------------------------------------------
+  // ---- scope lookups ----
 
   get currentVolume(): VolumeInfo | null {
-    return this.volumes.find((v) => v.id === this.currentVolumeId) ?? null;
+    return this.scopeKind === 'disk'
+      ? (this.volumes.find((v) => v.id === this.scopeId) ?? null)
+      : null;
+  }
+
+  get currentPlace(): Place | null {
+    return this.scopeKind === 'place'
+      ? (this.places.find((p) => p.id === this.scopeId) ?? null)
+      : null;
+  }
+
+  /** Root path of the active scan. */
+  get scopePath(): string | null {
+    return this.currentVolume?.mountPoint ?? this.currentPlace?.path ?? null;
+  }
+
+  /** Display name of the active scope. */
+  get scopeName(): string {
+    return this.currentVolume?.name ?? this.currentPlace?.labelKey ?? '';
   }
 
   get currentNode(): Node | null {
@@ -92,7 +132,7 @@ class AppStore {
     return chain;
   }
 
-  /** Drill segments below the volume root (drives Treemap key + crumbs). */
+  /** Drill segments below the scan root (drives explorer crumbs). */
   get drillPath(): string[] {
     return this.breadcrumbs.slice(1).map((n) => n.name);
   }
@@ -107,55 +147,14 @@ class AppStore {
       });
   }
 
-  // ---- AI findings ---------------------------------------------------------
+  // ---- candidate getters ----
 
-  /** Live aggregated findings, sized from their members. */
-  get findings(): Finding[] {
-    const out: Finding[] = [];
-    for (const [key, ids] of this.members) {
-      if (ids.size === 0) continue;
-      let size = 0;
-      let path = '';
-      for (const id of ids) {
-        const n = this.nodes.get(id);
-        if (!n) continue;
-        size += n.size;
-        if (!path) path = parentPath(n.path);
-      }
-      const spec = INSIGHT_SPECS[key];
-      out.push({
-        id: key,
-        title: spec.title,
-        reason: spec.reason(ids.size),
-        size,
-        path,
-        risk: spec.risk,
-        confidence: spec.confidence
-      });
-    }
-    for (const [id, nodeId] of this.manualMembers) {
-      const n = this.nodes.get(nodeId);
-      if (!n) continue;
-      out.push({
-        id,
-        title: n.name,
-        reason: n.isDir
-          ? '你手动加入的文件夹，将整体移入回收站，可恢复。'
-          : '你手动加入的项目，将移入回收站，可恢复。',
-        size: n.size,
-        path: parentPath(n.path),
-        risk: 'review',
-        confidence: 1,
-        manual: true
-      });
-    }
-    const order: Record<string, number> = { safe: 0, review: 1, keep: 2 };
-    return out.sort((a, b) => order[a.risk] - order[b.risk] || b.size - a.size);
+  get visible(): Finding[] {
+    return this.findings.filter((f) => f.safety !== 'keep');
   }
 
-  /** Actionable (non-protected) findings shown in the candidate list. */
-  get visible(): Finding[] {
-    return this.findings.filter((f) => f.risk !== 'keep');
+  get smartItems(): Finding[] {
+    return this.visible;
   }
 
   get candidates(): Finding[] {
@@ -167,239 +166,412 @@ class AppStore {
   }
 
   get safeBytes(): number {
-    return sumBy(this.findings, 'safe');
+    return this.sumBy('safe');
   }
 
   get reviewBytes(): number {
-    return sumBy(this.findings, 'review');
+    return this.sumBy('review');
   }
 
   get keepBytes(): number {
-    return sumBy(this.findings, 'keep');
+    return this.sumBy('keep');
+  }
+
+  /** Everything actionable right now (safe + review) in the active scope. */
+  get totalReclaimable(): number {
+    return this.safeBytes + this.reviewBytes;
+  }
+
+  get safeReclaimable(): number {
+    return this.safeBytes;
+  }
+
+  get pendingReviewCount(): number {
+    return this.findings.filter((f) => f.safety === 'review').length;
+  }
+
+  get allTimeReclaimed(): number {
+    return this.history.reduce((s, r) => s + r.bytes, 0);
   }
 
   get hasFindings(): boolean {
-    return this.findings.some((f) => f.risk === 'safe' || f.risk === 'review');
+    return this.findings.some((f) => f.safety === 'safe' || f.safety === 'review');
+  }
+
+  private sumBy(risk: string): number {
+    return this.findings
+      .filter((f) => f.safety === risk)
+      .reduce((s, f) => s + f.size, 0);
   }
 
   isSelected(id: string): boolean {
     return this.selectedIds.has(id);
   }
 
-  // ---- lifecycle -----------------------------------------------------------
+  // ---- lifecycle ----
 
   async init() {
     if (this.started) return;
     this.started = true;
 
     await Promise.all([
-      onDiscovered((n) => this.handleDiscovered(n)),
-      onSized((e) => this.handleSized(e.id, e.size, e.pending)),
-      onProgress((p) => {
-        this.scannedFiles = p.files;
-        this.scannedDirs = p.dirs;
-      }),
-      onScanDone(() => {
-        this.scanning = false;
-      }),
-      onFsDeleted((e) => this.handleExternalDelete(e.id))
+      onScanBatch((batch) => this.handleBatch(batch)),
+      onScanDone((event) => this.handleScanDone(event.cancelled)),
+      onFsDeleted((event) => this.pruneIds(new Set([event.id]))),
+      onMonitorEvent((event) => this.handleMonitorEvent(event))
     ]);
 
+    for (const warning of await takeStoreWarnings()) {
+      this.toast(renderStoreWarning(warning));
+    }
+
     this.volumes = await listVolumes();
+    this.places = await listPlaces();
+    await this.loadHistory();
+    await this.loadRoutines();
+
+    // Pre-select the system disk without scanning; the user starts the first
+    // scan explicitly from the home screen CTA.
     const preferred = this.volumes.find((v) => !v.isRemovable) ?? this.volumes[0];
-    if (preferred) await this.selectVolume(preferred.id);
+    if (preferred) this.scopeId = preferred.id;
+
+    this.refreshMonitorStatus();
   }
 
-  // ---- event handling ------------------------------------------------------
+  // ---- scope selection ----
 
-  private handleDiscovered(incoming: Node) {
-    const first = !this.rootId;
-    const n: Node = { ...incoming, ext: extOf(incoming.name) };
-    this.nodes.set(n.id, n);
-    if (n.parentId) {
-      const p = this.nodes.get(n.parentId);
-      if (p) {
-        p.children ??= [];
-        if (!p.children.some((c) => c.id === n.id)) p.children.push(n);
-      }
+  async selectDisk(id: string) {
+    this.scopeKind = 'disk';
+    await this.startScope(id);
+  }
+
+  async selectPlace(id: string) {
+    this.scopeKind = 'place';
+    await this.startScope(id);
+  }
+
+  private async startScope(id: string) {
+    if (id === this.scopeId && this.rootId && !this.scanning) return;
+    this.scopeId = id;
+
+    const root = this.scopePath;
+    if (!root) return;
+
+    this.resetScanState();
+    try {
+      await startScan(root, root);
+    } catch (error) {
+      this.scanning = false;
+      this.toast(t('toast.scanStartFailed', [String(error)]));
+      return;
     }
-    if (first && n.parentId === null) {
-      this.rootId = n.id;
-      this.currentNodeId = n.id;
-    }
-    this.reclassify(n);
-    // Trigger reactivity for the assembled map / children.
-    this.nodes = new Map(this.nodes);
+    this.watchCurrentDir();
   }
 
-  private handleSized(id: string, size: number, pending: boolean) {
-    const n = this.nodes.get(id);
-    if (!n) return;
-    n.size = size;
-    n.pending = pending;
-    this.reclassify(n);
+  /** Cancel the running scan from the UI. */
+  async cancelCurrentScan() {
+    if (!this.scanning) return;
+    await cancelScan();
+    this.scanning = false;
+    this.toast(t('toast.scanCancelled'));
   }
 
-  /** Assign a node to its heuristic insight; move it between member sets. */
-  private reclassify(n: Node) {
-    const key = n.deletable ? classify(n, Date.now()) : null;
-    const current = n.insightId;
-    // Manual findings own their node exclusively.
-    if (current && this.manualMembers.has(current)) return;
-    if (current === key) return;
-    if (current) this.removeMember(current, n.id);
-    if (key) this.addMember(key, n.id);
-    n.insightId = key ?? undefined;
-    n.risk = key ? INSIGHT_SPECS[key].risk : undefined;
-    n.note = key ? INSIGHT_SPECS[key].title : undefined;
-  }
-
-  private addMember(key: string, id: string) {
-    const set = this.members.get(key as InsightKey) ?? new Set<string>();
-    const added = !set.has(id);
-    set.add(id);
-    this.members.set(key as InsightKey, set);
-    if (added && key !== 'ai-protected') {
-      // Safe findings are preselected once they first appear.
-      if (INSIGHT_SPECS[key as InsightKey].risk === 'safe') {
-        const next = new Set(this.selectedIds);
-        next.add(key);
-        this.selectedIds = next;
-      }
-    }
-  }
-
-  private removeMember(key: string, id: string) {
-    const set = this.members.get(key as InsightKey);
-    if (!set) return;
-    set.delete(id);
-  }
-
-  /** A node vanished outside the app (or after our own trash call). */
-  private handleExternalDelete(id: string) {
-    if (!this.nodes.has(id)) return;
-    this.pruneId(id);
-  }
-
-  private pruneId(id: string) {
-    const remove = new Set<string>([id]);
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const n of this.nodes.values()) {
-        if (n.parentId && remove.has(n.parentId) && !remove.has(n.id)) {
-          remove.add(n.id);
-          grew = true;
-        }
-      }
-    }
-
-    // Detach from surviving parents, drop memberships / manual findings.
-    const orphanedManual: string[] = [];
-    for (const rid of remove) {
-      const n = this.nodes.get(rid);
-      if (!n) continue;
-      if (n.parentId && !remove.has(n.parentId)) {
-        const p = this.nodes.get(n.parentId);
-        if (p?.children) p.children = p.children.filter((c) => c.id !== rid);
-      }
-      if (n.insightId) this.removeMember(n.insightId, rid);
-      for (const [manualId, nodeId] of this.manualMembers) {
-        if (nodeId === rid) orphanedManual.push(manualId);
-      }
-    }
-    for (const m of orphanedManual) this.manualMembers.delete(m);
-
-    const nextNodes = new Map<string, Node>();
-    for (const [k, v] of this.nodes) if (!remove.has(k)) nextNodes.set(k, v);
-    this.nodes = nextNodes;
-
-    const nextSel = new Set(this.selectedIds);
-    for (const r of remove) nextSel.delete(r);
-    // Drop selections whose finding no longer has members.
-    for (const fid of [...nextSel]) {
-      if (!this.findings.some((f) => f.id === fid)) nextSel.delete(fid);
-    }
-    this.selectedIds = nextSel;
-
-    if (this.currentNodeId && remove.has(this.currentNodeId)) {
-      const start = this.nodes.get(id);
-      let pid = start?.parentId ?? null;
-      while (pid && !this.nodes.has(pid)) pid = this.nodes.get(pid)?.parentId ?? null;
-      this.currentNodeId = pid;
-      if (pid) {
-        const n = this.nodes.get(pid);
-        if (n) setScanFocus(n.path);
-      }
-    }
-  }
-
-  // ---- volume selection ----------------------------------------------------
-
-  async selectVolume(id: string) {
-    if (id === this.currentVolumeId && this.rootId && this.scanning) return;
-    this.currentVolumeId = id;
-    const vol = this.volumes.find((v) => v.id === id);
-    if (!vol) return;
-
+  private resetScanState() {
     this.nodes = new Map();
-    this.members = new Map();
-    this.manualMembers = new Map();
+    this.findings = [];
     this.rootId = null;
     this.currentNodeId = null;
     this.selectedIds = new Set();
     this.scanning = true;
     this.scannedFiles = 0;
     this.scannedDirs = 0;
-    this.drawerOpen = false;
+    this.analysedScan = false;
     this.treeVersion += 1;
-    await startScan(vol.mountPoint, vol.mountPoint);
-    watchFs(vol.mountPoint).catch(() => undefined);
   }
 
-  // ---- navigation ----------------------------------------------------------
+  // ---- hub navigation ----
 
-  drillIntoId(id: string) {
-    const n = this.nodes.get(id);
-    if (!n) return;
-    this.currentNodeId = id;
-    setScanFocus(n.path);
+  go(view: 'home' | 'dashboard' | 'sub') {
+    this.view = view;
+  }
+
+  goHome() {
+    this.view = 'home';
+  }
+
+  goSub(tab: 'smart' | 'explorer' | 'history' = 'smart') {
+    this.subTab = tab;
+    this.view = 'sub';
+  }
+
+  setSubTab(tab: 'smart' | 'explorer' | 'history') {
+    this.subTab = tab;
+  }
+
+  // ---- explorer drill ----
+
+  drillInto(name: string) {
+    const target = this.currentNode?.children?.find((c) => c.name === name);
+    if (!target || !target.isDir) return;
+    this.currentNodeId = target.id;
+    setScanFocus(target.path);
+    this.watchCurrentDir();
   }
 
   jumpCrumb(index: number) {
-    const target = this.breadcrumbs[index];
+    const target = this.breadcrumbs[index + 1];
     if (target) {
       this.currentNodeId = target.id;
       setScanFocus(target.path);
+      this.watchCurrentDir();
     }
   }
 
-  // ---- manual candidates ---------------------------------------------------
+  goUp() {
+    if (this.drillPath.length > 0) this.jumpCrumb(this.drillPath.length - 2);
+  }
 
-  addManualCandidate(n: Node) {
-    if (!n.deletable) {
-      this.toast(`你没有删除「${n.name}」的权限`);
-      return;
+  // ---- scan event handling ----
+
+  private handleMonitorEvent(event: unknown) {
+    const data = event as {
+      kind?: string;
+      level?: string;
+      message?: string;
+      bytes?: number;
+      paths?: string[];
+      entryCount?: number;
+      reason?: string;
+    };
+    switch (data.kind) {
+      case 'notify':
+        this.toast(t('toast.lowSpace'));
+        break;
+      case 'confirmationNeeded':
+        this.toast(t('toast.confirmationNeeded'));
+        break;
+      case 'cleanupFinished': {
+        const removed = new Set<string>();
+        for (const path of data.paths ?? []) {
+          const id = [...this.nodes.values()].find((node) => node.path === path)?.id;
+          if (id) removed.add(id);
+        }
+        if (removed.size > 0) {
+          this.pruneIds(removed);
+          this.findings = this.findings.filter((finding) => !removed.has(finding.id));
+          this.selectedIds = new Set(
+            [...this.selectedIds].filter((id) => !removed.has(id))
+          );
+        }
+        this.loadHistory();
+        this.loadRoutines();
+        break;
+      }
+      case 'warning':
+        if (data.message) this.toast(tr(data.message));
+        break;
+      default:
+        break;
     }
-    // Already part of an AI finding: just make sure it is selected.
-    if (n.insightId && !this.manualMembers.has(n.insightId)) {
+  }
+
+  private handleBatch(batch: BatchUpdate) {
+    for (const incoming of batch.discovered) {
+      const first = !this.rootId;
+      const node: Node = { ...incoming, ext: extOf(incoming.name) };
+      this.nodes.set(node.id, node);
+      if (node.parentId) {
+        const parent = this.nodes.get(node.parentId);
+        if (parent) {
+          parent.children ??= [];
+          if (!parent.children.some((c) => c.id === node.id)) parent.children.push(node);
+        }
+      }
+      if (first && node.parentId === null) {
+        this.rootId = node.id;
+        this.currentNodeId = node.id;
+      }
+    }
+
+    for (const sized of batch.sized) {
+      const node = this.nodes.get(sized.id);
+      if (node) {
+        node.size = sized.size;
+        node.pending = sized.pending;
+      }
+    }
+
+    if (batch.progress) {
+      this.scannedFiles = batch.progress.files;
+      this.scannedDirs = batch.progress.dirs;
+    }
+
+    this.nodes = new Map(this.nodes);
+    this.annotateNodes();
+  }
+
+  /** Reflect backend findings onto their nodes (insightId + risk). */
+  private annotateNodes() {
+    for (const finding of this.findings) {
+      const node = this.nodes.get(finding.id);
+      if (node && node.insightId !== finding.id) {
+        node.insightId = finding.id;
+        node.risk = finding.safety;
+      }
+    }
+  }
+
+  private async handleScanDone(cancelled: boolean) {
+    this.scanning = false;
+    if (cancelled) return;
+    if (this.analysedScan) return;
+    this.analysedScan = true;
+    await this.runAnalysis();
+  }
+
+  /** Ask the backend to analyse the finished scan and adopt the conclusions. */
+  async runAnalysis() {
+    try {
+      const summary = await analyzeCurrent();
+      this.findings = summary.findings;
+      this.routineSuggestions = await routineSuggestions();
+      this.annotateNodes();
+
       const next = new Set(this.selectedIds);
-      next.add(n.insightId);
+      for (const finding of summary.findings) {
+        if (finding.safety === 'safe') next.add(finding.id);
+      }
       this.selectedIds = next;
-      this.toast(`已将「${n.name}」加入删除队列`);
+    } catch (error) {
+      this.toast(t('toast.analyzeFailed', [String(error)]));
+    }
+  }
+
+  // ---- deletion ----
+
+  async clean(automatic = false): Promise<number> {
+    const targets = this.candidates;
+    if (this.cleaning || targets.length === 0) return 0;
+    this.cleaning = true;
+
+    const paths = targets.map((f) => f.path);
+    let results: DeleteResultItem[] = [];
+    try {
+      results = await cleanPaths(paths);
+    } catch (error) {
+      this.toast(t('toast.deleteFailed', [String(error)]));
+      this.cleaning = false;
+      return 0;
+    }
+
+    const removed = new Set<string>();
+    let bytes = 0;
+    for (const result of results) {
+      if (result.ok) {
+        const target = targets.find((f) => f.path === result.path);
+        if (target) {
+          removed.add(target.id);
+          bytes += target.size;
+        }
+      } else {
+        this.toast(t('toast.cannotDelete', [result.path, tr(result.error ?? '')]));
+      }
+    }
+
+    this.pruneIds(removed);
+    this.findings = this.findings.filter((f) => !removed.has(f.id));
+    this.selectedIds = new Set();
+
+    this.cleaning = false;
+    await this.loadHistory();
+    await this.loadRoutines();
+    this.toast(
+      automatic
+        ? t('toast.autoCleanDone', [formatSize(bytes)])
+        : t('toast.cleanDone', [formatSize(bytes)])
+    );
+    return bytes;
+  }
+
+  /**
+   * Remove the given nodes and every descendant, in a single pass through the
+   * parent links.
+   */
+  private pruneIds(roots: Set<string>) {
+    if (roots.size === 0) return;
+    const remove = new Set(roots);
+
+    const byParent = new Map<string, string[]>();
+    for (const node of this.nodes.values()) {
+      if (node.parentId) {
+        const list = byParent.get(node.parentId) ?? [];
+        list.push(node.id);
+        byParent.set(node.parentId, list);
+      }
+    }
+    const queue = [...roots];
+    while (queue.length > 0) {
+      const id = queue.pop()!;
+      for (const child of byParent.get(id) ?? []) {
+        if (remove.add(child)) queue.push(child);
+      }
+    }
+
+    for (const id of remove) {
+      const node = this.nodes.get(id);
+      if (node?.parentId && !remove.has(node.parentId)) {
+        const parent = this.nodes.get(node.parentId);
+        if (parent?.children) {
+          parent.children = parent.children.filter((c) => c.id !== id);
+        }
+      }
+    }
+
+    const next = new Map<string, Node>();
+    for (const [key, node] of this.nodes) {
+      if (!remove.has(key)) next.set(key, node);
+    }
+    this.nodes = next;
+
+    if (this.currentNodeId && remove.has(this.currentNodeId)) {
+      let pid = this.nodes.get(this.currentNodeId)?.parentId ?? null;
+      while (pid && !this.nodes.has(pid)) {
+        pid = this.nodes.get(pid)?.parentId ?? null;
+      }
+      this.currentNodeId = pid;
+      if (pid) {
+        const node = this.nodes.get(pid);
+        if (node) setScanFocus(node.path);
+      }
+    }
+  }
+
+  // ---- selection ----
+
+  /** Add a node to the deletion queue via the backend user-mark path. */
+  async addManualCandidate(node: Node) {
+    if (!node.deletable) {
+      this.toast(t('toast.noDeletePermission', [node.name]));
       return;
     }
-    const id = `manual-${++this.manualSeq}-${Date.now().toString(36)}`;
-    // Detach from any prior aggregated insight.
-    if (n.insightId) this.removeMember(n.insightId, n.id);
-    n.insightId = id;
-    n.risk = 'review';
-    n.note = '手动加入';
-    this.manualMembers.set(id, n.id);
-    const next = new Set(this.selectedIds);
-    next.add(id);
-    this.selectedIds = next;
-    this.toast(`已将「${n.name}」加入删除队列`);
+    if (node.insightId) {
+      const next = new Set(this.selectedIds);
+      next.add(node.insightId);
+      this.selectedIds = next;
+      this.toast(t('toast.addedToQueue', [node.name]));
+      return;
+    }
+    try {
+      const finding = await markPath(node.path);
+      this.findings = [...this.findings, finding];
+      this.annotateNodes();
+      const next = new Set(this.selectedIds);
+      next.add(finding.id);
+      this.selectedIds = next;
+      this.toast(t('toast.addedToQueue', [node.name]));
+    } catch (error) {
+      this.toast(t('toast.cannotAdd', [node.name, String(error)]));
+    }
   }
 
   toggleSelected(id: string) {
@@ -409,94 +581,115 @@ class AppStore {
     this.selectedIds = next;
   }
 
-  // ---- cleanup -------------------------------------------------------------
+  // ---- history & routines refresh ----
 
-  async clean(automatic = false): Promise<number> {
-    const targets = this.candidates;
-    if (this.cleaning || targets.length === 0) return 0;
-    this.cleaning = true;
-
-    const paths: string[] = [];
-    for (const f of targets) {
-      const ids = this.memberIdsOf(f.id);
-      for (const nid of ids) {
-        const n = this.nodes.get(nid);
-        if (n) paths.push(n.path);
-      }
-    }
-
-    let results: DeleteResultItem[] = [];
+  async loadHistory() {
     try {
-      results = await moveToTrash(paths);
-    } catch (e) {
-      this.toast(`删除失败：${String(e)}`);
-      this.cleaning = false;
-      return 0;
+      this.history = await listHistory();
+    } catch {
+      // History is best-effort.
     }
+  }
 
-    let bytes = 0;
-    for (const r of results) {
-      if (r.ok) {
-        const target = targets.find((t) => this.memberIdsOf(t.id).some((nid) => this.nodes.get(nid)?.path === r.path));
-        const nid = [...this.nodes.values()].find((n) => n.path === r.path)?.id;
-        if (nid) bytes += this.nodes.get(nid)?.size ?? 0;
-        if (nid) this.pruneId(nid);
-        void target;
+  async loadRoutines() {
+    try {
+      this.routines = await listRoutines();
+    } catch {
+      // Routines are best-effort.
+    }
+  }
+
+  async acceptSuggestion(name: string, kind: string) {
+    try {
+      await acceptRoutineSuggestion(name, kind);
+      await this.loadRoutines();
+      this.routineSuggestions = this.routineSuggestions.filter(
+        (s) => !(s.name === name && s.kind === kind)
+      );
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
+    }
+  }
+
+  async dismissSuggestion(name: string, kind: string) {
+    try {
+      await dismissRoutineSuggestion(name, kind);
+      this.routineSuggestions = this.routineSuggestions.filter(
+        (s) => !(s.name === name && s.kind === kind)
+      );
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
+    }
+  }
+
+  async deleteSavedRoutine(id: string) {
+    try {
+      await deleteRoutine(id);
+      await this.loadRoutines();
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
+    }
+  }
+
+  async toggleSavedRoutineMode(id: string) {
+    try {
+      await toggleRoutineMode(id);
+      await this.loadRoutines();
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
+    }
+  }
+
+  async runSavedRoutine(id: string) {
+    try {
+      await runRoutine(id);
+      await this.loadHistory();
+      await this.loadRoutines();
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
+    }
+  }
+
+  // ---- automatic mode & monitor ----
+
+  async toggleAuto() {
+    const nextMode = this.autoOn ? 'notify' : 'auto';
+    try {
+      await setAutoCleanMode(nextMode);
+      this.autoOn = nextMode === 'auto';
+      if (this.autoOn) {
+        if (!this.monitorRunning) {
+          await startMonitor();
+          this.monitorRunning = true;
+        }
+        this.toast(t('toast.autoOn'));
       } else {
-        this.toast(`无法删除「${r.path}」：${r.error ?? ''}`);
+        this.toast(t('toast.autoOff'));
       }
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
     }
-
-    this.cleanedBytes += bytes;
-    this.selectedIds = new Set([...this.selectedIds].filter((id) => this.findings.some((f) => f.id === id)));
-    this.cleaning = false;
-    this.drawerOpen = false;
-    this.toast(
-      automatic
-        ? `自动整理完成，释放 ${fmt(bytes)}（文件在回收站，可恢复）`
-        : `已释放 ${fmt(bytes)}（文件在回收站，可恢复）`
-    );
-    return bytes;
   }
 
-  private memberIdsOf(findingId: string): string[] {
-    const ai = this.members.get(findingId as InsightKey);
-    if (ai) return [...ai];
-    const manual = this.manualMembers.get(findingId);
-    return manual ? [manual] : [];
+  async refreshMonitorStatus() {
+    try {
+      const status: MonitorStatusInfo = await monitorStatus();
+      this.autoOn = status.autoMode === 'auto';
+      this.monitorRunning = status.running;
+    } catch {
+      // Status is best-effort.
+    }
   }
 
-  /** Select every safe finding and clean — used by auto / routines. */
-  async runAuto() {
-    if (!this.autoOn) return;
-    const safe = this.findings.filter((f) => f.risk === 'safe').map((f) => f.id);
-    this.selectedIds = new Set(safe);
-    await this.clean(true);
+  // ---- focused directory watching ----
+
+  private watchCurrentDir() {
+    const path = this.currentNode?.path ?? this.scopePath;
+    if (!path) return;
+    watchFs(path, false).catch(() => undefined);
   }
 
-  async runRoutine(id: string) {
-    const r = this.routines.find((x) => x.id === id);
-    if (!r || this.runningRoutineId) return;
-    this.runningRoutineId = id;
-    this.toast(`「${r.title}」已启动`);
-    const safe = this.findings.filter((f) => f.risk === 'safe').map((f) => f.id);
-    this.selectedIds = new Set(safe);
-    await this.clean(true);
-    this.runningRoutineId = null;
-  }
-
-  deleteRoutine(id: string) {
-    const r = this.routines.find((x) => x.id === id);
-    if (!r) return;
-    this.routines = this.routines.filter((x) => x.id !== id);
-    this.toast(`已删除例行任务「${r.title}」`);
-  }
-
-  toggleAuto() {
-    this.autoOn = !this.autoOn;
-    if (this.autoOn) this.toast('自动整理已开启，安全项将按例行计划执行');
-    else this.toast('自动整理已关闭，仅保留提醒');
-  }
+  // ---- misc ----
 
   toast(message: string) {
     const id = ++this.toastSeq;
@@ -507,24 +700,13 @@ class AppStore {
   }
 }
 
-// ---- helpers ----------------------------------------------------------------
-
 function extOf(name: string): string {
   const lower = name.toLowerCase();
   const idx = lower.lastIndexOf('.');
   return idx >= 0 ? lower.slice(idx) : '';
 }
 
-function parentPath(path: string): string {
-  const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-  return idx > 0 ? path.slice(0, idx) : path;
-}
-
-function sumBy(findings: Finding[], risk: string): number {
-  return findings.filter((f) => f.risk === risk).reduce((s, f) => s + f.size, 0);
-}
-
-function fmt(bytes: number): string {
+function formatSize(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 

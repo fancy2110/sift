@@ -139,9 +139,7 @@ impl DecisionLog {
         let kept = self
             .entries
             .iter()
-            .filter(|entry| {
-                entry.fingerprint.key == key && entry.outcome == DecisionOutcome::Kept
-            })
+            .filter(|entry| entry.fingerprint.key == key && entry.outcome == DecisionOutcome::Kept)
             .count();
         let removed = self
             .entries
@@ -177,7 +175,11 @@ impl DecisionLog {
     /// a recurring task. A group that was removed more often than kept is
     /// suggested for removal; anything the user keeps more often is surfaced as
     /// a "keep" suggestion, which suppresses future prompts.
-    pub fn suggest_routines(&self, min_occurrences: usize, min_days: usize) -> Vec<RoutineSuggestion> {
+    pub fn suggest_routines(
+        &self,
+        min_occurrences: usize,
+        min_days: usize,
+    ) -> Vec<RoutineSuggestion> {
         let mut suggestions: Vec<RoutineSuggestion> = self
             .groups()
             .into_iter()
@@ -344,9 +346,27 @@ mod tests {
     fn counts_removals_and_keeps_by_fingerprint() {
         let fingerprint = PathFingerprint::new(NodeKey::from_bytes(b"node_modules"), 100, 0, true);
         let mut log = DecisionLog::new();
-        log.record(decision("node_modules", "rebuildableCache", DecisionOutcome::Removed, 0, 100));
-        log.record(decision("node_modules", "rebuildableCache", DecisionOutcome::Removed, 1, 100));
-        log.record(decision("target", "rebuildableCache", DecisionOutcome::Kept, 1, 200));
+        log.record(decision(
+            "node_modules",
+            "rebuildableCache",
+            DecisionOutcome::Removed,
+            0,
+            100,
+        ));
+        log.record(decision(
+            "node_modules",
+            "rebuildableCache",
+            DecisionOutcome::Removed,
+            1,
+            100,
+        ));
+        log.record(decision(
+            "target",
+            "rebuildableCache",
+            DecisionOutcome::Kept,
+            1,
+            200,
+        ));
 
         assert_eq!(log.times_removed(&fingerprint), 2);
         assert_eq!(log.times_kept(&fingerprint), 0);
@@ -503,8 +523,20 @@ mod tests {
     fn suggestions_are_ordered_by_impact() {
         let mut log = DecisionLog::new();
         for day in 0..3 {
-            log.record(decision("small", "archive", DecisionOutcome::Removed, day, 10));
-            log.record(decision("large", "archive", DecisionOutcome::Removed, day, 10_000));
+            log.record(decision(
+                "small",
+                "archive",
+                DecisionOutcome::Removed,
+                day,
+                10,
+            ));
+            log.record(decision(
+                "large",
+                "archive",
+                DecisionOutcome::Removed,
+                day,
+                10_000,
+            ));
         }
         let suggestions = log.suggest_routines(3, 2);
         assert_eq!(suggestions[0].name, "large");

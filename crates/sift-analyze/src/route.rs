@@ -233,18 +233,13 @@ mod tests {
     #[test]
     fn structural_families_never_leave_the_machine() {
         let spy = SpyRemote::default();
-        let router = RoutingAdjudicator::with_remote(
-            RuleAdjudicator::new(),
-            spy,
-            Guardrails::default(),
-        );
+        let router =
+            RoutingAdjudicator::with_remote(RuleAdjudicator::new(), spy, Guardrails::default());
 
         let batch = vec![
             candidate(CandidateKind::Trash, "dir.trash"),
             candidate(
-                CandidateKind::RebuildableCache {
-                    tool: "npm".into(),
-                },
+                CandidateKind::RebuildableCache { tool: "npm".into() },
                 "dir.node_modules",
             ),
             candidate(CandidateKind::StaleLargeFile, "file.stale_large"),
@@ -310,14 +305,16 @@ mod tests {
     #[test]
     fn verdicts_stay_aligned_with_their_candidate() {
         let spy = SpyRemote::default();
-        let router = RoutingAdjudicator::with_remote(
-            RuleAdjudicator::new(),
-            spy,
-            Guardrails::default(),
-        );
+        let router =
+            RoutingAdjudicator::with_remote(RuleAdjudicator::new(), spy, Guardrails::default());
         let mut a = candidate(CandidateKind::StaleLargeFile, "file.stale_large");
         a.key = NodeKey::from_bytes(b"first");
-        let mut b = candidate(CandidateKind::Archive { extension: "zip".into() }, "file.archive");
+        let mut b = candidate(
+            CandidateKind::Archive {
+                extension: "zip".into(),
+            },
+            "file.archive",
+        );
         b.key = NodeKey::from_bytes(b"second");
         let verdicts = router.adjudicate_batch(&[a.clone(), b.clone()], 0).unwrap();
         assert_eq!(verdicts.len(), 2);
