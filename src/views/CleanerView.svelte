@@ -20,7 +20,6 @@
   };
 
   let detailTab = $state<'candidates' | 'routines'>('candidates');
-  let focusId = $state<string | null>(null);
 
   let listCtx = $state<{ x: number; y: number; node: Node; inQueue: boolean } | null>(null);
 
@@ -67,10 +66,14 @@
     const ws = workspaceEl?.getBoundingClientRect();
     if (!ws) return;
     const width = Math.min(POPUP_MAX_W, ws.width - 24);
-    let left = cap.left - ws.left;
-    if (left + width > ws.width - 12) left = ws.width - 12 - width;
-    const height = Math.max(260, Math.min(POPUP_MAX_H, cap.top - ws.top - POPUP_GAP));
-    const top = cap.top - ws.top - POPUP_GAP - height;
+    let left = Math.max(0, Math.min(cap.left - ws.left, ws.width - width - 12));
+    // Prefer opening above the summary bar; when there is not enough room,
+    // clamp the frame fully inside the workspace instead of overflowing.
+    const above = cap.top - ws.top - POPUP_GAP;
+    const height = Math.max(220, Math.min(POPUP_MAX_H, above, ws.height - POPUP_GAP * 2));
+    let top = above - height;
+    if (top < 0) top = Math.min(above + POPUP_GAP, ws.height - height - POPUP_GAP);
+    top = Math.max(0, Math.min(top, ws.height - height));
     popupGeom = { left, top, width, height };
   }
 
@@ -193,11 +196,9 @@
               totalSize={store.currentNode?.size ?? 0}
               selectedIds={store.selectedIds}
               focusFinding={store.focusFinding}
-              focusId={focusId}
               onDrill={(id) => store.drillIntoId(id)}
               onToggleFinding={(fid) => store.toggleSelected(fid)}
               onAddToDelete={(n) => store.addManualCandidate(n)}
-              onHoverId={(id) => (focusId = id)}
             />
           {/key}
         </div>
@@ -217,12 +218,8 @@
               {@const fid = entry.insightId}
               <li
                 class="entry-row group flex items-center gap-2 rounded-lg px-2 py-[7px]"
-                class:row-focus={focusId === entry.id}
-                class:row-dim={!!focusId && focusId !== entry.id}
                 in:listIn={{ index: i }}
                 oncontextmenu={(e) => openListContext(e, entry)}
-                onmouseenter={() => (focusId = entry.id)}
-                onmouseleave={() => (focusId = null)}
               >
                 <span
                   class="flex h-[18px] w-[18px] shrink-0 items-center justify-center"
@@ -240,8 +237,6 @@
                   class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md text-left disabled:cursor-default"
                   disabled={!entry.isDir}
                   onclick={() => store.drillIntoId(entry.id)}
-                  onmouseenter={() => fid && (store.focusFinding = fid)}
-                  onmouseleave={() => (store.focusFinding = null)}
                 >
                   <span class="truncate text-[12.5px] {fid ? 'font-[600]' : 'font-[480]'}">{entry.name}</span>
                   {#if entry.isDir}
@@ -483,11 +478,14 @@
   .crumb:hover { background: color-mix(in oklch, var(--color-surface-2) 80%, transparent); color: var(--color-fg); }
   .crumb-current { color: var(--color-fg); }
 
-  .entry-row { transition: color 0.14s ease, background 0.16s ease, opacity 0.18s ease; }
-  .entry-row.row-focus {
-    background: color-mix(in oklch, var(--color-surface-2) 78%, transparent);
+  .entry-row {
+    transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background 0.16s ease;
   }
-  .entry-row.row-dim { opacity: 0.34; }
+  .entry-row:hover {
+    transform: translateY(-1px);
+    background: color-mix(in oklch, var(--color-surface-2) 55%, transparent);
+  }
+  .entry-row:active { transform: translateY(0); }
 
   .segmented { background: color-mix(in oklch, var(--color-bg) 55%, transparent); box-shadow: inset 0 0 0 1px var(--color-border); }
   .segmented-thumb {

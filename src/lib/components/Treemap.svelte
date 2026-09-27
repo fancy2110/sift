@@ -10,21 +10,17 @@
     totalSize,
     selectedIds = new Set<string>(),
     focusFinding = null,
-    focusId = null,
     onDrill,
     onToggleFinding,
-    onAddToDelete,
-    onHoverId
+    onAddToDelete
   }: {
     entries: Node[];
     totalSize: number;
     selectedIds?: Set<string>;
     focusFinding?: string | null;
-    focusId?: string | null;
     onDrill?: (id: string) => void;
     onToggleFinding?: (findingId: string) => void;
     onAddToDelete?: (node: Node) => void;
-    onHoverId?: (id: string | null) => void;
   } = $props();
 
   const OTHER_KEY = '__other__';
@@ -333,7 +329,6 @@
   }
 
   function isFocusTile(t: Tile): boolean {
-    if (focusId) return focusId === OTHER_KEY ? !!t.other : t.key === focusId;
     return hoverKey === t.key;
   }
 
@@ -355,6 +350,8 @@
       query = '';
       return;
     }
+    // A click on a finding toggles its selection; folders that also carry a
+    // finding can still be entered via dblclick (see drillTile).
     if (t.findingId) {
       onToggleFinding?.(t.findingId);
       return;
@@ -362,10 +359,18 @@
     if (t.hasChildren) onDrill?.(t.node.id);
   }
 
+  function drillTile(t: Tile) {
+    if (t.other) return;
+    if (t.hasChildren) onDrill?.(t.node.id);
+  }
+
   function onKeyDown(t: Tile, event: KeyboardEvent) {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       click(t);
+    } else if (event.key === 'ArrowRight' && t.hasChildren && !t.other) {
+      event.preventDefault();
+      drillTile(t);
     }
   }
 
@@ -380,10 +385,6 @@
 
   function dimmed(t: Tile): boolean {
     if (focusFinding) return t.findingId !== focusFinding;
-    if (focusId) {
-      if (focusId === OTHER_KEY) return !t.other;
-      return t.key !== focusId;
-    }
     const h = hovered;
     if (!h) return false;
     return h.key !== t.key;
@@ -491,23 +492,22 @@
             t.other
               ? `其他 ${t.count} 项，共 ${formatSize(t.node.size)}，查看明细`
               : t.findingId
-                ? `${t.node.name}，${formatSize(t.node.size)}，${isChosen(t) ? '已选，点击移出' : '点击加入清理'}`
+                ? `${t.node.name}，${formatSize(t.node.size)}，${isChosen(t) ? '已选，点击移出' : '点击加入清理'}${t.hasChildren ? '，双击进入文件夹' : ''}`
                 : t.hasChildren
                   ? `${t.node.name}，${formatSize(t.node.size)}，下钻`
                   : undefined
           }
           onclick={() => click(t)}
+          ondblclick={() => drillTile(t)}
           oncontextmenu={(e) => openContextMenu(t, e)}
           onkeydown={(e) => onKeyDown(t, e)}
           onmousemove={(e) => {
             hoverKey = t.key;
             const r = stage.getBoundingClientRect();
             mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
-            onHoverId?.(t.other ? OTHER_KEY : t.node.id);
           }}
           onmouseleave={() => {
             hoverKey = null;
-            onHoverId?.(null);
           }}
         ></rect>
 
