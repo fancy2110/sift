@@ -164,8 +164,8 @@
     border: 1px solid var(--color-border-strong);
     background: color-mix(in oklch, var(--color-surface) 96%, var(--color-bg));
     box-shadow:
-      0 1px 0 color-mix(in oklch, white 6%, transparent) inset,
-      0 40px 90px -30px black;
+      0 1px 0 color-mix(in oklch, var(--color-sheen) 6%, transparent) inset,
+      0 40px 90px -30px var(--color-shadow);
     overflow: hidden;
   }
   .set-head {
@@ -248,8 +248,8 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 2px 5px -1px oklch(0% 0 0 / 0.5);
+    background: var(--color-sheen);
+    box-shadow: 0 2px 5px -1px color-mix(in oklch, var(--color-shadow) 60%, transparent);
     transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .switch.switch-on .switch-knob {
@@ -323,8 +323,8 @@
     height: 38px;
     border: none;
     border-radius: 11px;
-    background: #f4f4f6;
-    color: #141418;
+    background: var(--color-cta-bg);
+    color: var(--color-cta-fg);
     font-size: 13px;
     font-weight: 620;
     cursor: default;

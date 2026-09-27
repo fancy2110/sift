@@ -211,10 +211,10 @@
     border: 1px solid var(--color-border);
     background: linear-gradient(
       180deg,
-      color-mix(in oklch, var(--color-surface) 100%, white 1.2%),
+      color-mix(in oklch, var(--color-surface) 100%, var(--color-sheen) 1.2%),
       var(--color-surface)
     );
-    box-shadow: 0 18px 40px -28px black;
+    box-shadow: 0 18px 40px -28px var(--color-shadow);
   }
   .kpi-label {
     font-family: var(--font-mono);
@@ -244,10 +244,10 @@
     border: 1px solid var(--color-border);
     background: linear-gradient(
       180deg,
-      color-mix(in oklch, var(--color-surface) 100%, white 1%),
+      color-mix(in oklch, var(--color-surface) 100%, var(--color-sheen) 1%),
       var(--color-surface)
     );
-    box-shadow: 0 18px 40px -28px black;
+    box-shadow: 0 18px 40px -28px var(--color-shadow);
   }
   .panel-head {
     display: flex;

@@ -384,7 +384,11 @@
     font-weight: 650;
     line-height: 1;
     letter-spacing: -0.04em;
-    background: linear-gradient(180deg, #fff 20%, color-mix(in oklch, #fff 62%, var(--color-bg)));
+    background: linear-gradient(
+      180deg,
+      var(--color-fg) 20%,
+      color-mix(in oklch, var(--color-fg) 62%, var(--color-bg))
+    );
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
@@ -416,21 +420,21 @@
     padding: 0 30px;
     border: none;
     border-radius: 14px;
-    background: #f4f4f6;
-    color: #141418;
+    background: var(--color-cta-bg);
+    color: var(--color-cta-fg);
     font-size: 14px;
     font-weight: 600;
     cursor: default;
     box-shadow:
-      0 1px 0 rgba(255, 255, 255, 0.6) inset,
-      0 18px 40px -16px rgba(0, 0, 0, 0.8);
+      0 1px 0 color-mix(in oklch, var(--color-sheen) 60%, transparent) inset,
+      0 18px 40px -16px var(--color-shadow);
     transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.16s ease;
   }
   .hub-cta:hover {
     transform: translateY(-2px);
     box-shadow:
-      0 1px 0 rgba(255, 255, 255, 0.6) inset,
-      0 26px 52px -18px rgba(0, 0, 0, 0.85);
+      0 1px 0 color-mix(in oklch, var(--color-sheen) 60%, transparent) inset,
+      0 26px 52px -18px var(--color-shadow);
   }
   .hub-cta:active {
     transform: translateY(0);
@@ -462,12 +466,12 @@
     border: 1px solid color-mix(in oklch, var(--color-border-strong) 45%, transparent);
     background: linear-gradient(
       180deg,
-      color-mix(in oklch, var(--color-surface) 88%, white 1.2%),
-      color-mix(in oklch, var(--color-surface) 94%, black 8%)
+      color-mix(in oklch, var(--color-surface) 88%, var(--color-sheen) 1.2%),
+      color-mix(in oklch, var(--color-surface) 94%, var(--color-shadow) 8%)
     );
     box-shadow:
-      0 1px 0 color-mix(in oklch, white 4%, transparent) inset,
-      0 22px 46px -26px black;
+      0 1px 0 color-mix(in oklch, var(--color-sheen) 4%, transparent) inset,
+      0 22px 46px -26px var(--color-shadow);
     cursor: default;
     text-align: left;
     animation: card-glow 11s ease-in-out infinite;
@@ -499,8 +503,8 @@
   .hub-card:hover {
     border-color: color-mix(in oklch, var(--color-border-strong) 75%, transparent);
     box-shadow:
-      0 1px 0 color-mix(in oklch, white 6%, transparent) inset,
-      0 30px 58px -26px black;
+      0 1px 0 color-mix(in oklch, var(--color-sheen) 6%, transparent) inset,
+      0 30px 58px -26px var(--color-shadow);
     transform: translateY(-2px);
   }
   .hub-card:active {

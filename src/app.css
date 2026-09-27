@@ -1,7 +1,11 @@
 @import 'tailwindcss';
 
+/*
+  Semantic tokens — light scheme is the :root default;
+  dark overrides kick in when the OS requests it.
+  @theme stays so Tailwind registers the utilities (bg-bg, text-fg, …).
+*/
 @theme {
-  /* surfaces — deep ink, faint blue cast */
   --color-bg: oklch(0.138 0.009 255);
   --color-surface: oklch(0.182 0.011 255);
   --color-surface-2: oklch(0.225 0.012 255);
@@ -9,34 +13,33 @@
   --color-border: oklch(0.285 0.013 255);
   --color-border-strong: oklch(0.37 0.014 255);
 
-  /* text */
   --color-fg: oklch(0.94 0.004 255);
   --color-muted: oklch(0.7 0.009 255);
   --color-faint: oklch(0.52 0.012 255);
 
-  /* single accent — signal azure */
   --color-accent: oklch(0.65 0.16 250);
   --color-accent-hi: oklch(0.72 0.15 250);
   --color-accent-deep: oklch(0.47 0.14 252);
   --color-accent-contrast: oklch(0.985 0.005 250);
 
-  /* state */
   --color-danger: oklch(0.67 0.19 25);
   --color-danger-hi: oklch(0.73 0.18 25);
   --color-warn: oklch(0.77 0.14 75);
   --color-ok: oklch(0.75 0.155 150);
   --color-violet: oklch(0.68 0.13 300);
 
-  /* chart categorical encoding — muted jewel tones */
-  --color-cat-1: oklch(0.64 0.15 248); /* azure */
-  --color-cat-2: oklch(0.68 0.12 196); /* teal */
-  --color-cat-3: oklch(0.74 0.125 78); /* gold */
-  --color-cat-4: oklch(0.66 0.17 25);  /* coral */
-  --color-cat-5: oklch(0.67 0.125 302);/* violet */
-  --color-cat-6: oklch(0.69 0.15 150); /* emerald */
-  --color-cat-7: oklch(0.68 0.15 350); /* rose */
-  --color-cat-8: oklch(0.58 0.02 255); /* slate */
-  --color-cat-other: oklch(0.36 0.012 255); /* aggregated long tail */
+  --color-cat-1: oklch(0.64 0.15 248);
+  --color-cat-2: oklch(0.68 0.12 196);
+  --color-cat-3: oklch(0.74 0.125 78);
+  --color-cat-4: oklch(0.66 0.17 25);
+  --color-cat-5: oklch(0.67 0.125 302);
+  --color-cat-6: oklch(0.69 0.15 150);
+  --color-cat-7: oklch(0.68 0.15 350);
+  --color-cat-8: oklch(0.58 0.02 255);
+  --color-cat-other: oklch(0.36 0.012 255);
+
+  /* shadow dye — black in dark mode, soft neutral in light */
+  --color-shadow: oklch(0% 0 0 / 0.85);
 
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
     'Helvetica Neue', 'Segoe UI', sans-serif;
@@ -45,6 +48,95 @@
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
 
   --radius-card: 16px;
+}
+
+/* Light scheme — follows the system appearance */
+:root,
+:host {
+  color-scheme: light;
+
+  --color-bg: oklch(0.975 0.003 255);
+  --color-surface: oklch(1 0 0);
+  --color-surface-2: oklch(0.955 0.004 255);
+  --color-surface-3: oklch(0.915 0.006 255);
+  --color-border: oklch(0.905 0.006 255);
+  --color-border-strong: oklch(0.825 0.008 255);
+
+  --color-fg: oklch(0.21 0.012 255);
+  --color-muted: oklch(0.46 0.013 255);
+  --color-faint: oklch(0.59 0.012 255);
+
+  --color-accent: oklch(0.53 0.17 252);
+  --color-accent-hi: oklch(0.47 0.17 253);
+  --color-accent-deep: oklch(0.6 0.15 250);
+  --color-accent-contrast: oklch(0.985 0.005 250);
+
+  --color-danger: oklch(0.55 0.2 25);
+  --color-danger-hi: oklch(0.49 0.2 25);
+  --color-warn: oklch(0.6 0.13 70);
+  --color-ok: oklch(0.56 0.14 150);
+  --color-violet: oklch(0.54 0.16 300);
+
+  --color-cat-1: oklch(0.55 0.17 250);
+  --color-cat-2: oklch(0.55 0.11 200);
+  --color-cat-3: oklch(0.56 0.12 72);
+  --color-cat-4: oklch(0.55 0.18 25);
+  --color-cat-5: oklch(0.54 0.16 300);
+  --color-cat-6: oklch(0.55 0.14 152);
+  --color-cat-7: oklch(0.55 0.16 350);
+  --color-cat-8: oklch(0.52 0.02 255);
+  --color-cat-other: oklch(0.72 0.01 255);
+
+  --color-sheen: oklch(1 0 0);
+  --color-cta-bg: oklch(0.23 0.012 255);
+  --color-cta-fg: oklch(0.98 0.003 255);
+
+  --color-shadow: oklch(0.32 0.02 255 / 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root,
+  :host {
+    color-scheme: dark;
+
+    --color-bg: oklch(0.138 0.009 255);
+    --color-surface: oklch(0.182 0.011 255);
+    --color-surface-2: oklch(0.225 0.012 255);
+    --color-surface-3: oklch(0.272 0.013 255);
+    --color-border: oklch(0.285 0.013 255);
+    --color-border-strong: oklch(0.37 0.014 255);
+
+    --color-fg: oklch(0.94 0.004 255);
+    --color-muted: oklch(0.7 0.009 255);
+    --color-faint: oklch(0.52 0.012 255);
+
+    --color-accent: oklch(0.65 0.16 250);
+    --color-accent-hi: oklch(0.72 0.15 250);
+    --color-accent-deep: oklch(0.47 0.14 252);
+    --color-accent-contrast: oklch(0.985 0.005 250);
+
+    --color-danger: oklch(0.67 0.19 25);
+    --color-danger-hi: oklch(0.73 0.18 25);
+    --color-warn: oklch(0.77 0.14 75);
+    --color-ok: oklch(0.75 0.155 150);
+    --color-violet: oklch(0.68 0.13 300);
+
+    --color-cat-1: oklch(0.64 0.15 248);
+    --color-cat-2: oklch(0.68 0.12 196);
+    --color-cat-3: oklch(0.74 0.125 78);
+    --color-cat-4: oklch(0.66 0.17 25);
+    --color-cat-5: oklch(0.67 0.125 302);
+    --color-cat-6: oklch(0.69 0.15 150);
+    --color-cat-7: oklch(0.68 0.15 350);
+    --color-cat-8: oklch(0.58 0.02 255);
+    --color-cat-other: oklch(0.36 0.012 255);
+
+    --color-sheen: oklch(1 0 0);
+    --color-cta-bg: oklch(0.955 0.005 255);
+    --color-cta-fg: oklch(0.16 0.01 255);
+
+    --color-shadow: oklch(0% 0 0 / 0.85);
+  }
 }
 
 html,
@@ -121,8 +213,8 @@ body::before {
     backdrop-filter: blur(24px) saturate(1.5);
     -webkit-backdrop-filter: blur(24px) saturate(1.5);
     box-shadow:
-      0 1px 0 color-mix(in oklch, white 7%, transparent) inset,
-      0 24px 60px -28px black;
+      0 1px 0 color-mix(in oklch, var(--color-sheen) 7%, transparent) inset,
+      0 24px 60px -28px var(--color-shadow);
   }
 
   .glass-strong {
@@ -131,22 +223,22 @@ body::before {
     backdrop-filter: blur(32px) saturate(1.6);
     -webkit-backdrop-filter: blur(32px) saturate(1.6);
     box-shadow:
-      0 1px 0 color-mix(in oklch, white 8%, transparent) inset,
-      0 40px 90px -30px black;
+      0 1px 0 color-mix(in oklch, var(--color-sheen) 8%, transparent) inset,
+      0 40px 90px -30px var(--color-shadow);
   }
 
   .card {
     position: relative;
     background: linear-gradient(
       180deg,
-      color-mix(in oklch, var(--color-surface) 100%, white 1.5%),
+      color-mix(in oklch, var(--color-surface) 100%, var(--color-sheen) 1.5%),
       var(--color-surface)
     );
     border: 1px solid var(--color-border);
     border-radius: var(--radius-card);
     box-shadow:
-      0 1px 0 color-mix(in oklch, white 5%, transparent) inset,
-      0 18px 40px -24px black;
+      0 1px 0 color-mix(in oklch, var(--color-sheen) 5%, transparent) inset,
+      0 18px 40px -24px var(--color-shadow);
   }
 
   .btn {

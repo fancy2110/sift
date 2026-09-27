@@ -1,5 +1,4 @@
 <script lang="ts">
-  import TitleBar from './lib/components/TitleBar.svelte';
   import Toasts from './lib/components/Toasts.svelte';
   import HomeView from './views/HomeView.svelte';
   import DashboardView from './views/DashboardView.svelte';
@@ -12,7 +11,6 @@
 </script>
 
 <div class="flex h-full flex-col">
-  <TitleBar />
   <main class="relative min-h-0 flex-1">
     {#key store.view}
       {#if store.view === 'home'}

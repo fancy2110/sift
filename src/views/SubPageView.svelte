@@ -442,14 +442,14 @@
     padding: 0 18px;
     border: none;
     border-radius: 10px;
-    background: #f4f4f6;
-    color: #141418;
+    background: var(--color-cta-bg);
+    color: var(--color-cta-fg);
     font-size: 13px;
     font-weight: 620;
     cursor: default;
     box-shadow:
-      0 1px 0 rgba(255, 255, 255, 0.6) inset,
-      0 14px 30px -14px rgba(0, 0, 0, 0.8);
+      0 1px 0 color-mix(in oklch, var(--color-sheen) 60%, transparent) inset,
+      0 14px 30px -14px var(--color-shadow);
   }
   .sp-confirm:disabled {
     opacity: 0.45;
@@ -592,7 +592,7 @@
   .check-box.check-on {
     background: var(--color-violet);
     border-color: var(--color-violet);
-    color: #fff;
+    color: var(--color-accent-contrast);
     box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 22%, transparent);
   }
   .check-box :global(.check-icon) {
@@ -619,8 +619,8 @@
     border: 1px solid var(--color-border);
     background: linear-gradient(
       180deg,
-      color-mix(in oklch, var(--color-surface) 96%, white 1%),
-      color-mix(in oklch, var(--color-surface) 98%, black 4%)
+      color-mix(in oklch, var(--color-surface) 96%, var(--color-sheen) 1%),
+      color-mix(in oklch, var(--color-surface) 98%, var(--color-shadow) 4%)
     );
   }
   .smart-card-off {
@@ -930,8 +930,8 @@
     border: 1px solid var(--color-border);
     background: linear-gradient(
       180deg,
-      color-mix(in oklch, var(--color-surface) 96%, white 1%),
-      color-mix(in oklch, var(--color-surface) 98%, black 4%)
+      color-mix(in oklch, var(--color-surface) 96%, var(--color-sheen) 1%),
+      color-mix(in oklch, var(--color-surface) 98%, var(--color-shadow) 4%)
     );
   }
   .hist-status {
@@ -1009,6 +1009,6 @@
     font-family: var(--font-mono);
     font-size: 9.5px;
     letter-spacing: 0.14em;
-    color: color-mix(in oklch, var(--color-ok) 80%, white);
+    color: color-mix(in oklch, var(--color-ok) 80%, var(--color-sheen));
   }
 </style>
