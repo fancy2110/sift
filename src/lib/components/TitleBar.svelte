@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { store } from '../store.svelte';
 
   let {
@@ -9,6 +10,30 @@
 
   // Native window controls are overlaid on top of the web view:
   //  macOS → traffic lights on the left; Windows → caption buttons on the right.
+  function diag(s: string) {
+    invoke('diag_log', { message: '[TB] ' + s }).catch(() => undefined);
+  }
+
+  function handleAuto() {
+    diag('auto-click:before:' + store.autoOn);
+    try {
+      store.toggleAuto();
+      diag('auto-click:after:' + store.autoOn);
+    } catch (e) {
+      diag('auto-ERR:' + String(e));
+    }
+  }
+
+  async function handleScan() {
+    diag('scan-click:vid=' + store.currentVolumeId + ':scanning=' + store.scanning);
+    try {
+      await onScan();
+      diag('scan-returned:scanning=' + store.scanning);
+    } catch (e) {
+      diag('scan-ERR:' + String(e));
+    }
+  }
+
   const platform = (() => {
     const p = ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform ?? '').toLowerCase();
     if (p.includes('mac')) return 'mac' as const;
@@ -40,7 +65,7 @@
       type="button"
       class="switch"
       class:on={store.autoOn}
-      onclick={() => store.toggleAuto()}
+      onclick={handleAuto}
       role="switch"
       aria-checked={store.autoOn}
       aria-label="自动整理"
@@ -52,7 +77,7 @@
     <button
       type="button"
       class="btn btn-primary btn-sm"
-      onclick={onScan}
+      onclick={handleScan}
       disabled={scanning}
       data-od-id="scan-button"
     >

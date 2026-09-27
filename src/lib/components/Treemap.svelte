@@ -9,7 +9,6 @@
     entries,
     totalSize,
     selectedIds = new Set<string>(),
-    focusFinding = null,
     onDrill,
     onToggleFinding,
     onAddToDelete
@@ -17,7 +16,6 @@
     entries: Node[];
     totalSize: number;
     selectedIds?: Set<string>;
-    focusFinding?: string | null;
     onDrill?: (id: string) => void;
     onToggleFinding?: (findingId: string) => void;
     onAddToDelete?: (node: Node) => void;
@@ -383,13 +381,6 @@
     }
   }
 
-  function dimmed(t: Tile): boolean {
-    if (focusFinding) return t.findingId !== focusFinding;
-    const h = hovered;
-    if (!h) return false;
-    return h.key !== t.key;
-  }
-
   const displayPct = $derived(
     hovered ? Math.min(100, (hovered.node.size / (totalSize || 1)) * 100) : 0
   );
@@ -485,7 +476,6 @@
           width={t.w}
           height={t.h}
           style={rectStyle(t)}
-          opacity={dimmed(t) ? 0.28 : 1}
           role={t.other || t.findingId || t.hasChildren ? 'button' : undefined}
           tabindex={t.other || t.findingId || t.hasChildren ? 0 : undefined}
           aria-label={

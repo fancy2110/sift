@@ -195,7 +195,6 @@
               entries={store.listEntries}
               totalSize={store.currentNode?.size ?? 0}
               selectedIds={store.selectedIds}
-              focusFinding={store.focusFinding}
               onDrill={(id) => store.drillIntoId(id)}
               onToggleFinding={(fid) => store.toggleSelected(fid)}
               onAddToDelete={(n) => store.addManualCandidate(n)}
@@ -346,8 +345,6 @@
                     class="finding-row flex items-start gap-3 rounded-lg px-2.5 py-2.5"
                     class:finding-off={!checked}
                     in:listIn={{ index: i, base: 120 }}
-                    onmouseenter={() => (store.focusFinding = item.id)}
-                    onmouseleave={() => (store.focusFinding = null)}
                   >
                     <button type="button" role="checkbox" aria-checked={checked} onclick={() => store.toggleSelected(item.id)} class="check-box mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border" class:check-on={checked}>
                       <Icon name="check" size={12} stroke={2.4} class="check-icon" />

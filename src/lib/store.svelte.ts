@@ -57,7 +57,6 @@ class AppStore {
   cleaning = $state(false);
 
   drawerOpen = $state(false);
-  focusFinding = $state<string | null>(null);
 
   /** Member node ids per aggregated AI insight. */
   private members = $state<Map<InsightKey, Set<string>>>(new Map());
