@@ -25,14 +25,6 @@ export function cancelScan(): Promise<void> {
   return invoke('cancel_scan');
 }
 
-export function pauseScan(): Promise<void> {
-  return invoke('pause_scan');
-}
-
-export function resumeScan(): Promise<void> {
-  return invoke('resume_scan');
-}
-
 export function setScanFocus(focus: string): Promise<void> {
   return invoke('set_scan_focus', { focus });
 }

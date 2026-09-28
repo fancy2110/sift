@@ -10,75 +10,70 @@
 <body>
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- macOS continuous-corner approximation -->
-    <path id="squircle" d="M512 6
-      C838 6 1018 186 1018 512
-      C1018 838 838 1018 512 1018
-      C186 1018 6 838 6 512
-      C6 186 186 6 512 6 Z"/>
+    <!-- macOS icon geometry: ~185/1024 continuous corner, distinctly square -->
+    <path id="squircle" d="M185 0
+      H839 A185 185 0 0 1 1024 185
+      V839 A185 185 0 0 1 839 1024
+      H185 A185 185 0 0 1 0 839
+      V185 A185 185 0 0 1 185 0 Z"/>
     <clipPath id="iconClip"><use href="#squircle"/></clipPath>
 
-    <linearGradient id="bgGrad" x1="140" y1="60" x2="880" y2="980" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#211f2e"/>
-      <stop offset="0.55" stop-color="#16151e"/>
-      <stop offset="1" stop-color="#0f0e15"/>
+    <linearGradient id="bgGrad" x1="160" y1="0" x2="880" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#242231"/>
+      <stop offset="0.55" stop-color="#17151f"/>
+      <stop offset="1" stop-color="#100f17"/>
     </linearGradient>
     <radialGradient id="glowViolet" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
-      gradientTransform="translate(790 190) rotate(132) scale(560)">
-      <stop offset="0" stop-color="#7c5cf0" stop-opacity="0.34" />
-      <stop offset="1" stop-color="#7c5cf0" stop-opacity="0" />
-    </radialGradient>
-    <radialGradient id="glowBlue" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
-      gradientTransform="translate(230 880) rotate(-52) scale(520)">
-      <stop offset="0" stop-color="#3b7be8" stop-opacity="0.22" />
-      <stop offset="1" stop-color="#3b7be8" stop-opacity="0" />
+      gradientTransform="translate(800 170) rotate(132) scale(600)">
+      <stop offset="0" stop-color="#7c5cf0" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#7c5cf0" stop-opacity="0"/>
     </radialGradient>
 
-    <linearGradient id="gBlue" x1="0" y1="0" x2="360" y2="1024" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#6f97f2" />
-      <stop offset="1" stop-color="#3a63d0" />
-    </linearGradient>
-    <linearGradient id="gViolet" x1="360" y1="0" x2="1024" y2="300" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#b46ee0" />
-      <stop offset="1" stop-color="#8344c4" />
-    </linearGradient>
-    <linearGradient id="gTeal" x1="360" y1="300" x2="692" y2="1024" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#58c3d4" />
-      <stop offset="1" stop-color="#2a93ac" />
-    </linearGradient>
-    <linearGradient id="gIndigo" x1="692" y1="300" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#9a82f0" />
-      <stop offset="1" stop-color="#6550d6" />
+    <!-- capacity fill: one decisive accent gradient -->
+    <linearGradient id="fillGrad" x1="232" y1="450" x2="232" y2="574" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#aab6ff"/>
+      <stop offset="1" stop-color="#5d6ae6"/>
     </linearGradient>
 
     <linearGradient id="sheen" x1="512" y1="0" x2="512" y2="560" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.12" />
-      <stop offset="0.4" stop-color="#ffffff" stop-opacity="0.025" />
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.015"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
   </defs>
 
   <g clip-path="url(#iconClip)">
-    <!-- Treemap blocks: edge to edge, no gaps, no background fill -->
-    <rect x="0" y="0" width="360" height="1024" fill="url(#gBlue)" />
-    <rect x="360" y="0" width="664" height="300" fill="url(#gViolet)" />
-    <rect x="360" y="300" width="332" height="724" fill="url(#gTeal)" />
-    <rect x="692" y="300" width="332" height="724" fill="url(#gIndigo)" />
+    <rect width="1024" height="1024" fill="url(#bgGrad)"/>
+    <rect width="1024" height="1024" fill="url(#glowViolet)"/>
 
-    <!-- AI sparkle on the main block -->
-    <path d="M180 440
-      C186 486 206 506 252 512
-      C206 518 186 538 180 584
-      C174 538 154 518 108 512
-      C154 506 174 486 180 440 Z"
-      fill="#ffffff" fill-opacity="0.92" />
+    <!-- capacity track -->
+    <rect x="232" y="450" width="560" height="124" rx="62"
+      fill="#ffffff" fill-opacity="0.10"/>
 
-    <!-- top sheen across the whole icon -->
-    <rect width="1024" height="1024" fill="url(#sheen)" />
+    <!-- occupied 60%, clipped to the capsule so the right edge is a clean stop -->
+    <clipPath id="barClip"><rect x="232" y="450" width="560" height="124" rx="62"/></clipPath>
+    <g clip-path="url(#barClip)">
+      <rect x="232" y="450" width="336" height="124" fill="url(#fillGrad)"/>
+    </g>
+
+    <!-- AI spark seated at the fill tip: the single focal mark -->
+    <path d="M616 372
+      C623 402 642 421 672 428
+      C642 435 623 454 616 484
+      C609 454 590 435 560 428
+      C590 421 609 402 616 372 Z"
+      fill="#ffffff"/>
+    <path d="M616 372
+      C623 402 642 421 672 428
+      C642 435 623 454 616 484
+      C609 454 590 435 560 428
+      C590 421 609 402 616 372 Z"
+      fill="#7c5cf0" fill-opacity="0.35"/>
+
+    <rect width="1024" height="1024" fill="url(#sheen)"/>
   </g>
 
-  <!-- crisp edge: hairline inner stroke following the squircle -->
-  <use href="#squircle" stroke="#ffffff" stroke-opacity="0.10" stroke-width="2" />
+  <use href="#squircle" stroke="#ffffff" stroke-opacity="0.07" stroke-width="2"/>
 </svg>
 </body>
 </html>

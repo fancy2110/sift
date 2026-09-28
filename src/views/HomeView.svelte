@@ -52,11 +52,7 @@
   });
 
   async function handleCta() {
-    if (store.scanning) {
-      if (store.scanPaused) await store.resumeCurrentScan();
-      else await store.pauseCurrentScan();
-      return;
-    }
+    if (store.scanning) return;
     if (store.hasFindings) {
       store.goSub('smart');
       return;
@@ -92,17 +88,12 @@
     <div
       class="ring-stage"
       class:scanning={store.scanning}
-      class:paused={store.scanPaused}
       in:fade={{ duration: 640, delay: 120 }}
       style:width={`${ringW}px`}
       aria-hidden="true"
     >
       {#if store.scanning}
-        <svg
-          class="prog-ring"
-          class:spin-slow={!store.scanPaused}
-          viewBox="0 0 200 200"
-        >
+        <svg class="prog-ring spin-slow" viewBox="0 0 200 200">
           <circle class="prog-track" cx="100" cy="100" r="92" />
           <circle
             class="prog-arc"
@@ -154,11 +145,7 @@
 
     <div class="hub-stack" bind:this={stackEl}>
     <p class="hub-eyebrow" in:fade={{ duration: 480, delay: 120 }}>
-      {store.scanPaused
-        ? t('home.paused')
-        : store.scanning
-          ? t('home.scanning')
-          : t('home.total')}
+      {store.scanning ? t('home.scanning') : t('home.total')}
     </p>
     {#if store.scanning}
       <h1 class="hub-total num">
@@ -171,35 +158,19 @@
     {/if}
     <p
       class="hub-state"
-      class:state-scanning={store.scanning && !store.scanPaused}
-      class:state-paused={store.scanPaused}
+      class:state-scanning={store.scanning}
     >
       <span class="state-dot"></span>
-      {store.scanPaused
-        ? t('home.statePaused')
-        : store.scanning
-          ? t('home.stateScanning')
-          : t('home.stateReady')}
+      {store.scanning ? t('home.stateScanning') : t('home.stateReady')}
     </p>
 
     <button
       class="hub-cta"
-      class:cta-quiet={store.scanPaused}
       onclick={handleCta}
+      disabled={store.scanning}
       in:scale={{ duration: 480, delay: 380, easing: cubicOut }}
     >
-      {#if store.scanning}
-        {#if store.scanPaused}
-          <Icon name="play" size={14} />
-          {t('home.ctaResume')}
-        {:else}
-          <Icon name="pause" size={14} />
-          {t('home.ctaPause')}
-        {/if}
-      {:else}
-        {t('home.ctaScan')}
-        <Icon name="arrowRight" size={15} />
-      {/if}
+      {store.scanning ? t('home.ctaScanning') : t('home.ctaScan')}
     </button>
     </div>
   </div>
@@ -398,23 +369,6 @@
     background: var(--color-violet);
     box-shadow: 0 0 8px var(--color-violet);
     animation: state-pulse 1.1s ease-in-out infinite;
-  }
-  .state-paused {
-    color: var(--color-faint);
-  }
-  .state-paused .state-dot {
-    background: var(--color-faint);
-    box-shadow: none;
-  }
-  .hub-cta.cta-quiet {
-    background: transparent;
-    color: var(--color-fg);
-    border: 1px solid var(--color-border);
-    box-shadow: none;
-  }
-  .hub-cta.cta-quiet:hover {
-    background: var(--color-sheen);
-    border-color: var(--color-border);
   }
   @keyframes state-pulse {
     50% {

@@ -8,7 +8,7 @@
 //! `sift-scan` / `sift-core`; this file only knows how to be a Tauri command.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -73,6 +73,11 @@ pub struct BatchUpdate {
 #[derive(Default)]
 pub struct ScanManager {
     running: AtomicBool,
+    paused: AtomicBool,
+    /// Latest file count reported by the running scan, for the tray tooltip.
+    files: AtomicU64,
+    /// Whether a tray-menu refresh thread is currently running.
+    menu_refreshing: AtomicBool,
     pub control: Mutex<Option<ScanControl>>,
     last_tree: Mutex<Option<Arc<Mutex<ScanTree>>>>,
     last_root: Mutex<Option<PathBuf>>,
@@ -86,6 +91,57 @@ impl ScanManager {
 
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
+    }
+
+    /// Whether the running scan is currently paused.
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    /// Latest file count reported by the running scan.
+    pub fn file_count(&self) -> u64 {
+        self.files.load(Ordering::SeqCst)
+    }
+
+    /// Remember a progress file count from the event pump.
+    pub fn set_file_count(&self, files: u64) {
+        self.files.store(files, Ordering::SeqCst);
+    }
+
+    /// Pause the scan running on this manager.
+    pub fn pause_current(&self) {
+        if let Some(control) = self.control.lock().unwrap().as_ref() {
+            control.pause();
+        }
+        self.paused.store(true, Ordering::SeqCst);
+    }
+
+    /// Resume the scan running on this manager.
+    pub fn resume_current(&self) {
+        if let Some(control) = self.control.lock().unwrap().as_ref() {
+            control.resume();
+        }
+        self.paused.store(false, Ordering::SeqCst);
+    }
+
+    /// Cancel the running scan.
+    pub fn cancel_current(&self) {
+        if let Some(control) = self.control.lock().unwrap().as_ref() {
+            control.cancel();
+        }
+    }
+
+    /// Atomically claim the tray-menu refresh role; false if another thread
+    /// already holds it.
+    pub fn try_start_menu_refresh(&self) -> bool {
+        self.menu_refreshing
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// Release the tray-menu refresh role.
+    pub fn finish_menu_refresh(&self) {
+        self.menu_refreshing.store(false, Ordering::SeqCst);
     }
 
     /// The tree produced by the most recent scan, if any.
@@ -129,6 +185,8 @@ pub fn start_scan_with(
         return Err("scan already running".into());
     }
 
+    manager.paused.store(false, Ordering::SeqCst);
+    manager.files.store(0, Ordering::SeqCst);
     let root_path = PathBuf::from(&root);
     let engine = ScanEngine::new();
     let request = ScanRequest::new(manager.next_scan_id(), root_path.clone())
@@ -160,6 +218,8 @@ pub fn start_scan_with(
             // The engine finished; clear the running flag through the app state.
             if let Some(manager) = app_for_pump.try_state::<ScanManager>() {
                 manager.running.store(false, Ordering::SeqCst);
+                manager.paused.store(false, Ordering::SeqCst);
+                manager.menu_refreshing.store(false, Ordering::SeqCst);
                 *manager.control.lock().unwrap() = None;
             }
         })
@@ -320,6 +380,9 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
             ScanEvent::Progress { progress, .. } => {
                 files = progress.files;
                 dirs = progress.dirs;
+                if let Some(manager) = app.try_state::<ScanManager>() {
+                    manager.set_file_count(files);
+                }
                 if last_progress.elapsed().as_millis() >= PROGRESS_INTERVAL_MS {
                     progress_due = true;
                     last_progress = Instant::now();
