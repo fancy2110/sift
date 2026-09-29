@@ -21,12 +21,25 @@ use tauri_plugin_notification::NotificationExt;
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app)?;
 
-    TrayIconBuilder::with_id("sift-tray")
-        .icon(app.default_window_icon().cloned().expect("app has an icon"))
+    // macOS menu bar requires a monochrome template glyph; the full-colour
+    // app icon would render as a dark tile ringed by its own outline. Other
+    // platforms use the regular application icon.
+    let mut builder = TrayIconBuilder::with_id("sift-tray")
         .tooltip(tray_text(app, "tray.tooltip"))
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(handle_menu_event)
+        .on_menu_event(handle_menu_event);
+
+    builder = if cfg!(target_os = "macos") {
+        let png = include_bytes!("../icons/tray-template.png");
+        builder
+            .icon(tauri::image::Image::from_bytes(png)?)
+            .icon_as_template(true)
+    } else {
+        builder.icon(app.default_window_icon().cloned().expect("app has an icon"))
+    };
+
+    builder
         .on_tray_icon_event(|tray, event| {
             // Left click toggles the main window.
             if let TrayIconEvent::Click {
@@ -101,9 +114,21 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::DynRuntime>> {
     if manager.is_running() {
         // Scan in progress: pause/resume and cancel replace the start action.
         let pause_or_resume = if manager.is_paused() {
-            MenuItem::with_id(app, "resume", tray_text(app, "tray.resume"), true, None::<&str>)?
+            MenuItem::with_id(
+                app,
+                "resume",
+                tray_text(app, "tray.resume"),
+                true,
+                None::<&str>,
+            )?
         } else {
-            MenuItem::with_id(app, "pause", tray_text(app, "tray.pause"), true, None::<&str>)?
+            MenuItem::with_id(
+                app,
+                "pause",
+                tray_text(app, "tray.pause"),
+                true,
+                None::<&str>,
+            )?
         };
         let cancel = MenuItem::with_id(
             app,
@@ -136,10 +161,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::DynRuntime>> {
             ],
         )
     } else {
-        let scan =
-            MenuItem::with_id(app, "scan", tray_text(app, "tray.scan"), true, None::<&str>)?;
-        let clean =
-            MenuItem::with_id(app, "clean", tray_text(app, "tray.clean"), true, None::<&str>)?;
+        let scan = MenuItem::with_id(app, "scan", tray_text(app, "tray.scan"), true, None::<&str>)?;
+        let clean = MenuItem::with_id(
+            app,
+            "clean",
+            tray_text(app, "tray.clean"),
+            true,
+            None::<&str>,
+        )?;
 
         Menu::with_items(
             app,
@@ -414,30 +443,28 @@ fn spawn_menu_refresh(app: &AppHandle) {
     let handle = app.clone();
     std::thread::Builder::new()
         .name("sift-tray-refresh".into())
-        .spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_millis(1500));
-                let manager = handle.state::<crate::scanner::ScanManager>();
-                if !manager.is_running() {
-                    manager.finish_menu_refresh();
-                    sync_menu_state(&handle);
-                    return;
-                }
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(1500));
+            let manager = handle.state::<crate::scanner::ScanManager>();
+            if !manager.is_running() {
+                manager.finish_menu_refresh();
+                sync_menu_state(&handle);
+                return;
+            }
 
-                let Some(tray) = handle.tray_by_id("sift-tray") else {
-                    continue;
-                };
-                let count = manager.file_count().to_string();
-                let key = if manager.is_paused() {
-                    "tray.pausedTip"
-                } else {
-                    "tray.scanning"
-                };
-                let tooltip = tray_text(&handle, key).replace("{0}", &count);
-                let _ = tray.set_tooltip(Some(tooltip));
-                if let Ok(menu) = build_menu(&handle) {
-                    let _ = tray.set_menu(Some(menu));
-                }
+            let Some(tray) = handle.tray_by_id("sift-tray") else {
+                continue;
+            };
+            let count = manager.file_count().to_string();
+            let key = if manager.is_paused() {
+                "tray.pausedTip"
+            } else {
+                "tray.scanning"
+            };
+            let tooltip = tray_text(&handle, key).replace("{0}", &count);
+            let _ = tray.set_tooltip(Some(tooltip));
+            if let Ok(menu) = build_menu(&handle) {
+                let _ = tray.set_menu(Some(menu));
             }
         })
         .expect("spawn tray refresh");
@@ -446,10 +473,5 @@ fn spawn_menu_refresh(app: &AppHandle) {
 /// Show a native notification with a tray message, substituting `{0}`.
 fn notify(app: &AppHandle, key: &str, param: &str) {
     let body = tray_text(app, key).replace("{0}", param);
-    let _ = app
-        .notification()
-        .builder()
-        .title("Sift")
-        .body(body)
-        .show();
+    let _ = app.notification().builder().title("Sift").body(body).show();
 }
