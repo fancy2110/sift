@@ -429,6 +429,9 @@ mod tests {
             last_seen_ms: 0,
             times_seen: 1,
             approved_for_auto: approved,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: Reason::key("reason.rebuildableCache"),
         }
     }
 
@@ -809,6 +812,9 @@ mod tests {
             last_seen_ms: 0,
             times_seen: 1,
             approved_for_auto: true,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: Reason::key("k"),
         };
         assert!(still_matches(&good), "an unchanged directory must verify");
 
@@ -858,6 +864,9 @@ mod tests {
             last_seen_ms: 0,
             times_seen: 1,
             approved_for_auto: true,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: Reason::key("k"),
         };
         assert!(
             still_matches(&entry),

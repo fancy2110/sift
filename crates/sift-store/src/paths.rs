@@ -67,6 +67,11 @@ impl StorePaths {
     pub fn routines(&self) -> PathBuf {
         self.root.join("routines.json")
     }
+
+    /// SQLite database holding resumable scan metadata.
+    pub fn scan_journal(&self) -> PathBuf {
+        self.root.join("scan-journal.sqlite")
+    }
 }
 
 #[cfg(test)]

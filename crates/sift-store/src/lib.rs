@@ -22,6 +22,7 @@
 pub mod atomic;
 pub mod cleanable;
 pub mod history;
+pub mod journal_sqlite;
 pub mod paths;
 pub mod routines;
 pub mod settings;
@@ -34,6 +35,7 @@ pub use atomic::{
 };
 pub use cleanable::{CleanableEntry, CleanableList, RecordSummary, Upsert, DEFAULT_CLEANABLE_CAP};
 pub use history::{CleanupHistory, HistoryEntry, DEFAULT_HISTORY_CAP};
+pub use journal_sqlite::SqliteScanJournal;
 pub use paths::{StorePaths, APP_DIR};
 pub use routines::{
     suggestion_key, RoutineDoc, RoutineEntry, RoutineList, RoutineMode, DEFAULT_ROUTINE_CAP,

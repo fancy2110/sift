@@ -118,6 +118,10 @@ pub struct ScanPolicy {
     pub file_detail_min_bytes: u64,
     /// Hardlink deduplication. Costs a hash entry per multiply-linked file.
     pub dedupe_hardlinks: bool,
+    /// Optional depth ceiling for an overview scan. `0` means "no limit"
+    /// (a full, exact walk). A positive value truncates discovery at that
+    /// depth for a fast first pass; an exact pass can deepen afterwards.
+    pub max_depth: u16,
 }
 
 impl Default for ScanPolicy {
@@ -135,6 +139,7 @@ impl ScanPolicy {
             want_physical_size: true,
             file_detail_min_bytes: u64::MAX,
             dedupe_hardlinks: true,
+            max_depth: 0,
         }
     }
 
@@ -146,6 +151,7 @@ impl ScanPolicy {
             want_physical_size: false,
             file_detail_min_bytes: u64::MAX,
             dedupe_hardlinks: false,
+            max_depth: 0,
         }
     }
 
@@ -215,6 +221,9 @@ pub struct Progress {
     pub denied: u64,
     /// Entries skipped because they were already counted hardlinks.
     pub hardlinks_skipped: u64,
+    /// Directories skipped because they cross a volume boundary or were
+    /// already visited through another path (e.g. a firmlink).
+    pub boundary_skipped: u64,
     /// Bytes counted so far.
     pub bytes: ByteSize,
     /// Directories currently queued or in flight.
@@ -307,6 +316,9 @@ impl ScanRequest {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ScanEvent {
+    /// Restored directories from an interrupted scan, published before normal
+    /// discovery so already-walked subtrees render immediately.
+    NodesAdopted { scan: ScanId, nodes: Vec<AdoptedNode> },
     /// A directory's contents are known and its own total is final. It may
     /// still gain bytes from unvisited subdirectories, so `pending` stays true
     /// for the UI until `DirectoryClosed` or the scan ends.
@@ -337,9 +349,41 @@ pub enum ScanEvent {
     Warning { scan: ScanId, message: String },
 }
 
+/// One directory restored from a previous interrupted scan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AdoptedNode {
+    pub key: String,
+    pub parent_key: String,
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub mtime_ms: i64,
+    pub deletable: bool,
+    /// `false` while its subtree was unfinished and will be re-walked.
+    pub closed: bool,
+}
+
+impl AdoptedNode {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        key: String,
+        parent_key: String,
+        name: String,
+        path: String,
+        size: u64,
+        mtime_ms: i64,
+        deletable: bool,
+        closed: bool,
+    ) -> Self {
+        Self { key, parent_key, name, path, size, mtime_ms, deletable, closed }
+    }
+}
+
 impl ScanEvent {
     pub fn scan_id(&self) -> ScanId {
         match self {
+            ScanEvent::NodesAdopted { scan, .. } => *scan,
             ScanEvent::DirectoryListed { scan, .. }
             | ScanEvent::DirectoryClosed { scan, .. }
             | ScanEvent::DirectorySized { scan, .. }

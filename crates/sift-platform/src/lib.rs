@@ -26,6 +26,62 @@ pub use volume::{device_id, is_same_volume, list_volumes, system_volume};
 pub use walk::walk_dirs;
 pub use watch::{watch_root, FsEvent, FsWatcherHandle};
 
+/// Number of worker threads the scan engine should use by default.
+///
+/// Directory walking is syscall-bound. On asymmetric CPUs scheduling the pool
+/// across the efficiency cluster both slows the scan and steals the cores the
+/// rest of the system needs, so this reports the *performance* core count on
+/// macOS and the available parallelism elsewhere. Callers that pin a worker
+/// count via [`sift_core::ScanPolicy`] override it.
+pub fn recommended_scan_workers() -> usize {
+    let cores = performance_core_count().unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|value| value.get())
+            .unwrap_or(4)
+    });
+    cores.clamp(2, 16)
+}
+
+/// Physical performance-core count on Apple silicon (`P` cluster). `None` on
+/// symmetric or non-Apple platforms, which fall back to available parallelism.
+#[cfg(target_os = "macos")]
+fn performance_core_count() -> Option<usize> {
+    use std::ffi::CString;
+
+    extern "C" {
+        fn sysctlbyname(
+            name: *const std::os::raw::c_char,
+            oldp: *mut u8,
+            oldlenp: *mut usize,
+            newp: *mut u8,
+            newlen: usize,
+        ) -> std::os::raw::c_int;
+    }
+
+    let key = CString::new("hw.perflevel0.physicalcpu").ok()?;
+    let mut value: i64 = 0;
+    let mut length = std::mem::size_of::<i64>();
+    let rc = unsafe {
+        sysctlbyname(
+            key.as_ptr(),
+            &mut value as *mut i64 as *mut u8,
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc == 0 && value > 0 {
+        Some(value as usize)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn performance_core_count() -> Option<usize> {
+    None
+}
+
 #[cfg(test)]
 mod volume_probe {
     #[test]

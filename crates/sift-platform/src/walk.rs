@@ -66,7 +66,7 @@ pub fn walk_dirs(paths: &[PathBuf], want_physical: bool, workers: usize) -> Vec<
 fn read_one(path: &Path, want_physical: bool) -> Option<Vec<RawEntry>> {
     DirReader::read(path, want_physical)
         .ok()
-        .map(DirReader::into_entries)
+        .map(|reader| reader.into_parts().1)
 }
 
 #[cfg(test)]

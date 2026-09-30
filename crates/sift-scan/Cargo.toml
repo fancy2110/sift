@@ -11,3 +11,4 @@ authors.workspace = true
 sift-core = { workspace = true }
 sift-platform = { workspace = true }
 serde = { workspace = true }
+crossbeam-channel = "0.5"

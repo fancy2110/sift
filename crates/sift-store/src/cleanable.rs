@@ -20,6 +20,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sift_analyze::cleanup::{display_command, plan_for};
 use sift_analyze::{
     AnalysisReport, AnalyzedItem, ConfidencePolicy, PathFingerprint, Reason, Safety, VerdictSource,
 };
@@ -50,6 +51,13 @@ pub struct CleanableEntry {
     pub times_seen: u32,
     /// The user explicitly allowed this entry to be cleaned without asking.
     pub approved_for_auto: bool,
+    /// Preferred toolchain-native command, when one exists.
+    pub cleanup_command: Option<String>,
+    /// Cleanup method token (nativeCommand | trashItem | emptyTrash).
+    pub cleanup_method: String,
+    /// What breaks after deletion: an i18n key for local entries, ready text
+    /// for a model's verdict.
+    pub impact: Reason,
 }
 
 impl CleanableEntry {
@@ -196,6 +204,10 @@ impl CleanableList {
                 entry.confidence = item.verdict.confidence;
                 entry.reason = item.verdict.reason.clone();
                 entry.source = item.verdict.source.clone();
+                let (cmd, method) = plan_fields(item);
+                entry.cleanup_command = cmd;
+                entry.cleanup_method = method;
+                entry.impact = impact_for(item);
                 entry.last_seen_ms = now_ms;
                 entry.times_seen = entry.times_seen.saturating_add(1);
                 Upsert::Refreshed
@@ -219,6 +231,9 @@ impl CleanableList {
                     last_seen_ms: now_ms,
                     times_seen: 1,
                     approved_for_auto: false,
+                    cleanup_command: plan_fields(item).0,
+                    cleanup_method: plan_fields(item).1,
+                    impact: impact_for(item),
                 });
                 if self.entries.len() > self.cap {
                     self.evict_to_cap();
@@ -326,6 +341,23 @@ fn path_exists(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
 
+
+/// Compute the persisted cleanup command and method for an analyzed item.
+fn plan_fields(item: &AnalyzedItem) -> (Option<String>, String) {
+    let plan = plan_for(&item.candidate.kind, &item.candidate.display_path);
+    let command = plan.command.as_ref().map(|step| display_command(step));
+    (command, plan.method.token().to_string())
+}
+
+/// The deletion impact carried by a cleanable entry: a model's text wins, else
+/// the cleanup plan's deterministic i18n key.
+fn impact_for(item: &AnalyzedItem) -> Reason {
+    item.verdict
+        .impact
+        .clone()
+        .unwrap_or_else(|| Reason::key(plan_for(&item.candidate.kind, &item.candidate.display_path).impact_key))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,7 +387,7 @@ mod tests {
         let verdict = if verdict.safety == safety {
             verdict
         } else {
-            sift_analyze::Verdict::new(safety, 0.9, Reason::key("k"), VerdictSource::rule(rule), 0)
+            sift_analyze::Verdict::new(safety, 0.9, Reason::key("k"), VerdictSource::rule(rule), 0, None)
         };
         AnalyzedItem::new(candidate, verdict)
     }
@@ -493,6 +525,9 @@ mod tests {
             last_seen_ms: 0,
             times_seen: 1,
             approved_for_auto: false,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: Reason::key("cleanup.impact.rebuildRegenerates"),
         });
         let key = list.entries()[0].key();
         assert!(!list.set_auto_approval(key, true));
@@ -605,6 +640,9 @@ mod tests {
             last_seen_ms: 0,
             times_seen: 1,
             approved_for_auto: true,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: Reason::key("k"),
         };
         let list = CleanableList::from_entries(vec![entry], 16);
         assert!(list.is_empty(), "a review entry must not survive loading");

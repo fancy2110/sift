@@ -1,4 +1,11 @@
 <!doctype html>
+<!--
+  Sift app icon — master source (1024x1024).
+  Geometry aligned with Qianlier: an 80px transparent safe area on every
+  side (glyph lives inside 80..944), so macOS / Windows / Linux never clip
+  the glyph and no white edge is visible. The tray glyph is generated
+  separately (see tray-template.png); this file is the app icon only.
+-->
 <html>
 <head>
 <meta charset="utf-8">
@@ -10,32 +17,31 @@
 <body>
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- macOS icon geometry: ~185/1024 continuous corner, distinctly square -->
-    <path id="squircle" d="M185 0
-      H839 A185 185 0 0 1 1024 185
-      V839 A185 185 0 0 1 839 1024
-      H185 A185 185 0 0 1 0 839
-      V185 A185 185 0 0 1 185 0 Z"/>
+    <!-- macOS continuous-corner glyph inset by the 80px safe area -->
+    <path id="squircle" d="M265 80
+      H759 A185 185 0 0 1 944 265
+      V759 A185 185 0 0 1 759 944
+      H265 A185 185 0 0 1 80 759
+      V265 A185 185 0 0 1 265 80 Z"/>
     <clipPath id="iconClip"><use href="#squircle"/></clipPath>
 
-    <linearGradient id="bgGrad" x1="160" y1="0" x2="880" y2="1024" gradientUnits="userSpaceOnUse">
+    <linearGradient id="bgGrad" x1="240" y1="80" x2="800" y2="944" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#242231"/>
       <stop offset="0.55" stop-color="#17151f"/>
       <stop offset="1" stop-color="#100f17"/>
     </linearGradient>
     <radialGradient id="glowViolet" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
-      gradientTransform="translate(800 170) rotate(132) scale(600)">
+      gradientTransform="translate(800 250) rotate(132) scale(520)">
       <stop offset="0" stop-color="#7c5cf0" stop-opacity="0.20"/>
       <stop offset="1" stop-color="#7c5cf0" stop-opacity="0"/>
     </radialGradient>
 
-    <!-- capacity fill: one decisive accent gradient -->
-    <linearGradient id="fillGrad" x1="232" y1="450" x2="232" y2="574" gradientUnits="userSpaceOnUse">
+    <linearGradient id="fillGrad" x1="312" y1="450" x2="312" y2="574" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#aab6ff"/>
       <stop offset="1" stop-color="#5d6ae6"/>
     </linearGradient>
 
-    <linearGradient id="sheen" x1="512" y1="0" x2="512" y2="560" gradientUnits="userSpaceOnUse">
+    <linearGradient id="sheen" x1="512" y1="80" x2="512" y2="560" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
       <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.015"/>
       <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
@@ -43,37 +49,27 @@
   </defs>
 
   <g clip-path="url(#iconClip)">
-    <rect width="1024" height="1024" fill="url(#bgGrad)"/>
-    <rect width="1024" height="1024" fill="url(#glowViolet)"/>
+    <rect x="80" y="80" width="864" height="864" fill="url(#bgGrad)"/>
+    <rect x="80" y="80" width="864" height="864" fill="url(#glowViolet)"/>
 
     <!-- capacity track -->
-    <rect x="232" y="450" width="560" height="124" rx="62"
-      fill="#ffffff" fill-opacity="0.10"/>
+    <rect x="312" y="450" width="400" height="124" rx="62" fill="#ffffff" fill-opacity="0.10"/>
 
-    <!-- occupied 60%, clipped to the capsule so the right edge is a clean stop -->
-    <clipPath id="barClip"><rect x="232" y="450" width="560" height="124" rx="62"/></clipPath>
+    <!-- occupied 60% -->
+    <clipPath id="barClip"><rect x="312" y="450" width="400" height="124" rx="62"/></clipPath>
     <g clip-path="url(#barClip)">
-      <rect x="232" y="450" width="336" height="124" fill="url(#fillGrad)"/>
+      <rect x="312" y="450" width="240" height="124" fill="url(#fillGrad)"/>
     </g>
 
-    <!-- AI spark seated at the fill tip: the single focal mark -->
-    <path d="M616 372
-      C623 402 642 421 672 428
-      C642 435 623 454 616 484
-      C609 454 590 435 560 428
-      C590 421 609 402 616 372 Z"
-      fill="#ffffff"/>
-    <path d="M616 372
-      C623 402 642 421 672 428
-      C642 435 623 454 616 484
-      C609 454 590 435 560 428
-      C590 421 609 402 616 372 Z"
-      fill="#7c5cf0" fill-opacity="0.35"/>
+    <!-- AI spark at the fill tip -->
+    <path d="M608 372
+      C615 402 634 421 664 428
+      C634 435 615 454 608 484
+      C601 454 582 435 552 428
+      C582 421 601 402 608 372 Z" fill="#ffffff"/>
 
-    <rect width="1024" height="1024" fill="url(#sheen)"/>
+    <rect x="80" y="80" width="864" height="864" fill="url(#sheen)"/>
   </g>
-
-  <use href="#squircle" stroke="#ffffff" stroke-opacity="0.07" stroke-width="2"/>
 </svg>
 </body>
 </html>

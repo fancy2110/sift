@@ -38,6 +38,11 @@ export interface Finding {
   kind: string;
   knownCleanable: boolean;
   approvedForAuto: boolean;
+  cleanupCommand?: string | null;
+  cleanupMethod?: string;
+  impact: string;
+  impactKind: 'key' | 'text';
+  impactParams: string[];
 }
 
 export interface AnalysisSummary {

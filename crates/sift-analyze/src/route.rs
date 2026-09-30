@@ -224,9 +224,10 @@ mod tests {
                     safety: "safe".into(),
                     confidence: 0.99,
                     reason: "old and unused".into(),
+                    impact: String::new(),
                 })
                 .collect();
-            Ok(apply_remote_verdicts(batch, &raw, guardrails, now_ms))
+            Ok(apply_remote_verdicts(batch, &raw, guardrails, now_ms, "spy"))
         }
     }
 

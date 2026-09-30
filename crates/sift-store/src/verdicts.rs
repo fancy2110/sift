@@ -221,6 +221,7 @@ mod tests {
             Reason::key("k"),
             VerdictSource::rule("dir.node_modules"),
             0,
+            None,
         )
     }
 

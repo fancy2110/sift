@@ -566,6 +566,7 @@ mod tests {
                 Reason::key("reason.rebuildableCache"),
                 VerdictSource::rule("dir.node_modules"),
                 1,
+                None,
             ),
         )
     }

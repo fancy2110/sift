@@ -669,6 +669,69 @@ impl ScanTree {
     }
 
     /// Append `child` to `parent`'s sibling chain.
+    /// Adopt a restored node before the coordinator resumes.
+    ///
+    /// A `closed` node is installed already settled with its exact aggregate;
+    /// an `open` node stays pending with zero size and is re-walked. A closed
+    /// node whose parent is open pre-charges that parent (the re-list then skips
+    /// the child, so it is counted once); a closed node under a closed parent
+    /// only renders, since its bytes already live in the parent.
+    pub fn adopt_node(
+        &mut self,
+        parent: u32,
+        key: NodeKey,
+        name: &[u8],
+        mtime_ms: i64,
+        deletable: bool,
+        is_symlink: bool,
+        closed: bool,
+        aggregate: ByteSize,
+        files: u32,
+    ) -> Option<u32> {
+        if self.nodes.len() >= self.config.max_nodes as usize {
+            self.unrecorded_dirs += 1;
+            return None;
+        }
+        let name = self.interner.intern(name);
+        let index = self.nodes.len() as u32;
+        let mut flags = KIND_DIR;
+        if is_symlink {
+            flags |= FLAG_SYMLINK;
+        }
+        if deletable {
+            flags |= FLAG_DELETABLE;
+        }
+        if !closed {
+            flags |= FLAG_PENDING;
+        }
+        let size = if closed { aggregate } else { ByteSize::ZERO };
+        let file_count = if closed { files } else { 0 };
+        self.nodes.push(TreeNode {
+            key,
+            parent,
+            first_child: NONE,
+            next_sibling: NONE,
+            name,
+            size,
+            mtime_ms,
+            file_count,
+            flags,
+        });
+
+        if closed {
+            if let Some(parent_node) = self.nodes.get_mut(parent as usize) {
+                if parent_node.pending() {
+                    parent_node.size += aggregate;
+                    parent_node.file_count = parent_node.file_count.saturating_add(files);
+                }
+            }
+        }
+
+        self.link_child(parent, index);
+        Some(index)
+    }
+
+    /// Append `child` to `parent`'s sibling chain.
     fn link_child(&mut self, parent: u32, child: u32) {
         // Copy linkage state first so no borrow is held across a mutation.
         let head = match self.nodes.get(parent as usize) {
@@ -695,7 +758,6 @@ impl ScanTree {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

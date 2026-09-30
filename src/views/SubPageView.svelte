@@ -8,7 +8,7 @@
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { t } from '../lib/i18n.svelte';
-  import { kindTitle, reasonText } from '../lib/reasons';
+  import { kindTitle, reasonText, impactText, cleanupMethodText, cleanupCommandText } from '../lib/reasons';
 
   function selectAllSmart() {
     store.selectedIds = new Set(store.smartItems.map((i) => i.id));
@@ -167,6 +167,13 @@
                 <p class="smart-name">{kindTitle(item)}</p>
                 <p class="smart-meta num">{item.displayPath} · {formatSize(item.size)}</p>
                 <p class="smart-reason">{reasonText(item)}</p>
+                <p class="smart-impact">{impactText(item)}</p>
+                <p class="smart-clean">
+                  <span class="clean-method">{cleanupMethodText(item)}</span>
+                  {#if cleanupCommandText(item)}
+                    <code>{cleanupCommandText(item)}</code>
+                  {/if}
+                </p>
               </div>
 
               {#if item.safety === 'safe'}
@@ -663,6 +670,25 @@
     margin: 0;
     font-size: 11px;
     color: var(--color-muted);
+  }
+  .smart-impact {
+    margin: 2px 0 0;
+    font-size: 11px;
+    color: var(--color-faint);
+  }
+  .smart-clean {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 3px 0 0;
+    font-size: 10.5px;
+    color: var(--color-faint);
+  }
+  .smart-clean code {
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--color-text) 8%, transparent);
+    font-size: 10.5px;
   }
   .ai-badge,
   .review-badge {

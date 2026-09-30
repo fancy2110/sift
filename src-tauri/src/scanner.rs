@@ -17,6 +17,7 @@ use serde::Serialize;
 use sift_core::id::NodeKey;
 use sift_core::{ScanEvent, ScanId, ScanOutcome, ScanPolicy, ScanRequest, ScanTree};
 use sift_scan::{ScanControl, ScanEngine, ScanHandle};
+use sift_store::{SqliteScanJournal, StorePaths};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Interim progress cadence, matching what the front end animates against.
@@ -82,6 +83,7 @@ pub struct ScanManager {
     last_tree: Mutex<Option<Arc<Mutex<ScanTree>>>>,
     last_root: Mutex<Option<PathBuf>>,
     sequence: Mutex<u64>,
+    journal: Mutex<Option<Arc<SqliteScanJournal>>>,
 }
 
 impl ScanManager {
@@ -153,6 +155,20 @@ impl ScanManager {
         self.last_root.lock().unwrap().clone()
     }
 
+    /// The durable scan journal, opened on first use. A failure to open it
+    /// yields `None`, and the caller runs a plain (non-resumable) scan.
+    fn journal(&self) -> Option<Arc<SqliteScanJournal>> {
+        let mut guard = self.journal.lock().unwrap();
+        if let Some(journal) = guard.as_ref() {
+            return Some(Arc::clone(journal));
+        }
+        let path = StorePaths::discover()?;
+        let journal = SqliteScanJournal::open(path.scan_journal()).ok()?;
+        let journal = Arc::new(journal);
+        *guard = Some(Arc::clone(&journal));
+        Some(journal)
+    }
+
     fn next_scan_id(&self) -> ScanId {
         let mut sequence = self.sequence.lock().unwrap();
         *sequence += 1;
@@ -193,7 +209,12 @@ pub fn start_scan_with(
         .with_focus(PathBuf::from(&focus))
         .with_policy(ScanPolicy::thorough());
 
-    let handle = engine.scan(request).map_err(|err| err.to_string())?;
+    let handle = match manager.journal() {
+        Some(journal) => engine
+            .scan_with_journal(request, journal as Arc<dyn sift_scan::ScanJournal>)
+            .map_err(|err| err.to_string())?,
+        None => engine.scan(request).map_err(|err| err.to_string())?,
+    };
     let control = handle.control();
 
     {
@@ -339,6 +360,25 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
             Err(RecvTimeoutError::Disconnected) => break 'pump,
         };
         match event {
+            ScanEvent::NodesAdopted { nodes, .. } => {
+                for node in nodes {
+                    discovered.push(NodeInfo {
+                        id: node.key,
+                        parent_id: if node.parent_key.is_empty() {
+                            None
+                        } else {
+                            Some(node.parent_key)
+                        },
+                        name: node.name,
+                        path: node.path.clone(),
+                        is_dir: true,
+                        size: node.size,
+                        modified_ms: Some(node.mtime_ms).filter(|value| *value != 0),
+                        deletable: node.deletable,
+                        pending: !node.closed,
+                    });
+                }
+            }
             ScanEvent::DirectoryListed { dir, .. } => {
                 // The directory itself is known and still filling in.
                 sized.push(SizedInfo {

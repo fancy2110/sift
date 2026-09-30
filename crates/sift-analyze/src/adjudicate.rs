@@ -128,6 +128,7 @@ pub fn rule_verdict(candidate: &Candidate, now_ms: i64) -> Verdict {
             },
             VerdictSource::rule(nomination.rule.clone()),
             now_ms,
+            Some(local_impact(candidate)),
         ),
         None => Verdict::new(
             Safety::fallback(),
@@ -135,8 +136,16 @@ pub fn rule_verdict(candidate: &Candidate, now_ms: i64) -> Verdict {
             Reason::key("reason.unjudged"),
             VerdictSource::rule(fallback_rule),
             now_ms,
+            Some(local_impact(candidate)),
         ),
     }
+}
+
+/// The impact of a local-rule verdict, drawn from the cleanup knowledge base so
+/// local and model verdicts expose one shape ("what breaks after deletion").
+fn local_impact(candidate: &Candidate) -> Reason {
+    let plan = crate::cleanup::plan_for(&candidate.kind, &candidate.display_path);
+    Reason::key(plan.impact_key)
 }
 
 /// Confidence a rule's own conclusion carries. Safe structural patterns are
@@ -274,6 +283,9 @@ pub struct RawVerdict {
     pub confidence: f32,
     #[serde(default)]
     pub reason: String,
+    /// One sentence in the user's language: what breaks after deletion.
+    #[serde(default)]
+    pub impact: String,
 }
 
 /// Parse a model's answer into raw verdicts.
@@ -359,8 +371,8 @@ pub fn sanitize_model_verdict(
     raw: &RawVerdict,
     guardrails: &Guardrails,
     now_ms: i64,
+    provider: &str,
 ) -> Verdict {
-    let provider = "remote";
     let requested = match raw.safety.trim().to_ascii_lowercase().as_str() {
         "safe" => Safety::Safe,
         "keep" => Safety::Keep,
@@ -370,6 +382,7 @@ pub fn sanitize_model_verdict(
     };
     let confidence = clamp_confidence(raw.confidence);
     let reason = Reason::sanitized_text(&raw.reason);
+    let impact = Reason::sanitized_text(&raw.impact);
 
     // A model may always be *more* cautious: Keep and Review pass through.
     if requested != Safety::Safe {
@@ -379,6 +392,7 @@ pub fn sanitize_model_verdict(
             reason.unwrap_or_else(|| Reason::key(requested.label_key())),
             VerdictSource::remote(provider),
             now_ms,
+            impact,
         );
     }
 
@@ -401,6 +415,7 @@ pub fn sanitize_model_verdict(
             reason.unwrap_or_else(|| Reason::key("reason.aiConfirmed")),
             VerdictSource::remote(provider),
             now_ms,
+            impact,
         ),
         Some(downgrade) => {
             // Keep the model's explanation, but state plainly that the level
@@ -415,6 +430,7 @@ pub fn sanitize_model_verdict(
                 reason,
                 VerdictSource::remote(provider),
                 now_ms,
+                impact,
             )
         }
     }
@@ -429,6 +445,7 @@ pub fn apply_remote_verdicts(
     raw: &[RawVerdict],
     guardrails: &Guardrails,
     now_ms: i64,
+    provider: &str,
 ) -> Vec<Verdict> {
     let by_id: HashMap<&str, &RawVerdict> = raw
         .iter()
@@ -440,7 +457,7 @@ pub fn apply_remote_verdicts(
         .map(|candidate| {
             let id = candidate.key.to_string();
             match by_id.get(id.as_str()) {
-                Some(raw) => sanitize_model_verdict(candidate, raw, guardrails, now_ms),
+                Some(raw) => sanitize_model_verdict(candidate, raw, guardrails, now_ms, provider),
                 None => {
                     let mut verdict = Verdict::unknown(now_ms);
                     verdict.reason = Reason::key(Downgrade::Unparsable.reason_key());
@@ -652,6 +669,7 @@ mod tests {
             safety: safety.to_string(),
             confidence,
             reason: reason.to_string(),
+            impact: String::new(),
         }
     }
 
@@ -663,6 +681,7 @@ mod tests {
             &raw(&trash.key.to_string(), "safe", 0.99, "looks fine"),
             &Guardrails::default(),
             0,
+            "remote",
         );
         assert_eq!(verdict.safety, Safety::Review, "trash safety is structural");
         assert!(!verdict.is_automatically_removable(&ConfidencePolicy::default()));
@@ -676,6 +695,7 @@ mod tests {
             &raw(&stale.key.to_string(), "safe", 0.5, "probably unused"),
             &Guardrails::default(),
             0,
+            "remote",
         );
         assert_eq!(verdict.safety, Safety::Review);
         match verdict.reason {
@@ -692,6 +712,7 @@ mod tests {
             &raw(&stale.key.to_string(), "safe", 0.95, "an old installer"),
             &Guardrails::default(),
             0,
+            "remote",
         );
         assert_eq!(verdict.safety, Safety::Safe);
         assert!(verdict.is_automatically_removable(&ConfidencePolicy::default()));
@@ -707,6 +728,7 @@ mod tests {
                 &raw(&stale.key.to_string(), safety, 0.1, "risky"),
                 &Guardrails::default(),
                 0,
+                "remote",
             );
             assert_eq!(verdict.safety, expected, "{safety} must pass through");
         }
@@ -724,6 +746,7 @@ mod tests {
             &raw(&stale.key.to_string(), "safe", 1.0, "certain"),
             &guardrails,
             0,
+            "remote",
         );
         assert_eq!(verdict.safety, Safety::Review);
     }
@@ -737,6 +760,7 @@ mod tests {
                 &raw(&stale.key.to_string(), weird, 1.0, "x"),
                 &Guardrails::default(),
                 0,
+                "remote",
             );
             assert_eq!(verdict.safety, Safety::Review, "{weird:?}");
         }
@@ -764,7 +788,7 @@ mod tests {
                 "invented",
             ),
         ];
-        let verdicts = apply_remote_verdicts(&batch, &raw_answers, &Guardrails::default(), 0);
+        let verdicts = apply_remote_verdicts(&batch, &raw_answers, &Guardrails::default(), 0, "remote");
         assert_eq!(verdicts.len(), 2);
         assert_eq!(verdicts[0].safety, Safety::Safe);
         // The skipped candidate is Review, never Safe.
@@ -788,7 +812,7 @@ mod tests {
         let parsed = parse_raw_verdicts(json).unwrap();
         assert_eq!(parsed[0].confidence, 0.0);
         let candidate = candidate(CandidateKind::StaleLargeFile, "file.stale_large");
-        let verdict = sanitize_model_verdict(&candidate, &parsed[0], &Guardrails::default(), 0);
+        let verdict = sanitize_model_verdict(&candidate, &parsed[0], &Guardrails::default(), 0, "remote");
         assert_eq!(verdict.safety, Safety::Review, "no confidence, no safe");
     }
 

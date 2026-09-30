@@ -547,6 +547,9 @@ mod tests {
             last_seen_ms: 0,
             times_seen: 1,
             approved_for_auto: approved,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: Reason::key("k"),
         }
     }
 

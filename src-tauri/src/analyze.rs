@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
+use sift_analyze::cleanup::{display_command, plan_for};
 use sift_analyze::{
     redact_path, Adjudicator, AnalysisPolicy, AnalysisStage, Analyzer, Decision, DecisionOutcome,
     Reason, RuleAdjudicator, Safety, VerdictSource,
@@ -108,6 +109,15 @@ pub struct FindingDto {
     pub known_cleanable: bool,
     /// Approved for unattended cleanup.
     pub approved_for_auto: bool,
+    /// Toolchain-native command preferred for cleanup, when one exists.
+    pub cleanup_command: Option<String>,
+    /// How the item is cleaned: nativeCommand | trashItem | emptyTrash.
+    pub cleanup_method: String,
+    /// Deletion impact: translation key for local verdicts, ready text for a
+    /// model's verdict.
+    pub impact: String,
+    pub impact_kind: String,
+    pub impact_params: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -246,6 +256,11 @@ pub fn list_cleanable(services: State<'_, AppServices>) -> Vec<FindingDto> {
             kind: entry.kind_token.clone(),
             known_cleanable: true,
             approved_for_auto: entry.approved_for_auto,
+            cleanup_command: entry.cleanup_command.clone(),
+            cleanup_method: entry.cleanup_method.clone(),
+            impact: describe_reason(&entry.impact),
+            impact_kind: reason_kind(&entry.impact).to_string(),
+            impact_params: reason_params(&entry.impact),
         })
         .collect();
     entries.sort_by_key(|entry| std::cmp::Reverse(entry.size));
@@ -589,6 +604,11 @@ pub fn mark_path(services: State<'_, AppServices>, path: String) -> Result<Findi
         kind: "userMarked".into(),
         known_cleanable: false,
         approved_for_auto: false,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: "cleanup.impact.markedInTrash".into(),
+        impact_kind: "key".into(),
+        impact_params: Vec::new(),
     })
 }
 
@@ -702,7 +722,14 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
         }
     }
     let _ = &ai;
-    Box::new(RuleAdjudicator::new())
+    // No usable real provider (no token configured): run the same pipeline
+    // against the offline simulated adjudicator, so model-adjudicable families
+    // still receive an AI-style judgment and impact without network access.
+    Box::new(sift_analyze::RoutingAdjudicator::with_remote(
+        RuleAdjudicator::new(),
+        sift_analyze::SimulatedAdjudicator::new(),
+        sift_analyze::Guardrails::default(),
+    ))
 }
 
 fn remote_configured_without_consent(services: &AppServices) -> bool {
@@ -734,6 +761,34 @@ fn finding_dto(
         approved_for_auto: remembered
             .map(|entry| entry.approved_for_auto)
             .unwrap_or(false),
+        cleanup_command: {
+            let plan = plan_for(&item.candidate.kind, &item.candidate.display_path);
+            plan.command.as_ref().map(|step| display_command(step))
+        },
+        cleanup_method: {
+            plan_for(&item.candidate.kind, &item.candidate.display_path)
+                .method
+                .token()
+                .to_string()
+        },
+        impact: {
+            let impact = item.verdict.impact.clone().unwrap_or_else(|| {
+                Reason::key(plan_for(&item.candidate.kind, &item.candidate.display_path).impact_key)
+            });
+            describe_reason(&impact)
+        },
+        impact_kind: {
+            let impact = item.verdict.impact.clone().unwrap_or_else(|| {
+                Reason::key(plan_for(&item.candidate.kind, &item.candidate.display_path).impact_key)
+            });
+            reason_kind(&impact).to_string()
+        },
+        impact_params: {
+            let impact = item.verdict.impact.clone().unwrap_or_else(|| {
+                Reason::key(plan_for(&item.candidate.kind, &item.candidate.display_path).impact_key)
+            });
+            reason_params(&impact)
+        },
     }
 }
 

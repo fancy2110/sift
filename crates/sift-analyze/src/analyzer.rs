@@ -207,7 +207,7 @@ impl Analyzer {
             let Ok(reader) = DirReader::read(dir, true) else {
                 continue;
             };
-            let entries = reader.into_entries();
+            let entries = reader.into_parts().1;
             for entry in entries {
                 let name = String::from_utf8_lossy(&entry.name).into_owned();
                 if name == "." || name == ".." {

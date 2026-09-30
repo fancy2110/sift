@@ -203,6 +203,11 @@ pub struct Verdict {
     pub source: VerdictSource,
     /// Unix milliseconds when the judgment was made.
     pub judged_at_ms: i64,
+    /// What breaks after deletion. A model returns free text in the user's
+    /// language; local verdicts leave this `None` and the caller attaches the
+    /// deterministic i18n key from the cleanup plan. Absent for old records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impact: Option<Reason>,
 }
 
 impl Verdict {
@@ -212,6 +217,7 @@ impl Verdict {
         reason: Reason,
         source: VerdictSource,
         judged_at_ms: i64,
+        impact: Option<Reason>,
     ) -> Self {
         Self {
             safety,
@@ -219,6 +225,7 @@ impl Verdict {
             reason,
             source,
             judged_at_ms,
+            impact,
         }
     }
 
@@ -233,6 +240,7 @@ impl Verdict {
                 rule: "fallback".into(),
             },
             judged_at_ms,
+            impact: None,
         }
     }
 
@@ -376,6 +384,7 @@ mod tests {
             Reason::key("k"),
             VerdictSource::rule("r"),
             0,
+            None,
         );
         assert_eq!(verdict.confidence, 0.0);
     }
@@ -389,6 +398,7 @@ mod tests {
             Reason::key("k"),
             VerdictSource::rule("cache"),
             0,
+            None,
         );
         let model = Verdict::new(
             Safety::Safe,
@@ -396,6 +406,7 @@ mod tests {
             Reason::text("looks like a cache"),
             VerdictSource::remote("test"),
             0,
+            None,
         );
         assert!(rule.is_automatically_removable(&policy));
         assert!(
@@ -413,6 +424,7 @@ mod tests {
             Reason::key("k"),
             VerdictSource::UserDecision,
             0,
+            None,
         );
         assert!(verdict.is_automatically_removable(&policy));
     }
@@ -467,6 +479,7 @@ mod tests {
             Reason::key("k"),
             VerdictSource::remote("ark"),
             123,
+            None,
         );
         let json = serde_json::to_string(&verdict).unwrap();
         let back: Verdict = serde_json::from_str(&json).unwrap();

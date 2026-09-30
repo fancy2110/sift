@@ -38,6 +38,7 @@ fn main() {
                 policy = ScanPolicy::thorough().with_file_detail(u64::MAX);
                 policy.dedupe_hardlinks = false;
             }
+            "--no-physical" => policy.want_physical_size = false,
             other => root = Some(PathBuf::from(other)),
         }
     }
@@ -58,7 +59,10 @@ fn main() {
         if workers > 0 {
             workers.to_string()
         } else {
-            format!("auto({})", policy.resolved_threads())
+            format!(
+                "perf({})",
+                sift_platform::recommended_scan_workers()
+            )
         },
         policy.want_physical_size,
         policy.dedupe_hardlinks,
@@ -99,6 +103,7 @@ fn main() {
 
     let mut outcome = ScanOutcome::Failed;
     let mut last_progress = None;
+    let mut max_queue_depth = 0u64;
     while let Ok(event) = handle.events.recv() {
         match event {
             ScanEvent::Finished {
@@ -110,7 +115,10 @@ fn main() {
                 last_progress = Some(progress);
                 break;
             }
-            ScanEvent::Progress { progress, .. } => last_progress = Some(progress),
+            ScanEvent::Progress { progress, .. } => {
+                max_queue_depth = max_queue_depth.max(progress.queue_depth);
+                last_progress = Some(progress);
+            }
             _ => {}
         }
     }
@@ -148,11 +156,32 @@ fn main() {
         "entries   : {} files, {} dirs, {} denied",
         progress.files, progress.dirs, progress.denied
     );
+    if progress.hardlinks_skipped > 0 {
+        println!(
+            "hardlink  : {} duplicate links not counted",
+            progress.hardlinks_skipped
+        );
+    }
+    println!("frontier : BFS queue depth peak {max_queue_depth}");
     println!(
         "bytes     : {} logical",
         format_bytes(progress.bytes.logical)
     );
     println!("time      : {:.3} s", elapsed.as_secs_f64());
+    let (worker_busy_ns, coord_ns) = sift_scan::timing_stats();
+    let (open_ns, bulk_ns) = sift_platform::dir::probe_timings();
+    println!(
+        "timing    : worker busy total {:.1} s ({:.2} cores avg), coordinator process {:.1} s ({:.0}% of wall)",
+        worker_busy_ns as f64 / 1e9,
+        worker_busy_ns as f64 / elapsed.as_nanos() as f64,
+        coord_ns as f64 / 1e9,
+        coord_ns as f64 / elapsed.as_nanos() as f64 * 100.0
+    );
+    println!(
+        "split     : open {:.1} s, bulk loop {:.1} s",
+        open_ns as f64 / 1e9,
+        bulk_ns as f64 / 1e9
+    );
     println!(
         "throughput: {:.0} entries/s, {:.0} files/s, {:.1} MB/s (by files)",
         progress.entries_per_sec(),
