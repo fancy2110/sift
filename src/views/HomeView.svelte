@@ -38,18 +38,20 @@
   // so it is never clipped. The text stack is then scaled to fit inside the
   // dashed ring's inner diameter (r=80 → 80% of stage) with breathing padding,
   // which structurally guarantees the label never covers the ring.
-  const RING_PAD = 44;
-  let ringW = $derived(
-    Math.max(240, Math.min(centerW, centerH) - 8)
-  );
-  let stackScale = $derived(
-    Math.min(
-      1,
-      Math.max(
-        0.5,
-        (ringW * 0.8 - RING_PAD * 2) / Math.max(stackW, stackH)
-      )
-    )
+  // The ring stage is built at the "natural" size: stack's largest dimension
+  // plus equal padding on every side. Rings and stack live in the SAME box and
+  // scale together as one composition, so the ring always wraps the text.
+  // Only when the natural box exceeds the available stage do we shrink the
+  // whole thing (no floor) — the wrap relationship is preserved exactly.
+  // The ring stage is sized so the stack's largest dimension fills at most 74%
+  // of the box — the dashed ring sits at 80%, so the text always lands inside
+  // it with a proportional margin at any content size. Rings and stack live in
+  // the SAME box and scale together as one composition; when the natural box
+  // exceeds the available stage, the whole thing shrinks (no floor), preserving
+  // the wrap relationship exactly.
+  let desiredW = $derived(Math.max(stackW, stackH) / 0.74);
+  let fitScale = $derived(
+    Math.min(1, (Math.min(centerW, centerH) - 8) / desiredW)
   );
 
   // Once a review-triggered scan finishes and produces findings, enter smart.
@@ -94,11 +96,16 @@
 
   <!-- center stage -->
   <div class="hub-center" bind:this={centerEl}>
+   <div
+     class="hub-comp"
+     style:width={`${desiredW}px`}
+     style:height={`${desiredW}px`}
+     style:transform={`scale(${fitScale})`}
+   >
     <div
       class="ring-stage"
       class:scanning={store.scanning}
       in:fade={{ duration: 640, delay: 120 }}
-      style:width={`${ringW}px`}
       aria-hidden="true"
     >
       {#if store.scanning}
@@ -155,7 +162,6 @@
     <div
       class="hub-stack"
       bind:this={stackEl}
-      style:transform={`scale(${stackScale})`}
     >
     <p class="hub-eyebrow" in:fade={{ duration: 480, delay: 120 }}>
       {store.scanning ? t('home.scanning') : t('home.total')}
@@ -186,6 +192,7 @@
       {store.scanning ? t('home.ctaScanning') : t('home.ctaScan')}
     </button>
     </div>
+   </div>
   </div>
 
   <!-- entry cards -->
@@ -297,13 +304,15 @@
     justify-content: center;
   }
 
+  .hub-comp {
+    position: relative;
+    flex-shrink: 0;
+    transform-origin: 50% 50%;
+    transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  }
   .ring-stage {
     position: absolute;
-    top: 50%;
-    left: 50%;
-    /* Width is set inline from the measured label width. */
-    aspect-ratio: 1;
-    transform: translate(-50%, -50%);
+    inset: 0;
     pointer-events: none;
   }
   .ring-svg {
@@ -410,11 +419,14 @@
     z-index: 1;
   }
   .hub-stack {
+    position: absolute;
+    top: 50%;
+    left: 50%;
     display: flex;
     flex-direction: column;
     align-items: center;
+    transform: translate(-50%, -50%);
     transform-origin: 50% 50%;
-    transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .hub-eyebrow {
     margin: 0 0 14px;
