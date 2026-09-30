@@ -15,6 +15,7 @@
   let centerEl = $state<HTMLElement>();
   let stackW = $state(280);
   let stackH = $state(260);
+  let centerW = $state(900);
   let centerH = $state(560);
   $effect(() => {
     const stack = stackEl;
@@ -23,6 +24,7 @@
     const measure = () => {
       stackW = stack.offsetWidth;
       stackH = stack.offsetHeight;
+      centerW = center.clientWidth;
       centerH = center.clientHeight;
     };
     const ro = new ResizeObserver(measure);
@@ -32,14 +34,21 @@
     return () => ro.disconnect();
   });
 
-  // The dashed circle renders at 80% of the stage width (r=80 in a 200 box),
-  // so divide the required inner diameter by 0.8. Cap to the stage height so
-  // the ring never spills into the entry cards.
-  const RING_PAD = 88;
+  // Ring fills the largest square the stage allows (width AND height bounded),
+  // so it is never clipped. The text stack is then scaled to fit inside the
+  // dashed ring's inner diameter (r=80 → 80% of stage) with breathing padding,
+  // which structurally guarantees the label never covers the ring.
+  const RING_PAD = 44;
   let ringW = $derived(
+    Math.max(240, Math.min(centerW, centerH) - 8)
+  );
+  let stackScale = $derived(
     Math.min(
-      Math.max(300, (Math.max(stackW, stackH) + RING_PAD * 2) / 0.8),
-      Math.max(300, centerH - 8)
+      1,
+      Math.max(
+        0.5,
+        (ringW * 0.8 - RING_PAD * 2) / Math.max(stackW, stackH)
+      )
     )
   );
 
@@ -143,7 +152,11 @@
       <span class="ring-glow"></span>
     </div>
 
-    <div class="hub-stack" bind:this={stackEl}>
+    <div
+      class="hub-stack"
+      bind:this={stackEl}
+      style:transform={`scale(${stackScale})`}
+    >
     <p class="hub-eyebrow" in:fade={{ duration: 480, delay: 120 }}>
       {store.scanning ? t('home.scanning') : t('home.total')}
     </p>
@@ -400,6 +413,8 @@
     display: flex;
     flex-direction: column;
     align-items: center;
+    transform-origin: 50% 50%;
+    transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .hub-eyebrow {
     margin: 0 0 14px;
