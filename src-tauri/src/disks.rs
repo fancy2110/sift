@@ -44,6 +44,13 @@ pub fn list_volumes() -> Vec<VolumeInfo> {
         .collect()
 }
 
+/// The current user's home directory. The front end uses this as the deep-scan
+/// root for system volumes: system files are not cleanable.
+#[command]
+pub fn home_dir() -> Option<String> {
+    dirs::home_dir().map(|p| p.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

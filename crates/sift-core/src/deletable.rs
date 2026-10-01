@@ -270,6 +270,32 @@ fn effective_uid() -> u32 {
     unsafe { geteuid() }
 }
 
+/// Whether a *directory itself* permits deleting its children, judged from the
+/// directory's own already-fetched metadata (no extra syscall).
+///
+/// Removing a child entry needs the owner/group/other write bit on the
+/// directory that holds it. Callers that have just stat-ed the directory can
+/// reuse the metadata here instead of probing again.
+#[cfg(unix)]
+pub fn dir_is_writable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let mode = meta.mode();
+    if meta.uid() == effective_uid() {
+        mode & 0o200 != 0
+    } else {
+        mode & 0o002 != 0
+    }
+}
+
+/// Windows ACLs are not expressible through Unix mode bits; reaching the
+/// metadata proves the directory is accessible, and a move-to-trash reports a
+/// per-item error if the ACL ultimately refuses.
+#[cfg(windows)]
+pub fn dir_is_writable(meta: &std::fs::Metadata) -> bool {
+    let _ = meta;
+    true
+}
+
 #[cfg(windows)]
 pub fn parent_is_writable(path: &Path) -> bool {
     use std::fs;

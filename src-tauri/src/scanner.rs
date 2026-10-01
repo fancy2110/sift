@@ -431,11 +431,24 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
             ScanEvent::Warning { message, .. } => {
                 eprintln!("sift scan warning: {message}");
             }
+            ScanEvent::Calibrated { key, size, .. } => {
+                // Exact size of a previously predicted giant directory.
+                sized.push(SizedInfo {
+                    id: key.to_string(),
+                    size: size.dominant(),
+                    pending: false,
+                });
+            }
+            ScanEvent::CalibrationFinished { .. } => {
+                break;
+            }
             ScanEvent::Finished {
                 outcome: finished, ..
             } => {
+                // The main scan is done; keep pumping only when background
+                // calibration follows. With nothing to calibrate the event
+                // sender is dropped and the next receive disconnects.
                 outcome = finished;
-                break;
             }
             // `ScanEvent` is non-exhaustive; an unknown future variant is
             // ignored rather than mistaken for completion.

@@ -347,6 +347,16 @@ pub enum ScanEvent {
     /// A non-fatal problem worth surfacing once (permission denied root, a
     /// volume that vanished, a full hardlink table).
     Warning { scan: ScanId, message: String },
+    /// Exact totals for a previously predicted giant directory, measured after
+    /// the main scan. The delta has already been propagated through the tree.
+    Calibrated {
+        scan: ScanId,
+        key: crate::id::NodeKey,
+        size: ByteSize,
+        files: u64,
+    },
+    /// Background calibration has finished.
+    CalibrationFinished { scan: ScanId },
 }
 
 /// One directory restored from a previous interrupted scan.
@@ -389,7 +399,9 @@ impl ScanEvent {
             | ScanEvent::DirectorySized { scan, .. }
             | ScanEvent::Progress { scan, .. }
             | ScanEvent::Finished { scan, .. }
-            | ScanEvent::Warning { scan, .. } => *scan,
+            | ScanEvent::Warning { scan, .. }
+            | ScanEvent::Calibrated { scan, .. }
+            | ScanEvent::CalibrationFinished { scan, .. } => *scan,
         }
     }
 }

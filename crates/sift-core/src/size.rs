@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::ops::AddAssign;
+use std::ops::{AddAssign, SubAssign};
 
 /// An exact byte count split into logical and physical totals.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +81,14 @@ impl AddAssign for ByteSize {
     fn add_assign(&mut self, rhs: Self) {
         self.logical = self.logical.saturating_add(rhs.logical);
         self.physical = self.physical.saturating_add(rhs.physical);
+    }
+}
+
+impl SubAssign for ByteSize {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Self) {
+        self.logical = self.logical.saturating_sub(rhs.logical);
+        self.physical = self.physical.saturating_sub(rhs.physical);
     }
 }
 
