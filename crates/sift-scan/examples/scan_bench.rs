@@ -24,6 +24,8 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let mut root: Option<PathBuf> = None;
     let mut workers: usize = 0;
+    let mut db_path: Option<PathBuf> = None;
+    let mut fast = false;
     let mut policy = ScanPolicy::thorough();
 
     while let Some(arg) = args.next() {
@@ -33,6 +35,10 @@ fn main() {
                     workers = value.parse().unwrap_or(0);
                 }
             }
+            "--db" => db_path = args.next().map(PathBuf::from),
+            "--fast" => fast = true,
+            "--frugal" => policy = ScanPolicy::frugal(),
+            "--nophysical" => policy.want_physical_size = false,
             "--lean" => {
                 // Directories only, no hardlink table: the cheapest mode.
                 policy = ScanPolicy::thorough()
@@ -54,13 +60,27 @@ fn main() {
         describe_reader(&root)
     );
 
-    let engine = if workers > 0 {
+    let mut engine = if workers > 0 {
         ScanEngine::with_workers(workers)
     } else {
         ScanEngine::new()
     };
+    if let Some(path) = db_path {
+        match sift_persist::SqliteSnapshotStore::open(&path) {
+            Ok(store) => {
+                engine = engine.with_snapshot_store(std::sync::Arc::new(store));
+                println!("snapshots : {}", path.display());
+            }
+            Err(err) => eprintln!("snapshot store disabled: {err}"),
+        }
+    }
+    if fast {
+        for prefix in fast_system_prefixes() {
+            engine = engine.with_skip_prefix(prefix);
+        }
+    }
     println!(
-        "policy    : threads={} physical={} hardlinks={} file_detail={}",
+        "policy    : threads={} physical={} hardlinks={} frugal={} file_detail={} skip={}",
         if workers > 0 {
             workers.to_string()
         } else {
@@ -68,11 +88,13 @@ fn main() {
         },
         policy.want_physical_size,
         policy.dedupe_hardlinks,
+        policy.frugal_cpu,
         if policy.file_detail_min_bytes == u64::MAX {
             "none".to_string()
         } else {
             format_bytes(policy.file_detail_min_bytes)
-        }
+        },
+        engine.skip_prefixes().len()
     );
 
     let started = Instant::now();
@@ -192,6 +214,24 @@ fn main() {
     if progress.coverage > 0.0 {
         println!("coverage  : {:.1}% of the volume's used bytes", progress.coverage * 100.0);
     }
+}
+
+/// Well-known macOS system prefixes that hold no cleanable user content:
+/// sealed system volume, system-managed libraries, private runtime trees.
+fn fast_system_prefixes() -> Vec<PathBuf> {
+    [
+        "/System",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/private",
+        "/Volumes",
+        "/Library",
+        "/opt/homebrew",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
 }
 
 /// Which reader the platform picks for a directory, and whether it is the fast

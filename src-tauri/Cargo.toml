@@ -22,6 +22,7 @@ sift-scan = { workspace = true }
 sift-analyze = { workspace = true }
 sift-store = { workspace = true }
 sift-monitor = { workspace = true }
+sift-persist = { workspace = true }
 
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"

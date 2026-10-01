@@ -13,6 +13,8 @@ export interface Node {
   deletable: boolean;
   /** Directory whose subtree scan hasn't finished. */
   pending: boolean;
+  /** Totals are an estimate pending background calibration. */
+  estimated?: boolean;
 
   // ---- client-assembled fields ----
   /** Direct children, attached as they stream in. */

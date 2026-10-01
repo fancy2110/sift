@@ -22,7 +22,10 @@
 pub mod adjudicate;
 pub mod analyzer;
 pub mod candidate;
+pub mod cleanup_plan;
 pub mod habits;
+pub mod mock;
+pub mod prompt;
 pub mod reason;
 pub mod route;
 pub mod rules;
@@ -39,9 +42,12 @@ pub use analyzer::{AnalysisPolicy, AnalysisStage, Analyzer};
 pub use candidate::{
     redact_path, Candidate, CandidateKind, Evidence, Nomination,
 };
+pub use cleanup_plan::{CleanupCommand, CleanupImpact};
 pub use habits::{
     Decision, DecisionLog, DecisionOutcome, RoutineSuggestion, SuggestionReason,
 };
+pub use mock::MockAdjudicator;
+pub use prompt::{build_prompt, PROMPT_VERSION};
 pub use reason::{
     clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource,
 };

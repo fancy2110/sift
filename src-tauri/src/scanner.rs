@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use serde::Serialize;
 use sift_core::id::NodeKey;
-use sift_core::{ScanEvent, ScanId, ScanOutcome, ScanPolicy, ScanRequest, ScanTree};
+use sift_core::{Progress, ScanEvent, ScanId, ScanOutcome, ScanPolicy, ScanRequest, ScanTree};
 use sift_scan::{ScanControl, ScanEngine, ScanHandle};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -38,6 +38,7 @@ pub struct NodeInfo {
     pub modified_ms: Option<i64>,
     pub deletable: bool,
     pub pending: bool,
+    pub estimated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +47,32 @@ pub struct ProgressInfo {
     pub files: u64,
     pub dirs: u64,
     pub tracked_nodes: usize,
+    pub bytes: u64,
+    pub denied: u64,
+    pub queue_depth: usize,
+    pub elapsed_secs: f64,
+    pub entries_per_sec: u64,
+    pub bytes_per_sec: u64,
+    pub coverage: f32,
+}
+
+impl From<&Progress> for ProgressInfo {
+    fn from(value: &Progress) -> Self {
+        Self {
+            files: value.files,
+            dirs: value.dirs,
+            tracked_nodes: 0,
+            // Report the bytes the volume actually spends, not the logical
+            // file size the files claim.
+            bytes: value.bytes.reclaimable(),
+            denied: value.denied,
+            queue_depth: value.queue_depth as usize,
+            elapsed_secs: value.elapsed_secs,
+            entries_per_sec: value.entries_per_sec() as u64,
+            bytes_per_sec: value.bytes_per_sec() as u64,
+            coverage: value.coverage as f32,
+        }
+    }
 }
 
 // ---- manager state ---------------------------------------------------------
@@ -96,16 +123,28 @@ pub fn start_scan(
     manager: State<'_, ScanManager>,
     root: String,
     focus: String,
+    label: String,
 ) -> Result<(), String> {
     if manager.is_running() {
         return Err("scan already running".into());
     }
 
     let root_path = PathBuf::from(&root);
+
+    // One snapshot database per scanned root, kept in the app's data dir.
     let engine = ScanEngine::new();
+    let engine = attach_snapshots(engine, &app, &root_path);
+
     let request = ScanRequest::new(manager.next_scan_id(), root_path.clone())
         .with_focus(PathBuf::from(&focus))
         .with_policy(ScanPolicy::thorough());
+
+    // Feed the volume's in-use byte count so the progress bar can show real
+    // coverage instead of staying at 0%.
+    let request = match sift_platform::volume::free_space(&root_path) {
+        Some((total, available)) => request.with_volume_used_bytes(total.saturating_sub(available)),
+        None => request,
+    };
 
     let handle = engine.scan(request).map_err(|err| err.to_string())?;
     let control = handle.control();
@@ -128,7 +167,7 @@ pub fn start_scan(
     std::thread::Builder::new()
         .name("sift-tauri-scan".into())
         .spawn(move || {
-            pump_events(app_for_pump, handle, root_path);
+            pump_events(app_for_pump, handle, root_path, label);
             // The engine finished; clear the running flag through the app state.
             if let Some(manager) = app.try_state::<ScanManager>() {
                 manager.running.store(false, Ordering::SeqCst);
@@ -162,10 +201,27 @@ pub fn scan_running(manager: State<'_, ScanManager>) -> bool {
     manager.is_running()
 }
 
+/// Attach the per-root SQLite snapshot store, logging instead of failing when
+/// the data directory is unavailable (snapshots are an optimisation).
+fn attach_snapshots(engine: ScanEngine, app: &AppHandle, root: &Path) -> ScanEngine {
+    let Some(data_dir) = app.path().app_data_dir().ok() else {
+        return engine;
+    };
+    let root_key = sift_core::id::NodeKey::from_path(root).to_string();
+    let db_path = data_dir.join("snapshots").join(format!("{root_key}.db"));
+    match sift_persist::SqliteSnapshotStore::open(db_path) {
+        Ok(store) => engine.with_snapshot_store(Arc::new(store)),
+        Err(err) => {
+            eprintln!("sift snapshots disabled for {}: {err}", root.display());
+            engine
+        }
+    }
+}
+
 // ---- event pump ------------------------------------------------------------
 
 /// Drain engine events until the scan ends, re-emitting the legacy vocabulary.
-fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
+fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf, root_label: String) {
     let root_text = root.to_string_lossy().to_string();
     let root_key = NodeKey::from_path(&root);
 
@@ -176,29 +232,27 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
         NodeInfo {
             id: root_key.to_string(),
             parent_id: None,
-            name: root
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| root_text.clone()),
+            name: root_label,
             path: root_text.clone(),
             is_dir: true,
             size: 0,
             modified_ms: None,
             deletable: false,
             pending: true,
+            estimated: false,
         },
     );
 
     let mut last_progress = Instant::now();
     let mut outcome = ScanOutcome::Failed;
-    let mut files = 0u64;
-    let mut dirs = 0u64;
+    let mut latest_progress: Option<Progress> = None;
+    let mut scan_finished = false;
 
     while let Ok(event) = handle.events.recv() {
         match event {
             ScanEvent::DirectoryListed { dir, .. } => {
                 // The directory itself is known and still filling in.
-                emit_sized(&app, &dir.key.to_string(), dir.size.dominant(), true);
+                emit_sized(&app, &dir.key.to_string(), dir.size.reclaimable(), true);
                 for entry in &dir.entries {
                     let path = join_path(&dir.path, &entry.name);
                     let _ = app.emit(
@@ -209,10 +263,11 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
                             name: entry.name.clone(),
                             path,
                             is_dir: entry.is_dir,
-                            size: entry.size.dominant(),
+                            size: entry.size.reclaimable(),
                             modified_ms: Some(entry.mtime_ms).filter(|value| *value != 0),
                             deletable: entry.deletable,
                             pending: entry.pending,
+                            estimated: false,
                         },
                     );
                 }
@@ -230,21 +285,56 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
                 // nothing extra to publish here.
             }
             ScanEvent::Progress { progress, .. } => {
-                files = progress.files;
-                dirs = progress.dirs;
                 if last_progress.elapsed().as_millis() >= PROGRESS_INTERVAL_MS {
-                    emit_progress(&app, &handle, files, dirs);
+                    emit_progress(&app, &progress);
                     last_progress = Instant::now();
                 }
+                latest_progress = Some(progress);
             }
             ScanEvent::Warning { message, .. } => {
                 eprintln!("sift scan warning: {message}");
+                if message.contains("校准") {
+                    let _ = app.emit(
+                        "scan://calibration-start",
+                        serde_json::json!({ "message": message }),
+                    );
+                }
+            }
+            ScanEvent::Calibrated { key, size, files, .. } => {
+                // The main scan is done; a predicted giant subtree was just
+                // measured. Forward it so the UI can patch the totals.
+                let _ = app.emit(
+                    "scan://calibrated",
+                    serde_json::json!({
+                        "id": key.to_string(),
+                        "size": size.reclaimable(),
+                        "files": files,
+                    }),
+                );
+            }
+            ScanEvent::CalibrationFinished { .. } => {
+                let _ = app.emit("scan://calibration-done", serde_json::json!({}));
+                if scan_finished {
+                    break;
+                }
             }
             ScanEvent::Finished {
                 outcome: finished, ..
             } => {
                 outcome = finished;
-                break;
+                scan_finished = true;
+                // Emit done now so the UI becomes interactive, then keep
+                // draining background calibration events.
+                if let Some(progress) = latest_progress.take() {
+                    emit_progress(&app, &progress);
+                }
+                let _ = app.emit(
+                    "scan://done",
+                    serde_json::json!({
+                        "cancelled": matches!(outcome, ScanOutcome::Cancelled),
+                        "root": root_text,
+                    }),
+                );
             }
             // `ScanEvent` is non-exhaustive; an unknown future variant is
             // ignored rather than mistaken for completion.
@@ -252,14 +342,19 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
         }
     }
 
-    emit_progress(&app, &handle, files, dirs);
-    let _ = app.emit(
-        "scan://done",
-        serde_json::json!({
-            "cancelled": matches!(outcome, ScanOutcome::Cancelled),
-            "root": root_text,
-        }),
-    );
+    // Fallback if the channel closed before the terminal marker arrived.
+    if !scan_finished {
+        if let Some(progress) = latest_progress {
+            emit_progress(&app, &progress);
+        }
+        let _ = app.emit(
+            "scan://done",
+            serde_json::json!({
+                "cancelled": matches!(outcome, ScanOutcome::Cancelled),
+                "root": root_text,
+            }),
+        );
+    }
 }
 
 fn emit_sized(app: &AppHandle, id: &str, size: u64, pending: bool) {
@@ -269,20 +364,8 @@ fn emit_sized(app: &AppHandle, id: &str, size: u64, pending: bool) {
     );
 }
 
-fn emit_progress(app: &AppHandle, handle: &ScanHandle, files: u64, dirs: u64) {
-    let tracked = handle
-        .tree
-        .lock()
-        .map(|tree| tree.node_count() as usize)
-        .unwrap_or(0);
-    let _ = app.emit(
-        "scan://progress",
-        ProgressInfo {
-            files,
-            dirs,
-            tracked_nodes: tracked,
-        },
-    );
+fn emit_progress(app: &AppHandle, progress: &Progress) {
+    let _ = app.emit("scan://progress", ProgressInfo::from(progress));
 }
 
 /// Join a directory path with an entry name, tolerating a trailing separator.

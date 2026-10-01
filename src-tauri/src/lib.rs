@@ -14,7 +14,7 @@ mod watcher;
 
 use analyze::AppServices;
 use cleanup::move_to_trash;
-use disks::list_volumes;
+use disks::{home_dir, list_volumes};
 use scanner::{cancel_scan, scan_running, set_scan_focus, start_scan, ScanManager};
 use watcher::{unwatch_fs, watch_fs, FsWatcherState};
 
@@ -40,12 +40,14 @@ pub fn run() {
             ping,
             // volumes and scanning
             list_volumes,
+            home_dir,
             start_scan,
             cancel_scan,
             set_scan_focus,
             scan_running,
             // deletion and filesystem awareness
             move_to_trash,
+            cleanup::preview_delete,
             watch_fs,
             unwatch_fs,
             // analysis, persistence and monitoring

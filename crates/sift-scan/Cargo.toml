@@ -11,3 +11,6 @@ authors.workspace = true
 sift-core = { workspace = true }
 sift-platform = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+sift-persist = { workspace = true }

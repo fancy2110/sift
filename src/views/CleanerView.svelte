@@ -2,6 +2,7 @@
   import Treemap from '../lib/components/Treemap.svelte';
   import Icon from '../lib/components/Icon.svelte';
   import LocationPicker from '../lib/components/LocationPicker.svelte';
+  import ScanProgress from '../lib/components/ScanProgress.svelte';
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
   import type { Node, Risk } from '../lib/types';
@@ -190,6 +191,9 @@
     <div class="canvas-body relative w-full max-w-[1180px]">
       <div class="absolute inset-0 flex items-stretch" data-od-id="mode-map">
         <div class="relative min-w-0 flex-1" data-od-id="treemap-stage">
+          {#if store.scanning || store.calibrating}
+            <ScanProgress onCancel={() => store.cancelScan()} />
+          {/if}
           {#key store.treeVersion}
             <Treemap
               entries={store.listEntries}
@@ -374,14 +378,28 @@
                 {/if}
               </ul>
               <div class="sheet-hairline-t flex shrink-0 items-center gap-3 px-4 py-3">
-                <span class="text-[11.5px]" style="color: var(--color-faint)">移入回收站，可恢复</span>
-                <button type="button" class="btn btn-primary ml-auto min-w-[150px]" disabled={store.candidates.length === 0 || store.cleaning} onclick={() => store.clean(false)} data-od-id="clean-button">
-                  {#if store.cleaning}
-                    <Icon name="refresh" size={14} class="animate-spin" /> 清理中
-                  {:else}
-                    <Icon name="trash" size={14} /> 清理 {formatSize(store.selectedBytes)}
-                  {/if}
-                </button>
+                {#if store.pendingConfirmBytes > 0}
+                  <span class="text-[11.5px]" style="color: var(--color-faint)">预览完成，确认后移入回收站</span>
+                  <button type="button" class="btn ml-auto" disabled={store.cleaning} onclick={() => store.cancelCleanPreview()}>
+                    取消
+                  </button>
+                  <button type="button" class="btn btn-primary min-w-[150px]" disabled={store.cleaning} onclick={() => store.confirmClean()} data-od-id="clean-confirm-button">
+                    {#if store.cleaning}
+                      <Icon name="refresh" size={14} class="animate-spin" /> 清理中
+                    {:else}
+                      <Icon name="trash" size={14} /> 确认清理 {formatSize(store.pendingConfirmBytes)}
+                    {/if}
+                  </button>
+                {:else}
+                  <span class="text-[11.5px]" style="color: var(--color-faint)">先预览，不直接删除</span>
+                  <button type="button" class="btn btn-primary ml-auto min-w-[150px]" disabled={store.candidates.length === 0 || store.cleaning} onclick={() => store.clean(false)} data-od-id="clean-button">
+                    {#if store.cleaning}
+                      <Icon name="refresh" size={14} class="animate-spin" /> 预览中
+                    {:else}
+                      <Icon name="trash" size={14} /> 预览清理 {formatSize(store.selectedBytes)}
+                    {/if}
+                  </button>
+                {/if}
               </div>
             </div>
             <div class="h-full w-1/2 min-h-0 shrink-0 overflow-y-auto px-4 py-4">

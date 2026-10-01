@@ -14,6 +14,7 @@ members = [
     "crates/sift-analyze",
     "crates/sift-store",
     "crates/sift-monitor",
+    "crates/sift-persist",
 ]
 
 [workspace.package]
@@ -30,6 +31,7 @@ sift-scan = { path = "crates/sift-scan" }
 sift-analyze = { path = "crates/sift-analyze" }
 sift-store = { path = "crates/sift-store" }
 sift-monitor = { path = "crates/sift-monitor" }
+sift-persist = { path = "crates/sift-persist" }
 
 # Domain / engine dependencies.
 serde = { version = "1", features = ["derive"] }

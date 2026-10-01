@@ -8,8 +8,12 @@ export function listVolumes(): Promise<VolumeInfo[]> {
   return invoke<VolumeInfo[]>('list_volumes');
 }
 
-export function startScan(root: string, focus: string): Promise<void> {
-  return invoke('start_scan', { root, focus });
+export function homeDir(): Promise<string | null> {
+  return invoke<string | null>('home_dir');
+}
+
+export function startScan(root: string, focus: string, label: string): Promise<void> {
+  return invoke('start_scan', { root, focus, label });
 }
 
 export function cancelScan(): Promise<void> {
@@ -24,10 +28,17 @@ export interface DeleteResultItem {
   path: string;
   ok: boolean;
   error: string | null;
+  dryRun: boolean;
 }
 
-export function moveToTrash(paths: string[]): Promise<DeleteResultItem[]> {
-  return invoke('move_to_trash', { paths });
+/// Preview what cleanup would do; never touches the filesystem.
+export function previewDelete(paths: string[]): Promise<DeleteResultItem[]> {
+  return invoke('preview_delete', { paths });
+}
+
+/// Real cleanup only when `execute` is true.
+export function moveToTrash(paths: string[], execute = false): Promise<DeleteResultItem[]> {
+  return invoke('move_to_trash', { paths, execute });
 }
 
 export function watchFs(root: string): Promise<void> {
@@ -46,6 +57,13 @@ export interface ProgressEvent {
   files: number;
   dirs: number;
   trackedNodes: number;
+  bytes: number;
+  denied: number;
+  queueDepth: number;
+  elapsedSecs: number;
+  entriesPerSec: number;
+  bytesPerSec: number;
+  coverage: number;
 }
 
 export interface ScanDoneEvent {
@@ -67,6 +85,24 @@ export function onProgress(cb: (e: ProgressEvent) => void): Promise<UnlistenFn> 
 
 export function onScanDone(cb: (e: ScanDoneEvent) => void): Promise<UnlistenFn> {
   return listen<ScanDoneEvent>('scan://done', (e) => cb(e.payload));
+}
+
+export interface CalibratedEvent {
+  id: string;
+  size: number;
+  files: number;
+}
+
+export function onCalibrated(cb: (e: CalibratedEvent) => void): Promise<UnlistenFn> {
+  return listen<CalibratedEvent>('scan://calibrated', (e) => cb(e.payload));
+}
+
+export function onCalibrationStart(cb: (e: { message: string }) => void): Promise<UnlistenFn> {
+  return listen<{ message: string }>('scan://calibration-start', (e) => cb(e.payload));
+}
+
+export function onCalibrationDone(cb: () => void): Promise<UnlistenFn> {
+  return listen('scan://calibration-done', () => cb());
 }
 
 export interface DeletedEvent {

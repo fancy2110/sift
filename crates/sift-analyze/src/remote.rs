@@ -23,6 +23,7 @@ use crate::adjudicate::{
     apply_remote_verdicts, parse_raw_verdicts, AdjudicateError, Guardrails,
 };
 use crate::candidate::Candidate;
+use crate::prompt::build_prompt_at;
 use crate::reason::Verdict;
 use crate::route::RemoteAdjudicator;
 
@@ -94,75 +95,6 @@ impl LlmConfig {
     }
 }
 
-/// One candidate as the model sees it.
-///
-/// A dedicated struct rather than serializing [`Candidate`] directly, so that
-/// adding a field to the local model can never accidentally add it to the
-/// payload.
-#[derive(serde::Serialize)]
-struct PromptCandidate<'a> {
-    id: String,
-    path: &'a str,
-    entry_type: &'static str,
-    size_bytes: u64,
-    age_days: u64,
-    family: &'static str,
-    signals: Vec<&'a str>,
-}
-
-/// Build the system and user messages for one batch.
-///
-/// Pure and public so the payload can be asserted in tests: that is the only
-/// practical way to prove no absolute path leaks.
-pub fn build_prompt(batch: &[Candidate], language: &str) -> (String, String) {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as i64)
-        .unwrap_or(0);
-    build_prompt_at(batch, language, now_ms)
-}
-
-/// [`build_prompt`] with an explicit clock, for reproducible tests.
-pub fn build_prompt_at(batch: &[Candidate], language: &str, now_ms: i64) -> (String, String) {
-    let system = format!(
-        "You are a conservative disk-cleanup reviewer inside a desktop app. \
-For each item you receive, decide whether it can be deleted.\n\
-Reply with ONLY a JSON array. Each element: \
-{{\"id\": string, \"safety\": \"safe\"|\"review\"|\"keep\", \"confidence\": number 0..1, \"reason\": string}}.\n\
-Rules:\n\
-- \"safe\" means deleting it loses nothing the user cannot restore or regenerate.\n\
-- \"review\" means a human must decide. \"keep\" means it should not be deleted.\n\
-- If you are unsure, answer \"review\". Never guess \"safe\".\n\
-- \"reason\" is ONE short sentence in {language}, naming the object and why. \
-It is shown verbatim in the interface.\n\
-- Judge only what you are given. You cannot see file contents; do not imply that you did.\n\
-- Return one element per item, using the exact ids given.",
-        language = language
-    );
-
-    let items: Vec<PromptCandidate<'_>> = batch
-        .iter()
-        .map(|candidate| PromptCandidate {
-            id: candidate.key.to_string(),
-            path: candidate.display_path.as_str(),
-            entry_type: if candidate.is_dir { "directory" } else { "file" },
-            size_bytes: candidate.size.dominant(),
-            age_days: crate::rules::age_days(candidate.mtime_ms, now_ms),
-            family: candidate.kind.token(),
-            signals: candidate
-                .evidence
-                .iter()
-                .map(|evidence| evidence.rule.as_str())
-                .collect(),
-        })
-        .collect();
-
-    let user = format!(
-        "Items to review:\n{}",
-        serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".to_string())
-    );
-    (system, user)
-}
 
 /// A remote adjudicator backed by a chat-completions endpoint.
 pub struct OpenAiCompatibleAdjudicator {
@@ -398,6 +330,7 @@ mod tests {
             safety: "safe".into(),
             confidence: 1.0,
             reason: "empty it".into(),
+            ..Default::default()
         }];
         let verdicts = apply_remote_verdicts(&[trash], &raw, &Guardrails::default(), 0);
         assert_eq!(verdicts[0].safety, Safety::Review);

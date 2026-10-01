@@ -272,8 +272,11 @@ mod macos {
     const VDIR: u32 = 0x2;
     const VLNK: u32 = 0x5;
 
-    /// macOS returns entries in groups; this is the max we buffer in one call.
-    const CHUNK_BYTES: usize = 256 * 1024;
+    /// macOS returns entries in groups. A flat directory can hold hundreds of
+    /// thousands of entries; a large buffer cuts the number of
+    /// `getattrlistbulk` round trips proportionally. 4 MB stays cheap while
+    /// amortising the per-syscall latency on giant directories.
+    const CHUNK_BYTES: usize = 4 * 1024 * 1024;
 
     /// Errors from the fast path. `Fallback` means "use the portable path".
     #[derive(Debug)]

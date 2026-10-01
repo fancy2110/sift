@@ -10,6 +10,10 @@
 
 mod engine;
 pub mod priority;
+pub mod snapshot;
+mod timing;
 
 pub use engine::{ScanControl, ScanEngine, ScanHandle};
 pub use priority::{category, JobKind};
+pub use snapshot::{stat_mtime_ms, DirSnapshot, SnapshotStore};
+pub use timing::{timings_enabled, ScanTimings, TimingsHandle};

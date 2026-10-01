@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use crate::candidate::Candidate;
+use crate::cleanup_plan::{CleanupCommand, CleanupImpact};
 use crate::reason::{clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource};
 
 /// Why an adjudication run failed.
@@ -257,8 +258,12 @@ impl<A: Adjudicator, C: VerdictCache> Adjudicator for CachedAdjudicator<A, C> {
 
 // ---- remote answer handling ------------------------------------------------
 
+/// The prompt's output contract, reused by every provider client. Kept public
+/// so prompt builders and schema tests share one definition.
+pub type RemoteOutputContract = RawVerdict;
+
 /// One verdict as a remote adjudicator reported it, before validation.
-#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawVerdict {
     /// The candidate id the model was given.
@@ -269,6 +274,12 @@ pub struct RawVerdict {
     pub confidence: f32,
     #[serde(default)]
     pub reason: String,
+    /// What removal affects, optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impact: Option<CleanupImpact>,
+    /// Suggested cleanup commands, optional.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<CleanupCommand>,
 }
 
 /// Parse a model's answer into raw verdicts.
@@ -368,16 +379,26 @@ pub fn sanitize_model_verdict(
     };
     let confidence = clamp_confidence(raw.confidence);
     let reason = Reason::sanitized_text(&raw.reason);
+    let impact = raw.impact.as_ref().and_then(CleanupImpact::sanitized);
+    let mut commands: Vec<CleanupCommand> = raw
+        .commands
+        .iter()
+        .filter_map(CleanupCommand::sanitized)
+        .collect();
+    commands.truncate(3);
 
     // A model may always be *more* cautious: Keep and Review pass through.
     if requested != Safety::Safe {
-        return Verdict::new(
+        let mut verdict = Verdict::new(
             requested,
             confidence,
             reason.unwrap_or_else(|| Reason::key(requested.label_key())),
             VerdictSource::remote(provider),
             now_ms,
         );
+        verdict.impact = impact;
+        verdict.commands = commands;
+        return verdict;
     }
 
     // From here on the model asked for `Safe`, which is the only level that
@@ -393,13 +414,18 @@ pub fn sanitize_model_verdict(
     };
 
     match downgrade {
-        None => Verdict::new(
-            Safety::Safe,
-            confidence,
-            reason.unwrap_or_else(|| Reason::key("reason.aiConfirmed")),
-            VerdictSource::remote(provider),
-            now_ms,
-        ),
+        None => {
+            let mut verdict = Verdict::new(
+                Safety::Safe,
+                confidence,
+                reason.unwrap_or_else(|| Reason::key("reason.aiConfirmed")),
+                VerdictSource::remote(provider),
+                now_ms,
+            );
+            verdict.impact = impact;
+            verdict.commands = commands;
+            verdict
+        }
         Some(downgrade) => {
             // Keep the model's explanation, but state plainly that the level
             // was reduced, so the UI never claims more certainty than exists.
@@ -407,13 +433,17 @@ pub fn sanitize_model_verdict(
                 Some(text) => Reason::key_with(downgrade.reason_key(), vec![text.describe()]),
                 None => Reason::key(downgrade.reason_key()),
             };
-            Verdict::new(
+            let mut verdict = Verdict::new(
                 Safety::Review,
                 confidence,
                 reason,
                 VerdictSource::remote(provider),
                 now_ms,
-            )
+            );
+            // Keep the descriptive payload even when the safety level was cut.
+            verdict.impact = impact;
+            verdict.commands = commands;
+            verdict
         }
     }
 }
@@ -646,6 +676,7 @@ mod tests {
             safety: safety.to_string(),
             confidence,
             reason: reason.to_string(),
+            ..Default::default()
         }
     }
 

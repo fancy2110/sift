@@ -224,6 +224,7 @@ mod tests {
                     safety: "safe".into(),
                     confidence: 0.99,
                     reason: "old and unused".into(),
+                    ..Default::default()
                 })
                 .collect();
             Ok(apply_remote_verdicts(batch, &raw, guardrails, now_ms))

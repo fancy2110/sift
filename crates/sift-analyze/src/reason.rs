@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use sift_core::id::NodeKey;
 
+use crate::cleanup_plan::{CleanupCommand, CleanupImpact};
+
 /// How consequential removing this entry is.
 ///
 /// Ordered from most to least dangerous so comparisons are meaningful:
@@ -149,6 +151,8 @@ pub enum VerdictSource {
     UserDecision,
     /// A remote adjudicator (language model).
     Remote { provider: String },
+    /// Deterministic local stand-in used without an API token.
+    Mock { label: String },
 }
 
 impl VerdictSource {
@@ -168,6 +172,14 @@ impl VerdictSource {
         matches!(self, VerdictSource::Remote { .. })
     }
 
+    /// Any non-rule source, including the offline mock.
+    pub fn is_non_rule(&self) -> bool {
+        matches!(
+            self,
+            VerdictSource::Remote { .. } | VerdictSource::Mock { .. }
+        )
+    }
+
     /// Whether this conclusion came from the user (explicitly or by habit).
     pub fn is_user_derived(&self) -> bool {
         matches!(
@@ -183,6 +195,7 @@ impl VerdictSource {
             VerdictSource::Learned => "learned".to_string(),
             VerdictSource::UserDecision => "user".to_string(),
             VerdictSource::Remote { provider } => format!("ai:{provider}"),
+            VerdictSource::Mock { label } => format!("mock:{label}"),
         }
     }
 }
@@ -200,9 +213,16 @@ pub struct Verdict {
     pub source: VerdictSource,
     /// Unix milliseconds when the judgment was made.
     pub judged_at_ms: i64,
+    /// What removing this item affects; populated by a remote adjudicator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impact: Option<CleanupImpact>,
+    /// Optional copy-paste cleanup command; never executed by the app.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<CleanupCommand>,
 }
 
 impl Verdict {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         safety: Safety,
         confidence: f32,
@@ -216,6 +236,8 @@ impl Verdict {
             reason,
             source,
             judged_at_ms,
+            impact: None,
+            commands: Vec::new(),
         }
     }
 
@@ -230,6 +252,8 @@ impl Verdict {
                 rule: "fallback".into(),
             },
             judged_at_ms,
+            impact: None,
+            commands: Vec::new(),
         }
     }
 
@@ -290,6 +314,7 @@ impl ConfidencePolicy {
             VerdictSource::Learned => self.learned,
             VerdictSource::UserDecision => self.user,
             VerdictSource::Remote { .. } => self.remote,
+            VerdictSource::Mock { .. } => self.rule,
         }
     }
 }

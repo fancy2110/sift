@@ -230,12 +230,19 @@ pub fn forget_cleanable(services: State<'_, AppServices>, id: String) -> Result<
     Ok(removed)
 }
 
-/// Send paths to the trash and record the decisions.
+/// Describe cleaning `paths`, or send them to the trash only with `execute`.
+///
+/// Default is dry-run: no filesystem mutation and no decision recorded, so a
+/// preview can be opened repeatedly without side effects.
 #[tauri::command]
 pub fn clean_paths(
     services: State<'_, AppServices>,
     paths: Vec<String>,
+    execute: bool,
 ) -> Vec<crate::cleanup::DeleteResultItem> {
+    if !execute {
+        return crate::cleanup::preview_delete(paths);
+    }
     let store = services.store();
     let cleanable = store.cleanable();
     let as_paths: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
@@ -263,6 +270,7 @@ pub fn clean_paths(
             path: result.path.to_string_lossy().into_owned(),
             ok: result.ok,
             error: result.error,
+            dry_run: false,
         })
         .collect()
 }
@@ -406,7 +414,8 @@ pub struct RoutineSuggestionDto {
 // ---- helpers ---------------------------------------------------------------
 
 /// Build the adjudicator: local rules, plus a remote provider when the user has
-/// configured one and consented to it.
+/// configured one and consented to it. With no usable token, an offline mock
+/// sits in the remote slot so the same prompt/contract runs locally.
 fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
     let ai = services.store.settings().ai;
 
@@ -433,8 +442,16 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
             }
         }
     }
-    let _ = &ai;
-    Box::new(RuleAdjudicator::new())
+
+    // No usable real provider: route through the offline mock instead of
+    // dropping the remote stage entirely. Only model-adjudicable families
+    // reach it (via the router), and it never promotes structural families.
+    let mock = sift_analyze::MockAdjudicator::new().with_language(ai.language.clone());
+    Box::new(sift_analyze::RoutingAdjudicator::with_remote(
+        RuleAdjudicator::new(),
+        mock,
+        sift_analyze::Guardrails::default(),
+    ))
 }
 
 fn remote_configured_without_consent(services: &AppServices) -> bool {

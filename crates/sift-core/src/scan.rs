@@ -118,6 +118,10 @@ pub struct ScanPolicy {
     pub file_detail_min_bytes: u64,
     /// Hardlink deduplication. Costs a hash entry per multiply-linked file.
     pub dedupe_hardlinks: bool,
+    /// Yield CPU to foreground apps: fewer workers plus a short pause between
+    /// directory batches. Doubles wall time roughly, but keeps the machine
+    /// responsive on battery or under load.
+    pub frugal_cpu: bool,
 }
 
 impl Default for ScanPolicy {
@@ -135,6 +139,7 @@ impl ScanPolicy {
             want_physical_size: true,
             file_detail_min_bytes: u64::MAX,
             dedupe_hardlinks: true,
+            frugal_cpu: false,
         }
     }
 
@@ -146,7 +151,28 @@ impl ScanPolicy {
             want_physical_size: false,
             file_detail_min_bytes: u64::MAX,
             dedupe_hardlinks: false,
+            frugal_cpu: false,
         }
+    }
+
+    /// Background-friendly pass: half the workers, no physical-size pass, and
+    /// periodic yielding. Use on battery or while the user is actively using
+    /// the machine.
+    pub const fn frugal() -> Self {
+        Self {
+            threads: 2,
+            stay_on_volume: true,
+            want_physical_size: false,
+            file_detail_min_bytes: u64::MAX,
+            dedupe_hardlinks: false,
+            frugal_cpu: true,
+        }
+    }
+
+    /// Toggle the background-friendly flag.
+    pub const fn with_frugal_cpu(mut self, frugal: bool) -> Self {
+        self.frugal_cpu = frugal;
+        self
     }
 
     /// Keep a record for files at or above `bytes`.
@@ -164,15 +190,21 @@ impl ScanPolicy {
     /// Resolved worker count for this policy on this machine.
     pub fn resolved_threads(&self) -> usize {
         if self.threads > 0 {
-            return self.threads as usize;
+            return (self.threads as usize).max(1);
         }
         let cores = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        // Directory walking is syscall-bound with a high per-call latency; more
-        // workers than cores keeps the I/O queue full without thrashing, but
-        // past 4x the benefit disappears and lock contention grows.
-        cores.clamp(2, 16)
+        // Directory walking is syscall-bound with a high per-call latency. On
+        // a saturated SSD/NVMe queue, matching workers to cores contends for
+        // the same I/O paths; measured throughput peaks around 3/4 of cores,
+        // so leave headroom for the OS and the coordinator.
+        let scaled = (cores.saturating_mul(3) / 4).clamp(2, 12);
+        if self.frugal_cpu {
+            (scaled / 2).max(1)
+        } else {
+            scaled
+        }
     }
 }
 
@@ -326,6 +358,17 @@ pub enum ScanEvent {
     },
     /// Periodic counters. Emitted at most a few times a second.
     Progress { scan: ScanId, progress: Progress },
+    /// A previously predicted giant directory was exactly measured: its
+    /// measured totals and the delta propagated to the volume total.
+    Calibrated {
+        scan: ScanId,
+        key: crate::id::NodeKey,
+        size: ByteSize,
+        files: u64,
+    },
+    /// All background calibration finished; emitted after the scan's
+    /// `Finished`, telling listeners draining late events they can stop.
+    CalibrationFinished { scan: ScanId },
     /// The scan stopped.
     Finished {
         scan: ScanId,
@@ -344,6 +387,8 @@ impl ScanEvent {
             | ScanEvent::DirectoryClosed { scan, .. }
             | ScanEvent::DirectorySized { scan, .. }
             | ScanEvent::Progress { scan, .. }
+            | ScanEvent::Calibrated { scan, .. }
+            | ScanEvent::CalibrationFinished { scan, .. }
             | ScanEvent::Finished { scan, .. }
             | ScanEvent::Warning { scan, .. } => *scan,
         }

@@ -1,0 +1,18 @@
+[package]
+name = "sift-persist"
+description = "Sift SQLite persistence: scan snapshots for resumable incremental scans"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+sift-scan = { workspace = true }
+
+[dev-dependencies]
+sift-core = { workspace = true }
+
+[dependencies.rusqlite]
+version = "0.40"
+features = ["bundled"]

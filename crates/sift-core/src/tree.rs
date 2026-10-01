@@ -98,6 +98,7 @@ const KIND_OPAQUE: u8 = 3;
 const FLAG_PENDING: u8 = 0b0000_0100;
 const FLAG_SYMLINK: u8 = 0b0000_1000;
 const FLAG_DELETABLE: u8 = 0b0001_0000;
+const FLAG_ESTIMATED: u8 = 0b0010_0000;
 
 impl TreeNode {
     #[inline]
@@ -128,6 +129,18 @@ impl TreeNode {
     #[inline]
     pub fn deletable(&self) -> bool {
         self.flags & FLAG_DELETABLE != 0
+    }
+
+    /// Totals are an estimate pending asynchronous calibration.
+    #[inline]
+    pub fn estimated(&self) -> bool {
+        self.flags & FLAG_ESTIMATED != 0
+    }
+
+    #[inline]
+    pub fn set_estimated(&mut self, estimated: bool) {
+        self.flags = (self.flags & !FLAG_ESTIMATED)
+            | (if estimated { FLAG_ESTIMATED } else { 0 });
     }
 
     #[inline]
@@ -336,6 +349,10 @@ impl ScanTree {
         self.nodes.get(index as usize)
     }
 
+    pub fn node_mut(&mut self, index: u32) -> Option<&mut TreeNode> {
+        self.nodes.get_mut(index as usize)
+    }
+
     #[inline]
     pub fn node_count(&self) -> u32 {
         self.nodes.len() as u32
@@ -476,9 +493,72 @@ impl ScanTree {
         }
     }
 
+    /// Reopen a previously closed directory for a fresh read of its subtree.
+    ///
+    /// Its old totals are subtracted from its parent (which is assumed still
+    /// open), its counters are reset, and it is marked pending again. This is
+    /// what lets a user focus a snapshot-reused directory and expand it
+    /// without its old bytes being counted twice.
+    pub fn reopen_dir(&mut self, index: u32) {
+        let Some(node) = self.nodes.get(index as usize).copied() else {
+            return;
+        };
+        let old = node.size;
+        let files = node.file_count;
+        let parent = node.parent;
+        if parent != NONE {
+            if let Some(parent_node) = self.nodes.get_mut(parent as usize) {
+                parent_node.size -= old;
+                parent_node.file_count = parent_node.file_count.saturating_sub(files);
+            }
+        }
+        if let Some(node) = self.nodes.get_mut(index as usize) {
+            node.size = ByteSize::ZERO;
+            node.file_count = 0;
+            node.set_pending(true);
+        }
+    }
+
     /// Bytes that a directory counted but that never reached it through a child
     /// record, e.g. subdirectories that hit the node budget. Used after a scan
     /// so an unrecorded subtree is not silently lost.
+    /// Apply a post-scan calibration to a closed directory.
+    ///
+    /// The difference between measured and previously estimated totals is
+    /// propagated up the (already closed) ancestor chain, so the volume total
+    /// stays exact after an asynchronous recalibration.
+    pub fn adjust_totals(&mut self, index: u32, measured: ByteSize, files: u64) -> (ByteSize, i64) {
+        let Some(node) = self.nodes.get(index as usize).copied() else {
+            return (ByteSize::ZERO, 0);
+        };
+        let old_size = node.size;
+        let old_files = node.file_count as u64;
+        let signed_size = ByteSize::new(
+            measured.logical.wrapping_sub(old_size.logical),
+            measured.physical.wrapping_sub(old_size.physical),
+        );
+        let file_delta = files as i64 - old_files as i64;
+
+        let mut cursor = index;
+        loop {
+            let Some(node) = self.nodes.get(cursor as usize).copied() else { break };
+            let parent = node.parent;
+            if let Some(n) = self.nodes.get_mut(cursor as usize) {
+                n.size += signed_size;
+                if file_delta >= 0 {
+                    n.file_count = n.file_count.saturating_add(file_delta as u32);
+                } else {
+                    n.file_count = n.file_count.saturating_sub((-file_delta) as u32);
+                }
+            }
+            if parent == NONE {
+                break;
+            }
+            cursor = parent;
+        }
+        (signed_size, file_delta)
+    }
+
     pub fn add_unrecorded(&mut self, parent: u32, size: ByteSize, files: u32) {
         if let Some(node) = self.nodes.get_mut(parent as usize) {
             node.size += size;
@@ -708,6 +788,41 @@ mod tests {
 
     fn tree() -> ScanTree {
         ScanTree::new(key("/"), Path::new("/"), TreeConfig::default())
+    }
+
+    #[test]
+    fn calibration_delta_propagates_to_ancestors() {
+        let mut tree = tree();
+        let root = tree.root();
+        let a = tree.open_dir(root, key("/a"), b"a", 0, true, false).unwrap();
+        let b = tree
+            .open_dir(a, key("/a/b"), b"b", 0, true, false)
+            .unwrap();
+        // Simulate a predicted giant subtree: b closes with an estimated
+        // file count (say 1) and zero bytes, no real files recorded.
+        if let Some(n) = tree.node_mut(b) {
+            n.file_count = 1;
+        }
+        if let Some(n) = tree.node_mut(a) {
+            n.file_count = 1;
+        }
+        if let Some(n) = tree.node_mut(root) {
+            n.file_count = 1;
+        }
+
+        // Exact calibration of b.
+        let measured = ByteSize::new(4000, 8192);
+        let (delta_size, delta_files) = tree.adjust_totals(b, measured, 3);
+        assert_eq!(delta_size, measured);
+        assert_eq!(delta_files, 2);
+
+        // The delta must have propagated up the whole ancestor chain.
+        assert_eq!(tree.node(b).unwrap().size, measured);
+        assert_eq!(tree.node(a).unwrap().size, measured);
+        assert_eq!(tree.node(root).unwrap().size, measured);
+        assert_eq!(tree.node(b).unwrap().file_count, 3);
+        assert_eq!(tree.node(a).unwrap().file_count, 3);
+        assert_eq!(tree.node(root).unwrap().file_count, 3);
     }
 
     #[test]

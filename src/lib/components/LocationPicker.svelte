@@ -28,12 +28,12 @@
     aria-haspopup="menu"
     data-od-id="location-button"
   >
-    <Icon name={store.currentVolume?.isRemovable ? 'externalDrive' : 'hardDrive'} size={14} />
-    <span class="max-w-[140px] truncate font-[550]">{store.currentVolume?.name ?? '磁盘'}</span>
+    <Icon name={store.currentVolume?.isRemovable ? 'externalDrive' : 'hardDrive'} size={14} class="shrink-0" />
+    <span class="min-w-0 max-w-[140px] truncate font-[550]">{store.currentVolume?.name ?? '磁盘'}</span>
     {#if store.currentVolume}
-      <span class="num text-[11px]" style="color: var(--color-faint)">{formatSize(store.currentVolume.availableBytes, 0)} 可用</span>
+      <span class="num shrink-0 whitespace-nowrap text-[11px]" style="color: var(--color-faint)">{formatSize(store.currentVolume.availableBytes, 0)} 可用</span>
     {/if}
-    <Icon name="chevronUp" size={12} class="transition-transform duration-200" style={open ? '' : 'transform: rotate(180deg)'} />
+    <Icon name="chevronUp" size={12} class="shrink-0 transition-transform duration-200" style={open ? '' : 'transform: rotate(180deg)'} />
   </button>
 
   {#if open}

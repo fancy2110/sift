@@ -1,6 +1,11 @@
 import {
   listVolumes,
+  homeDir,
+  cancelScan,
   moveToTrash,
+  onCalibrated,
+  onCalibrationDone,
+  onCalibrationStart,
   onDiscovered,
   onFsDeleted,
   onProgress,
@@ -41,11 +46,20 @@ class AppStore {
   currentNodeId = $state<string | null>(null);
 
   scanning = $state(false);
+  /** Main scan done; background calibration of giant dirs still running. */
+  calibrating = $state(false);
+  calibratedCount = $state(0);
   scannedFiles = $state(0);
   scannedDirs = $state(0);
+  scannedBytes = $state(0);
+  scanRateEntries = $state(0);
+  scanRateBytes = $state(0);
+  scanElapsed = $state(0);
+  scanDenied = $state(0);
+  scanCoverage = $state(0);
 
   toasts = $state<Toast[]>([]);
-  autoOn = $state(true);
+  autoOn = $state(false);
 
   routines = $state<Routine[]>(ROUTINE_SEED);
   runningRoutineId = $state<string | null>(null);
@@ -55,6 +69,10 @@ class AppStore {
   selectedIds = $state<Set<string>>(new Set());
 
   cleaning = $state(false);
+
+  /// Bytes from the latest dry-run preview, awaiting user confirmation; 0 when
+  /// no preview is pending.
+  pendingConfirmBytes = $state(0);
 
   drawerOpen = $state(false);
   focusFinding = $state<string | null>(null);
@@ -196,9 +214,23 @@ class AppStore {
     await Promise.all([
       onDiscovered((n) => this.handleDiscovered(n)),
       onSized((e) => this.handleSized(e.id, e.size, e.pending)),
+      onCalibrated((e) => this.handleCalibrated(e.id, e.size, e.files)),
+      onCalibrationStart(() => {
+        this.calibrating = true;
+        this.calibratedCount = 0;
+      }),
+      onCalibrationDone(() => {
+        this.calibrating = false;
+      }),
       onProgress((p) => {
         this.scannedFiles = p.files;
         this.scannedDirs = p.dirs;
+        this.scannedBytes = p.bytes;
+        this.scanRateEntries = p.entriesPerSec;
+        this.scanRateBytes = p.bytesPerSec;
+        this.scanElapsed = p.elapsedSecs;
+        this.scanDenied = p.denied;
+        this.scanCoverage = p.coverage;
       }),
       onScanDone(() => {
         this.scanning = false;
@@ -239,6 +271,20 @@ class AppStore {
     n.size = size;
     n.pending = pending;
     this.reclassify(n);
+  }
+
+  /** A predicted giant subtree finished background measurement. */
+  private handleCalibrated(id: string, size: number, files: number) {
+    this.calibrating = true;
+    this.calibratedCount += 1;
+    const n = this.nodes.get(id);
+    if (!n) return;
+    n.size = size;
+    n.pending = false;
+    n.estimated = false;
+    void files;
+    this.reclassify(n);
+    this.toast(`大型目录已校准：${n.name}`);
   }
 
   /** Assign a node to its heuristic insight; move it between member sets. */
@@ -352,13 +398,42 @@ class AppStore {
     this.scanning = true;
     this.scannedFiles = 0;
     this.scannedDirs = 0;
+    this.scannedBytes = 0;
+    this.scanRateEntries = 0;
+    this.scanRateBytes = 0;
+    this.scanElapsed = 0;
+    this.scanDenied = 0;
+    this.scanCoverage = 0;
     this.drawerOpen = false;
     this.treeVersion += 1;
-    await startScan(vol.mountPoint, vol.mountPoint);
+    // Built-in system volumes: deep-scan the user's home directory (system
+    // files are not cleanable and walking them dominates the cold scan).
+    // Removable drives are scanned in full.
+    const scanRoot = vol.isRemovable ? vol.mountPoint : await this.userHomeRoot(vol.mountPoint);
+    await startScan(scanRoot, scanRoot, vol.name);
     watchFs(vol.mountPoint).catch(() => undefined);
   }
 
+  /** The user's home directory for a system volume, falling back to mount. */
+  private async userHomeRoot(mountPoint: string): Promise<string> {
+    try {
+      const home = await homeDir();
+      if (home) return home;
+    } catch {
+      // fall through
+    }
+    return mountPoint;
+  }
+
   // ---- navigation ----------------------------------------------------------
+
+  async cancelScan() {
+    try {
+      await cancelScan();
+    } catch {
+      // The scan may already have finished; the done event settles the state.
+    }
+  }
 
   drillIntoId(id: string) {
     const n = this.nodes.get(id);
@@ -412,10 +487,12 @@ class AppStore {
 
   // ---- cleanup -------------------------------------------------------------
 
-  async clean(automatic = false): Promise<number> {
+  async clean(automatic = false, confirmed = false): Promise<number> {
     const targets = this.candidates;
     if (this.cleaning || targets.length === 0) return 0;
-    this.cleaning = true;
+    // Automatic cleanup (auto scan / routines) only runs when explicitly
+    // enabled by the user; it defaults off and only reminds.
+    if (automatic && !this.autoOn) return 0;
 
     const paths: string[] = [];
     for (const f of targets) {
@@ -426,9 +503,14 @@ class AppStore {
       }
     }
 
+    // Default is dry-run: preview what would be reclaimed and require an
+    // explicit second confirmation before anything really goes to trash.
+    // Automatic cleanup with the toggle on is pre-authorized by the user.
+    const execute = confirmed || automatic;
+    this.cleaning = true;
     let results: DeleteResultItem[] = [];
     try {
-      results = await moveToTrash(paths);
+      results = await moveToTrash(paths, execute);
     } catch (e) {
       this.toast(`删除失败：${String(e)}`);
       this.cleaning = false;
@@ -438,19 +520,25 @@ class AppStore {
     let bytes = 0;
     for (const r of results) {
       if (r.ok) {
-        const target = targets.find((t) => this.memberIdsOf(t.id).some((nid) => this.nodes.get(nid)?.path === r.path));
         const nid = [...this.nodes.values()].find((n) => n.path === r.path)?.id;
         if (nid) bytes += this.nodes.get(nid)?.size ?? 0;
-        if (nid) this.pruneId(nid);
-        void target;
+        // Dry-run must not remove nodes: the files still exist on disk.
+        if (nid && !r.dryRun) this.pruneId(nid);
       } else {
         this.toast(`无法删除「${r.path}」：${r.error ?? ''}`);
       }
     }
 
+    this.cleaning = false;
+    if (!execute) {
+      // Surface the preview and ask for confirmation; nothing was deleted.
+      this.pendingConfirmBytes = bytes;
+      this.toast(`预览：将可清理 ${fmt(bytes)}（未实际删除），请再次确认`);
+      return 0;
+    }
+    this.pendingConfirmBytes = 0;
     this.cleanedBytes += bytes;
     this.selectedIds = new Set([...this.selectedIds].filter((id) => this.findings.some((f) => f.id === id)));
-    this.cleaning = false;
     this.drawerOpen = false;
     this.toast(
       automatic
@@ -458,6 +546,18 @@ class AppStore {
         : `已释放 ${fmt(bytes)}（文件在回收站，可恢复）`
     );
     return bytes;
+  }
+
+  /** Confirm a dry-run preview and really move the files to trash. */
+  async confirmClean() {
+    if (this.pendingConfirmBytes === 0) return;
+    await this.clean(false, true);
+  }
+
+  /** Dismiss the dry-run preview without deleting anything. */
+  cancelCleanPreview() {
+    this.pendingConfirmBytes = 0;
+    this.toast('已取消清理，未删除任何文件');
   }
 
   private memberIdsOf(findingId: string): string[] {
