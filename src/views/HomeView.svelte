@@ -448,6 +448,7 @@
     font-weight: 650;
     line-height: 1;
     letter-spacing: -0.04em;
+    white-space: nowrap;
     background: linear-gradient(
       180deg,
       var(--color-fg) 20%,
