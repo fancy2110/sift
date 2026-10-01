@@ -49,7 +49,7 @@
   // the SAME box and scale together as one composition; when the natural box
   // exceeds the available stage, the whole thing shrinks (no floor), preserving
   // the wrap relationship exactly.
-  let desiredW = $derived(Math.max(stackW, stackH) / 0.74);
+  let desiredW = $derived(Math.max(stackW, stackH) / 0.66);
   let fitScale = $derived(
     Math.min(1, (Math.min(centerW, centerH) - 8) / desiredW)
   );

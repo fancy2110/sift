@@ -12,7 +12,7 @@ export function formatSizeParts(
   if (bytes <= 0) return { value: '0', unit: 'B' };
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), UNITS.length - 1);
   const v = bytes / 1024 ** i;
-  const d = v >= 100 || i === 0 ? 0 : digits;
+  const d = i === 0 ? 0 : digits;
   return { value: v.toFixed(d), unit: UNITS[i] };
 }
 
