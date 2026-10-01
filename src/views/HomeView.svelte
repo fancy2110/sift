@@ -1,6 +1,6 @@
 <script lang="ts">
   import { store } from '../lib/store.svelte';
-  import { formatSize } from '../lib/format';
+  import { formatSize, formatSizeParts } from '../lib/format';
   import Icon from '../lib/components/Icon.svelte';
   import SettingsDialog from '../lib/components/SettingsDialog.svelte';
   import { fade, fly, scale } from 'svelte/transition';
@@ -171,8 +171,9 @@
         {store.scannedFiles.toLocaleString()}<span class="hub-pct">{t('home.itemsUnit')}</span>
       </h1>
     {:else}
+      {@const main = formatSizeParts(store.totalReclaimable)}
       <h1 class="hub-total num" in:fly={{ y: 16, duration: 620, delay: 180, easing: cubicOut }}>
-        {formatSize(store.totalReclaimable)}
+        {main.value}<span class="hub-unit">{main.unit}</span>
       </h1>
     {/if}
     <p
@@ -382,6 +383,11 @@
     font-size: 0.42em;
     font-weight: 600;
     margin-left: 4px;
+    color: var(--color-faint);
+  }
+  .hub-unit {
+    font-size: 0.5em;
+    font-weight: 600;
     color: var(--color-faint);
   }
   .state-scanning {
