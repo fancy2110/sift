@@ -16,8 +16,9 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use crate::candidate::Candidate;
-use crate::cleanup_plan::{CleanupCommand, CleanupImpact};
-use crate::reason::{clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource};
+use crate::reason::{
+    clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource,
+};
 
 /// Why an adjudication run failed.
 #[derive(Debug)]
@@ -94,7 +95,10 @@ impl Adjudicator for RuleAdjudicator {
         batch: &[Candidate],
         now_ms: i64,
     ) -> Result<Vec<Verdict>, AdjudicateError> {
-        Ok(batch.iter().map(|candidate| rule_verdict(candidate, now_ms)).collect())
+        Ok(batch
+            .iter()
+            .map(|candidate| rule_verdict(candidate, now_ms))
+            .collect())
     }
 }
 
@@ -124,6 +128,7 @@ pub fn rule_verdict(candidate: &Candidate, now_ms: i64) -> Verdict {
             },
             VerdictSource::rule(nomination.rule.clone()),
             now_ms,
+            Some(local_impact(candidate)),
         ),
         None => Verdict::new(
             Safety::fallback(),
@@ -131,8 +136,16 @@ pub fn rule_verdict(candidate: &Candidate, now_ms: i64) -> Verdict {
             Reason::key("reason.unjudged"),
             VerdictSource::rule(fallback_rule),
             now_ms,
+            Some(local_impact(candidate)),
         ),
     }
+}
+
+/// The impact of a local-rule verdict, drawn from the cleanup knowledge base so
+/// local and model verdicts expose one shape ("what breaks after deletion").
+fn local_impact(candidate: &Candidate) -> Reason {
+    let plan = crate::cleanup::plan_for(&candidate.kind, &candidate.display_path);
+    Reason::key(plan.impact_key)
 }
 
 /// Confidence a rule's own conclusion carries. Safe structural patterns are
@@ -233,7 +246,8 @@ impl<A: Adjudicator, C: VerdictCache> Adjudicator for CachedAdjudicator<A, C> {
                     });
                 }
                 None => {
-                    self.misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.misses
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     pending.push(index);
                 }
             }
@@ -250,7 +264,6 @@ impl<A: Adjudicator, C: VerdictCache> Adjudicator for CachedAdjudicator<A, C> {
 
         Ok(verdicts
             .into_iter()
-            
             .map(|verdict| verdict.unwrap_or_else(|| Verdict::unknown(now_ms)))
             .collect())
     }
@@ -258,12 +271,8 @@ impl<A: Adjudicator, C: VerdictCache> Adjudicator for CachedAdjudicator<A, C> {
 
 // ---- remote answer handling ------------------------------------------------
 
-/// The prompt's output contract, reused by every provider client. Kept public
-/// so prompt builders and schema tests share one definition.
-pub type RemoteOutputContract = RawVerdict;
-
 /// One verdict as a remote adjudicator reported it, before validation.
-#[derive(Debug, Clone, PartialEq, Default, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawVerdict {
     /// The candidate id the model was given.
@@ -274,12 +283,9 @@ pub struct RawVerdict {
     pub confidence: f32,
     #[serde(default)]
     pub reason: String,
-    /// What removal affects, optional.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub impact: Option<CleanupImpact>,
-    /// Suggested cleanup commands, optional.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<CleanupCommand>,
+    /// One sentence in the user's language: what breaks after deletion.
+    #[serde(default)]
+    pub impact: String,
 }
 
 /// Parse a model's answer into raw verdicts.
@@ -291,10 +297,7 @@ pub fn parse_raw_verdicts(text: &str) -> Result<Vec<RawVerdict>, AdjudicateError
     // Tolerate a fenced code block around the JSON.
     let json = if let Some(rest) = trimmed.strip_prefix("```") {
         let rest = rest.strip_prefix("json").unwrap_or(rest);
-        rest.trim_start()
-            .strip_suffix("```")
-            .unwrap_or(rest)
-            .trim()
+        rest.trim_start().strip_suffix("```").unwrap_or(rest).trim()
     } else {
         trimmed
     };
@@ -368,8 +371,8 @@ pub fn sanitize_model_verdict(
     raw: &RawVerdict,
     guardrails: &Guardrails,
     now_ms: i64,
+    provider: &str,
 ) -> Verdict {
-    let provider = "remote";
     let requested = match raw.safety.trim().to_ascii_lowercase().as_str() {
         "safe" => Safety::Safe,
         "keep" => Safety::Keep,
@@ -379,26 +382,18 @@ pub fn sanitize_model_verdict(
     };
     let confidence = clamp_confidence(raw.confidence);
     let reason = Reason::sanitized_text(&raw.reason);
-    let impact = raw.impact.as_ref().and_then(CleanupImpact::sanitized);
-    let mut commands: Vec<CleanupCommand> = raw
-        .commands
-        .iter()
-        .filter_map(CleanupCommand::sanitized)
-        .collect();
-    commands.truncate(3);
+    let impact = Reason::sanitized_text(&raw.impact);
 
     // A model may always be *more* cautious: Keep and Review pass through.
     if requested != Safety::Safe {
-        let mut verdict = Verdict::new(
+        return Verdict::new(
             requested,
             confidence,
             reason.unwrap_or_else(|| Reason::key(requested.label_key())),
             VerdictSource::remote(provider),
             now_ms,
+            impact,
         );
-        verdict.impact = impact;
-        verdict.commands = commands;
-        return verdict;
     }
 
     // From here on the model asked for `Safe`, which is the only level that
@@ -414,18 +409,14 @@ pub fn sanitize_model_verdict(
     };
 
     match downgrade {
-        None => {
-            let mut verdict = Verdict::new(
-                Safety::Safe,
-                confidence,
-                reason.unwrap_or_else(|| Reason::key("reason.aiConfirmed")),
-                VerdictSource::remote(provider),
-                now_ms,
-            );
-            verdict.impact = impact;
-            verdict.commands = commands;
-            verdict
-        }
+        None => Verdict::new(
+            Safety::Safe,
+            confidence,
+            reason.unwrap_or_else(|| Reason::key("reason.aiConfirmed")),
+            VerdictSource::remote(provider),
+            now_ms,
+            impact,
+        ),
         Some(downgrade) => {
             // Keep the model's explanation, but state plainly that the level
             // was reduced, so the UI never claims more certainty than exists.
@@ -433,17 +424,14 @@ pub fn sanitize_model_verdict(
                 Some(text) => Reason::key_with(downgrade.reason_key(), vec![text.describe()]),
                 None => Reason::key(downgrade.reason_key()),
             };
-            let mut verdict = Verdict::new(
+            Verdict::new(
                 Safety::Review,
                 confidence,
                 reason,
                 VerdictSource::remote(provider),
                 now_ms,
-            );
-            // Keep the descriptive payload even when the safety level was cut.
-            verdict.impact = impact;
-            verdict.commands = commands;
-            verdict
+                impact,
+            )
         }
     }
 }
@@ -457,16 +445,19 @@ pub fn apply_remote_verdicts(
     raw: &[RawVerdict],
     guardrails: &Guardrails,
     now_ms: i64,
+    provider: &str,
 ) -> Vec<Verdict> {
-    let by_id: HashMap<&str, &RawVerdict> =
-        raw.iter().map(|verdict| (verdict.id.as_str(), verdict)).collect();
+    let by_id: HashMap<&str, &RawVerdict> = raw
+        .iter()
+        .map(|verdict| (verdict.id.as_str(), verdict))
+        .collect();
 
     batch
         .iter()
         .map(|candidate| {
             let id = candidate.key.to_string();
             match by_id.get(id.as_str()) {
-                Some(raw) => sanitize_model_verdict(candidate, raw, guardrails, now_ms),
+                Some(raw) => sanitize_model_verdict(candidate, raw, guardrails, now_ms, provider),
                 None => {
                     let mut verdict = Verdict::unknown(now_ms);
                     verdict.reason = Reason::key(Downgrade::Unparsable.reason_key());
@@ -645,7 +636,9 @@ mod tests {
             0,
             kind,
         );
-        candidate.evidence.push(Evidence::new(rule, "detail.patternMatch"));
+        candidate
+            .evidence
+            .push(Evidence::new(rule, "detail.patternMatch"));
         candidate.with_nomination(crate::candidate::Nomination {
             rule: rule.to_string(),
             safety: nominated_safety(rule),
@@ -676,7 +669,7 @@ mod tests {
             safety: safety.to_string(),
             confidence,
             reason: reason.to_string(),
-            ..Default::default()
+            impact: String::new(),
         }
     }
 
@@ -688,6 +681,7 @@ mod tests {
             &raw(&trash.key.to_string(), "safe", 0.99, "looks fine"),
             &Guardrails::default(),
             0,
+            "remote",
         );
         assert_eq!(verdict.safety, Safety::Review, "trash safety is structural");
         assert!(!verdict.is_automatically_removable(&ConfidencePolicy::default()));
@@ -701,6 +695,7 @@ mod tests {
             &raw(&stale.key.to_string(), "safe", 0.5, "probably unused"),
             &Guardrails::default(),
             0,
+            "remote",
         );
         assert_eq!(verdict.safety, Safety::Review);
         match verdict.reason {
@@ -717,6 +712,7 @@ mod tests {
             &raw(&stale.key.to_string(), "safe", 0.95, "an old installer"),
             &Guardrails::default(),
             0,
+            "remote",
         );
         assert_eq!(verdict.safety, Safety::Safe);
         assert!(verdict.is_automatically_removable(&ConfidencePolicy::default()));
@@ -732,6 +728,7 @@ mod tests {
                 &raw(&stale.key.to_string(), safety, 0.1, "risky"),
                 &Guardrails::default(),
                 0,
+                "remote",
             );
             assert_eq!(verdict.safety, expected, "{safety} must pass through");
         }
@@ -749,6 +746,7 @@ mod tests {
             &raw(&stale.key.to_string(), "safe", 1.0, "certain"),
             &guardrails,
             0,
+            "remote",
         );
         assert_eq!(verdict.safety, Safety::Review);
     }
@@ -762,6 +760,7 @@ mod tests {
                 &raw(&stale.key.to_string(), weird, 1.0, "x"),
                 &Guardrails::default(),
                 0,
+                "remote",
             );
             assert_eq!(verdict.safety, Safety::Review, "{weird:?}");
         }
@@ -770,16 +769,26 @@ mod tests {
     #[test]
     fn missing_answers_and_invented_ids_are_handled() {
         let a = candidate(CandidateKind::StaleLargeFile, "file.stale_large");
-        let mut b = candidate(CandidateKind::Archive { extension: "zip".into() }, "file.archive");
+        let mut b = candidate(
+            CandidateKind::Archive {
+                extension: "zip".into(),
+            },
+            "file.archive",
+        );
         b.key = NodeKey::from_bytes(b"second");
         let batch = vec![a.clone(), b];
 
         let raw_answers = vec![
             raw(&a.key.to_string(), "safe", 0.99, "old installer"),
             // An id that was never asked about must not create anything.
-            raw("n-00000000000000000000000000000000", "safe", 1.0, "invented"),
+            raw(
+                "n-00000000000000000000000000000000",
+                "safe",
+                1.0,
+                "invented",
+            ),
         ];
-        let verdicts = apply_remote_verdicts(&batch, &raw_answers, &Guardrails::default(), 0);
+        let verdicts = apply_remote_verdicts(&batch, &raw_answers, &Guardrails::default(), 0, "remote");
         assert_eq!(verdicts.len(), 2);
         assert_eq!(verdicts[0].safety, Safety::Safe);
         // The skipped candidate is Review, never Safe.
@@ -803,16 +812,14 @@ mod tests {
         let parsed = parse_raw_verdicts(json).unwrap();
         assert_eq!(parsed[0].confidence, 0.0);
         let candidate = candidate(CandidateKind::StaleLargeFile, "file.stale_large");
-        let verdict = sanitize_model_verdict(&candidate, &parsed[0], &Guardrails::default(), 0);
+        let verdict = sanitize_model_verdict(&candidate, &parsed[0], &Guardrails::default(), 0, "remote");
         assert_eq!(verdict.safety, Safety::Review, "no confidence, no safe");
     }
 
     #[test]
     fn rule_adjudicator_restates_the_rule() {
         let node_modules = candidate(
-            CandidateKind::RebuildableCache {
-                tool: "npm".into(),
-            },
+            CandidateKind::RebuildableCache { tool: "npm".into() },
             "dir.node_modules",
         );
         let verdict = rule_verdict(&node_modules, 7);
@@ -863,11 +870,18 @@ mod tests {
         let candidates = vec![
             candidate(CandidateKind::Trash, "dir.trash"),
             candidate(CandidateKind::StaleLargeFile, "file.stale_large"),
-            candidate(CandidateKind::Archive { extension: "zip".into() }, "file.archive"),
+            candidate(
+                CandidateKind::Archive {
+                    extension: "zip".into(),
+                },
+                "file.archive",
+            ),
         ];
         let verdicts = adjudicate_all(&Failing, &candidates, 2, 0, |_, _| {});
         assert_eq!(verdicts.len(), 3);
-        assert!(verdicts.iter().all(|verdict| verdict.safety == Safety::Review));
+        assert!(verdicts
+            .iter()
+            .all(|verdict| verdict.safety == Safety::Review));
         assert!(verdicts
             .iter()
             .all(|verdict| !verdict.is_automatically_removable(&ConfidencePolicy::default())));

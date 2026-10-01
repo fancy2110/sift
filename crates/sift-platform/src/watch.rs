@@ -35,15 +35,30 @@ impl FsWatcherHandle {
     /// Start watching `root` recursively and return a handle plus a receiver
     /// of classified events.
     pub fn watch(root: PathBuf) -> std::io::Result<(Self, mpsc::Receiver<FsEvent>)> {
+        Self::watch_with_mode(root, true)
+    }
+
+    /// Start watching `root` in the given recursion mode.
+    ///
+    /// A non-recursive watch on just the focused directory keeps the watch
+    /// count at one even when the root is an entire volume; recursively
+    /// watching a whole tree on Linux means one inotify watch per directory.
+    pub fn watch_with_mode(
+        root: PathBuf,
+        recursive: bool,
+    ) -> std::io::Result<(Self, mpsc::Receiver<FsEvent>)> {
         let (raw_tx, raw_rx) = mpsc::channel::<notify::Result<notify::Event>>();
         let mut watcher = notify::recommended_watcher(move |event| {
             let _ = raw_tx.send(event);
         })
         .map_err(to_io_err)?;
 
-        watcher
-            .watch(&root, RecursiveMode::Recursive)
-            .map_err(to_io_err)?;
+        let mode = if recursive {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+        watcher.watch(&root, mode).map_err(to_io_err)?;
 
         let (event_tx, event_rx) = mpsc::channel::<FsEvent>();
 
@@ -114,7 +129,12 @@ mod tests {
             Some(FsEvent::Deleted(path.clone()))
         );
         assert_eq!(
-            classify_event(&EventKind::Modify(notify::event::ModifyKind::Data(notify::event::DataChange::Any)), &path),
+            classify_event(
+                &EventKind::Modify(notify::event::ModifyKind::Data(
+                    notify::event::DataChange::Any
+                )),
+                &path
+            ),
             Some(FsEvent::Changed(path))
         );
     }

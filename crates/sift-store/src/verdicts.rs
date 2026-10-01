@@ -106,7 +106,10 @@ impl VerdictTable {
     pub fn store(&mut self, fingerprint: PathFingerprint, verdict: &Verdict, now_ms: i64) {
         if let Some(indices) = self.index.get_mut(&fingerprint.key) {
             for &index in indices.iter() {
-                if self.records[index].fingerprint.still_describes(&fingerprint) {
+                if self.records[index]
+                    .fingerprint
+                    .still_describes(&fingerprint)
+                {
                     let record = &mut self.records[index];
                     record.verdict = verdict.clone();
                     record.last_used_ms = now_ms;
@@ -126,10 +129,7 @@ impl VerdictTable {
             last_used_ms: now_ms,
             times_used: 1,
         });
-        self.index
-            .entry(fingerprint.key)
-            .or_default()
-            .push(index);
+        self.index.entry(fingerprint.key).or_default().push(index);
 
         if self.records.len() > self.cap {
             self.evict_to_cap();
@@ -221,6 +221,7 @@ mod tests {
             Reason::key("k"),
             VerdictSource::rule("dir.node_modules"),
             0,
+            None,
         )
     }
 
@@ -243,7 +244,10 @@ mod tests {
         let mut table = VerdictTable::default();
         table.store(fingerprint("a", 100, 5), &verdict(Safety::Safe, 0.9), 10);
         assert!(table.lookup(&fingerprint("a", 101, 5), 0).is_none(), "size");
-        assert!(table.lookup(&fingerprint("a", 100, 6), 0).is_none(), "mtime");
+        assert!(
+            table.lookup(&fingerprint("a", 100, 6), 0).is_none(),
+            "mtime"
+        );
         assert!(table.lookup(&fingerprint("b", 100, 5), 0).is_none(), "path");
     }
 

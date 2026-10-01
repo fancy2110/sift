@@ -58,7 +58,10 @@ mod tests {
     #[test]
     fn volumes_are_reshaped_without_loss() {
         let volumes = sift_platform::volume::list_volumes();
-        assert!(!volumes.is_empty(), "a real machine has at least one volume");
+        assert!(
+            !volumes.is_empty(),
+            "a real machine has at least one volume"
+        );
         let mapped: Vec<VolumeInfo> = volumes.iter().map(VolumeInfo::from).collect();
         assert_eq!(mapped.len(), volumes.len());
         for (source, info) in volumes.iter().zip(mapped.iter()) {

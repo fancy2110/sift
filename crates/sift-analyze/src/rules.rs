@@ -198,9 +198,8 @@ const DIR_RULES: &[DirRule] = &[
 
 /// Installer extensions. These are `Review`, not `Safe`: an installer is
 /// usually disposable but occasionally the only copy of something.
-const INSTALLER_EXTENSIONS: &[&str] = &[
-    "dmg", "pkg", "iso", "msi", "exe", "appimage", "deb", "rpm",
-];
+const INSTALLER_EXTENSIONS: &[&str] =
+    &["dmg", "pkg", "iso", "msi", "exe", "appimage", "deb", "rpm"];
 
 /// Archive extensions, also `Review`.
 const ARCHIVE_EXTENSIONS: &[&str] = &[
@@ -236,7 +235,9 @@ pub fn for_dir(name: &str, path: &Path) -> Option<RuleHit> {
         }
         if matches!(rule.outcome, DirOutcome::Trash) {
             let looks_like_trash_parent = parent_name
-                .map(|parent| parent.to_string_lossy() == "share" || parent.to_string_lossy() == ".")
+                .map(|parent| {
+                    parent.to_string_lossy() == "share" || parent.to_string_lossy() == "."
+                })
                 .unwrap_or(false)
                 || path
                     .components()
@@ -374,7 +375,11 @@ pub fn for_file(
             });
         }
         if LOG_EXTENSIONS.contains(&extension) && size >= thresholds.log_min_bytes {
-            let family = if extension == "log" { "application" } else { "crash" };
+            let family = if extension == "log" {
+                "application"
+            } else {
+                "crash"
+            };
             return Some(RuleHit {
                 rule: "file.large_log",
                 kind: CandidateKind::Log {
@@ -565,11 +570,35 @@ mod tests {
         let big = 512 * 1024 * 1024;
         let old = DAY * 400;
         // Big and old: candidate.
-        assert!(for_file("video.mov", Path::new("/x/video.mov"), big, DAY, old, &thresholds).is_some());
+        assert!(for_file(
+            "video.mov",
+            Path::new("/x/video.mov"),
+            big,
+            DAY,
+            old,
+            &thresholds
+        )
+        .is_some());
         // Big but fresh: not a candidate.
-        assert!(for_file("video.mov", Path::new("/x/video.mov"), big, old, old, &thresholds).is_none());
+        assert!(for_file(
+            "video.mov",
+            Path::new("/x/video.mov"),
+            big,
+            old,
+            old,
+            &thresholds
+        )
+        .is_none());
         // Old but small: not a candidate.
-        assert!(for_file("notes.txt", Path::new("/x/notes.txt"), 1024, DAY, old, &thresholds).is_none());
+        assert!(for_file(
+            "notes.txt",
+            Path::new("/x/notes.txt"),
+            1024,
+            DAY,
+            old,
+            &thresholds
+        )
+        .is_none());
     }
 
     #[test]

@@ -72,6 +72,35 @@ impl NodeKey {
     pub fn from_path(path: &Path) -> Self {
         Self::from_bytes(&path_bytes(path))
     }
+
+    /// Derive a child key by continuing both FNV lanes from this key's state.
+    ///
+    /// FNV-1a is order-serial, so the lanes after hashing the full parent path
+    /// are exactly the state to continue from: append `"/"` (unless the parent
+    /// path already ends in the separator) then the child name, and the result
+    /// equals [`NodeKey::from_path`] for the joined path, without re-hashing
+    /// every ancestor byte per entry.
+    #[inline]
+    pub fn child(self, name: &[u8], parent_path_ends_with_sep: bool) -> Self {
+        let mut lane_a = (self.0 >> 64) as u64;
+        let mut lane_b = self.0 as u64;
+
+        let step = |lane: &mut u64, seed_prime: u64, bytes: &[u8]| {
+            for &byte in bytes {
+                *lane ^= byte as u64;
+                *lane = lane.wrapping_mul(seed_prime);
+            }
+        };
+
+        if !parent_path_ends_with_sep {
+            step(&mut lane_a, FNV_PRIME, b"/");
+            step(&mut lane_b, FNV_PRIME, b"/");
+        }
+        step(&mut lane_a, FNV_PRIME, name);
+        step(&mut lane_b, FNV_PRIME, name);
+
+        Self(((lane_a as u128) << 64) | lane_b as u128)
+    }
 }
 
 /// Path bytes as the filesystem reports them: raw `OsStr` bytes on Unix, the

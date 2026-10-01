@@ -1,5 +1,5 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
+  "$schema": "https://schema.tauri.app/config/3",
   "productName": "Sift",
   "version": "0.1.0",
   "identifier": "com.sift.app",
@@ -16,14 +16,11 @@
         "width": 1280,
         "height": 832,
         "minWidth": 980,
-        "minHeight": 640,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "trafficLightPosition": { "x": 14, "y": 16 }
+        "minHeight": 640
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "bundle": {

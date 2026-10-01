@@ -66,7 +66,7 @@ pub fn walk_dirs(paths: &[PathBuf], want_physical: bool, workers: usize) -> Vec<
 fn read_one(path: &Path, want_physical: bool) -> Option<Vec<RawEntry>> {
     DirReader::read(path, want_physical)
         .ok()
-        .map(DirReader::into_entries)
+        .map(|reader| reader.into_parts().1)
 }
 
 #[cfg(test)]
@@ -94,8 +94,19 @@ mod tests {
                 .iter()
                 .find(|(path, _)| path == p)
                 .expect("parallel result present");
-            let mut par_names: Vec<&[u8]> = par.1.as_ref().unwrap().iter().map(|e| e.name.as_slice()).collect();
-            let mut seq_names: Vec<&[u8]> = seq.as_ref().unwrap().iter().map(|e| e.name.as_slice()).collect();
+            let mut par_names: Vec<&[u8]> = par
+                .1
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|e| e.name.as_slice())
+                .collect();
+            let mut seq_names: Vec<&[u8]> = seq
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|e| e.name.as_slice())
+                .collect();
             par_names.sort_unstable();
             seq_names.sort_unstable();
             assert_eq!(par_names, seq_names, "results disagree for {p:?}");

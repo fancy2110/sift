@@ -39,6 +39,9 @@ pub enum JobKind {
     /// Read the whole subtree and return only the summed size: the node budget
     /// refused to record this directory, but its bytes still count.
     SizeOnly,
+    /// A predicted giant flat directory: do not enumerate it; the coordinator
+    /// closes it at zero and an exact calibration runs after the scan.
+    Predicted,
 }
 
 /// One entry in the shared work queue.
@@ -52,6 +55,8 @@ pub struct QueuedDir {
     /// Insertion order, for stable tie-breaking.
     pub seq: u64,
     pub kind: JobKind,
+    /// Whether the directory itself is writable (its entries can be unlinked).
+    pub writable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +64,10 @@ pub struct OrdDir {
     pub queued: QueuedDir,
     pub category: u8,
     pub focus: std::path::PathBuf,
+    /// Descriptor already opened for this directory by the worker that read
+    /// its parent, so the worker that picks the job never re-resolves the
+    /// path. `None` jobs are opened by path (portable fallback).
+    pub preopened: Option<i32>,
 }
 
 impl PartialEq for OrdDir {
@@ -84,15 +93,30 @@ impl Ord for OrdDir {
             inverted => return inverted,
         }
         // Depth: category 1 wants deeper ancestors first (reverse); everything
-        // else wants shallower first (natural).
-        match other.queued.depth.cmp(&self.queued.depth) {
+        // else wants shallower first (natural). Benchmark probe
+        // SIFT_SCAN_DFS=1 flips category 4 ("everything else") to depth-first
+        // so workers stay inside one subtree and preserve APFS btree locality
+        // instead of fanning out across the whole volume.
+        let depth_cmp = other.queued.depth.cmp(&self.queued.depth);
+        match depth_cmp {
             Ordering::Equal => {}
             reversed if self.category == 1 => return reversed.reverse(),
-            natural => return natural,
+            natural => {
+                if self.category == 4 && dfs_mode() {
+                    return natural.reverse();
+                }
+                return natural;
+            }
         }
         // Stable insertion order.
         other.queued.seq.cmp(&self.queued.seq)
     }
+}
+
+fn dfs_mode() -> bool {
+    use std::sync::OnceLock;
+    static DFS: OnceLock<bool> = OnceLock::new();
+    *DFS.get_or_init(|| std::env::var("SIFT_SCAN_DFS").as_deref() == Ok("1"))
 }
 
 #[cfg(test)]
@@ -108,9 +132,11 @@ mod tests {
                 depth,
                 seq,
                 kind: JobKind::Tracked,
+                writable: false,
             },
             category: 0,
             focus: PathBuf::from("/root/a/focus"),
+            preopened: None,
         }
     }
 
@@ -131,14 +157,30 @@ mod tests {
         let focus = PathBuf::from("/root/a/focus");
         let mut heap = std::collections::BinaryHeap::new();
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root/b"), depth: 1, seq: 1, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root/b"),
+                depth: 1,
+                seq: 1,
+                kind: JobKind::Tracked,
+                writable: false,
+            },
             category: 4,
             focus: focus.clone(),
+            preopened: None,
         });
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root/a/focus"), depth: 3, seq: 2, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root/a/focus"),
+                depth: 3,
+                seq: 2,
+                kind: JobKind::Tracked,
+                writable: false,
+            },
             category: 0,
             focus: focus.clone(),
+            preopened: None,
         });
         let first = heap.pop().unwrap();
         assert_eq!(first.queued.path, PathBuf::from("/root/a/focus"));
@@ -149,14 +191,30 @@ mod tests {
         let focus = PathBuf::from("/root/a/focus");
         let mut heap = std::collections::BinaryHeap::new();
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root"), depth: 0, seq: 1, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root"),
+                depth: 0,
+                seq: 1,
+                kind: JobKind::Tracked,
+                writable: false,
+            },
             category: 1,
             focus: focus.clone(),
+        preopened: None,
         });
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root/a"), depth: 1, seq: 2, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root/a"),
+                depth: 1,
+                seq: 2,
+                kind: JobKind::Tracked,
+                writable: false,
+            },
             category: 1,
             focus: focus.clone(),
+        preopened: None,
         });
         assert_eq!(heap.pop().unwrap().queued.path, PathBuf::from("/root/a"));
     }
@@ -166,14 +224,30 @@ mod tests {
         let focus = PathBuf::from("/root/a/focus");
         let mut heap = std::collections::BinaryHeap::new();
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root/b/deep/deeper"), depth: 4, seq: 1, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root/b/deep/deeper"),
+                depth: 4,
+                seq: 1,
+                kind: JobKind::Tracked,
+                writable: false,
+            },
             category: 4,
             focus: focus.clone(),
+        preopened: None,
         });
         heap.push(OrdDir {
-            queued: QueuedDir { index: 0, path: PathBuf::from("/root/b"), depth: 1, seq: 2, kind: JobKind::Tracked },
+            queued: QueuedDir {
+                index: 0,
+                path: PathBuf::from("/root/b"),
+                depth: 1,
+                seq: 2,
+                kind: JobKind::Tracked,
+                writable: false,
+            },
             category: 4,
             focus: focus.clone(),
+        preopened: None,
         });
         assert_eq!(heap.pop().unwrap().queued.path, PathBuf::from("/root/b"));
     }

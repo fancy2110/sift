@@ -237,7 +237,11 @@ pub fn evaluate(
 
     // Step 2: approval mode. Off and NotifyOnly never select anything.
     let can_act = config.enabled && config.auto_mode.may_delete();
-    let selected = if can_act { eligible.clone() } else { Vec::new() };
+    let selected = if can_act {
+        eligible.clone()
+    } else {
+        Vec::new()
+    };
     let eligible_bytes: u64 = eligible.iter().map(|entry| entry.size).sum();
     let selected_bytes: u64 = selected.iter().map(|entry| entry.size).sum();
 
@@ -283,9 +287,7 @@ pub fn evaluate(
                 );
             }
             return base(
-                MonitorAction::AutoClean {
-                    entries: selected,
-                },
+                MonitorAction::AutoClean { entries: selected },
                 selected_bytes,
                 false,
             );
@@ -364,7 +366,9 @@ pub(crate) fn modified_ms(meta: &std::fs::Metadata) -> i64 {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        meta.mtime().saturating_mul(1000).saturating_add(meta.mtime_nsec() / 1_000_000)
+        meta.mtime()
+            .saturating_mul(1000)
+            .saturating_add(meta.mtime_nsec() / 1_000_000)
     }
     #[cfg(windows)]
     {
@@ -425,11 +429,19 @@ mod tests {
             last_seen_ms: 0,
             times_seen: 1,
             approved_for_auto: approved,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: Reason::key("reason.rebuildableCache"),
         }
     }
 
     fn rule_entry(name: &str, size: u64, approved: bool) -> CleanableEntry {
-        entry(name, size, approved, VerdictSource::rule("dir.node_modules"))
+        entry(
+            name,
+            size,
+            approved,
+            VerdictSource::rule("dir.node_modules"),
+        )
     }
 
     fn sample(free_gb: u64, total_gb: u64) -> DiskSample {
@@ -443,7 +455,10 @@ mod tests {
         assert_eq!(config.level_for(&sample(140, 1000)), AlertLevel::Warning);
         assert_eq!(config.level_for(&sample(40, 1000)), AlertLevel::Critical);
         // A zero-capacity volume must not be reported as critical.
-        assert_eq!(config.level_for(&DiskSample::new(0, 0, 0)), AlertLevel::Normal);
+        assert_eq!(
+            config.level_for(&DiskSample::new(0, 0, 0)),
+            AlertLevel::Normal
+        );
     }
 
     #[test]
@@ -549,10 +564,7 @@ mod tests {
         let mut config = config();
         config.auto_mode = AutoCleanMode::AutoApproved;
         config.max_auto_clean_bytes = 4 * GB;
-        let entries = vec![
-            rule_entry("a", 3 * GB, true),
-            rule_entry("b", 3 * GB, true),
-        ];
+        let entries = vec![rule_entry("a", 3 * GB, true), rule_entry("b", 3 * GB, true)];
         let decision = evaluate(
             &config,
             &sample(50, 1000),
@@ -691,12 +703,7 @@ mod tests {
     fn low_confidence_model_conclusions_are_not_auto_eligible() {
         let mut config = config();
         config.auto_mode = AutoCleanMode::AutoApproved;
-        let mut weak = entry(
-            "ai",
-            GB,
-            true,
-            VerdictSource::remote("test"),
-        );
+        let mut weak = entry("ai", GB, true, VerdictSource::remote("test"));
         weak.confidence = 0.5; // below the remote floor
         let decision = evaluate(
             &config,
@@ -707,7 +714,10 @@ mod tests {
             None,
             0,
         );
-        assert!(!decision.deletes(), "a low-confidence model verdict is not enough");
+        assert!(
+            !decision.deletes(),
+            "a low-confidence model verdict is not enough"
+        );
     }
 
     #[test]
@@ -765,7 +775,11 @@ mod tests {
             0,
         );
         assert_eq!(decision.level, AlertLevel::Critical);
-        assert_eq!(decision.selected().len(), 1, "urgency does not widen the rules");
+        assert_eq!(
+            decision.selected().len(),
+            1,
+            "urgency does not widen the rules"
+        );
     }
 
     #[test]
@@ -798,6 +812,9 @@ mod tests {
             last_seen_ms: 0,
             times_seen: 1,
             approved_for_auto: true,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: Reason::key("k"),
         };
         assert!(still_matches(&good), "an unchanged directory must verify");
 
@@ -818,7 +835,8 @@ mod tests {
     /// not compare it against the directory's own `st_size`.
     #[test]
     fn a_directory_is_verified_by_mtime_not_by_aggregate_size() {
-        let base = std::env::temp_dir().join(format!("sift-monitor-dircheck-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("sift-monitor-dircheck-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let target = base.join("node_modules");
         std::fs::create_dir_all(&target).unwrap();
@@ -846,6 +864,9 @@ mod tests {
             last_seen_ms: 0,
             times_seen: 1,
             approved_for_auto: true,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: Reason::key("k"),
         };
         assert!(
             still_matches(&entry),

@@ -12,7 +12,7 @@ name = "sift_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "=3.0.0-alpha.2", features = [] }
 
 [dependencies]
 # Shared core: the same crates the native GPUI front end uses.
@@ -22,16 +22,17 @@ sift-scan = { workspace = true }
 sift-analyze = { workspace = true }
 sift-store = { workspace = true }
 sift-monitor = { workspace = true }
-sift-persist = { workspace = true }
 
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tauri-plugin-opener = "2"
-tauri-plugin-notification = "2"
-tauri-plugin-autostart = "2"
-tauri-plugin-dialog = "2"
+tauri = { version = "=3.0.0-alpha.2", features = ["tray-icon", "image-png"] }
+tauri-runtime-wry = { version = "=3.0.0-alpha.2", features = ["macos-private-api"] }
+tauri-plugin-opener = "=3.0.0-alpha.1"
+tauri-plugin-notification = "=3.0.0-alpha.1"
+tauri-plugin-autostart = "=3.0.0-alpha.1"
+tauri-plugin-dialog = "=3.0.0-alpha.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = "6"
+chrono = "0.4"
 
 [features]
 default = ["remote-ai"]

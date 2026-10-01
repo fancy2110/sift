@@ -1,0 +1,82 @@
+<!doctype html>
+<!--
+  Sift app icon — master source (1024x1024).
+  One abstract disk platter: concentric tracks, a gradient capacity arc and
+  a center hub. No star. Geometry aligned with Qianlier: an 80px transparent
+  safe area (glyph inside 80..944). Tray glyph is generated separately.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  svg { display: block; width: 1024px; height: 1024px; }
+</style>
+</head>
+<body>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- macOS continuous-corner glyph inset by the 80px safe area -->
+    <path id="squircle" d="M265 80
+      H759 A185 185 0 0 1 944 265
+      V759 A185 185 0 0 1 759 944
+      H265 A185 185 0 0 1 80 759
+      V265 A185 185 0 0 1 265 80 Z"/>
+    <clipPath id="iconClip"><use href="#squircle"/></clipPath>
+
+    <linearGradient id="bgGrad" x1="240" y1="80" x2="800" y2="944" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#242231"/>
+      <stop offset="0.55" stop-color="#17151f"/>
+      <stop offset="1" stop-color="#100f17"/>
+    </linearGradient>
+    <radialGradient id="glowViolet" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(740 280) rotate(132) scale(560)">
+      <stop offset="0" stop-color="#7c5cf0" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#7c5cf0" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- capacity arc gradient -->
+    <linearGradient id="arcGrad" x1="262" y1="262" x2="762" y2="762" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8b9bff"/>
+      <stop offset="0.55" stop-color="#6d5ce8"/>
+      <stop offset="1" stop-color="#b18bff"/>
+    </linearGradient>
+
+    <!-- center hub -->
+    <radialGradient id="hubGrad" cx="0.38" cy="0.34" r="0.9">
+      <stop offset="0" stop-color="#3a3848"/>
+      <stop offset="1" stop-color="#1c1a26"/>
+    </radialGradient>
+
+    <linearGradient id="sheen" x1="512" y1="80" x2="512" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.015"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <g clip-path="url(#iconClip)">
+    <rect x="80" y="80" width="864" height="864" fill="url(#bgGrad)"/>
+    <rect x="80" y="80" width="864" height="864" fill="url(#glowViolet)"/>
+
+    <!-- abstract disk platter, centered -->
+    <!-- outer platter face -->
+    <circle cx="512" cy="512" r="272" fill="#ffffff" fill-opacity="0.045"/>
+    <!-- track rings -->
+    <circle cx="512" cy="512" r="272" stroke="#ffffff" stroke-opacity="0.16" stroke-width="6"/>
+    <circle cx="512" cy="512" r="208" stroke="#ffffff" stroke-opacity="0.09" stroke-width="4"/>
+    <circle cx="512" cy="512" r="146" stroke="#ffffff" stroke-opacity="0.07" stroke-width="4"/>
+
+    <!-- capacity arc (~66% of the outer track), round caps -->
+    <circle cx="512" cy="512" r="272" stroke="url(#arcGrad)" stroke-width="22"
+      stroke-linecap="round" stroke-dasharray="1130 1810" transform="rotate(-90 512 512)"/>
+
+    <!-- center hub -->
+    <circle cx="512" cy="512" r="74" fill="url(#hubGrad)" stroke="#ffffff" stroke-opacity="0.12" stroke-width="4"/>
+    <circle cx="512" cy="512" r="20" fill="#0e0d14" stroke="#ffffff" stroke-opacity="0.18" stroke-width="4"/>
+
+    <rect x="80" y="80" width="864" height="864" fill="url(#sheen)"/>
+  </g>
+</svg>
+</body>
+</html>

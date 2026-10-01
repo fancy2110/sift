@@ -33,6 +33,12 @@ pub trait CleanupSource: Send + Sync {
     /// Report a successful removal so it leaves the list and enters the
     /// decision log.
     fn note_removed(&self, entry: &CleanableEntry, now_ms: i64);
+
+    /// Record one finished cleanup session (a set of removals as a single
+    /// history row). A default no-op keeps test doubles minimal.
+    fn note_cleanup_session(&self, titles: &[String], bytes: u64, automatic: bool, now_ms: i64) {
+        let _ = (titles, bytes, automatic, now_ms);
+    }
 }
 
 impl CleanupSource for Store {
@@ -46,6 +52,10 @@ impl CleanupSource for Store {
 
     fn note_removed(&self, entry: &CleanableEntry, now_ms: i64) {
         Store::note_removed(self, entry, now_ms);
+    }
+
+    fn note_cleanup_session(&self, titles: &[String], bytes: u64, automatic: bool, now_ms: i64) {
+        Store::note_cleanup_session(self, titles, bytes, automatic, now_ms);
     }
 }
 
@@ -96,16 +106,14 @@ pub enum MonitorEvent {
         entry_count: usize,
     },
     /// An unattended cleanup is starting.
-    CleanupStarted {
-        entry_count: usize,
-        bytes: u64,
-    },
+    CleanupStarted { entry_count: usize, bytes: u64 },
     /// An unattended cleanup finished, with per-outcome counts.
     CleanupFinished {
         removed: usize,
         skipped: usize,
         failed: usize,
         bytes: u64,
+        paths: Vec<PathBuf>,
     },
     /// A non-fatal problem worth surfacing once (volume vanished, no home dir).
     Warning(String),
@@ -270,9 +278,7 @@ fn monitor_loop(
     let mut last_notify_ms: Option<i64> = None;
 
     if home.is_none() {
-        let _ = event_tx.send(MonitorEvent::Warning(
-            "无法确定用户主目录，自动清理已停用，仅做提醒".to_string(),
-        ));
+        let _ = event_tx.send(MonitorEvent::Warning("err.monitorNoHome".to_string()));
     }
 
     loop {
@@ -310,9 +316,7 @@ fn monitor_loop(
                 );
             }
             None => {
-                let _ = event_tx.send(MonitorEvent::Warning(
-                    "无法读取磁盘剩余空间".to_string(),
-                ));
+                let _ = event_tx.send(MonitorEvent::Warning("err.monitorUnreadable".to_string()));
             }
         }
 
@@ -381,20 +385,28 @@ fn act(
                 entry_count: selected.len(),
                 bytes: decision.reclaimable_bytes,
             });
-            let outcome = clean_now(selected, home, config.home_only, &**source, &**remover, now_ms);
+            let outcome = clean_now(
+                selected,
+                home,
+                config.home_only,
+                &**source,
+                &**remover,
+                now_ms,
+            );
             *last_clean_ms = Some(now_ms);
             let _ = event_tx.send(MonitorEvent::CleanupFinished {
                 removed: outcome.removed,
                 skipped: outcome.skipped,
                 failed: outcome.failed,
                 bytes: outcome.bytes,
+                paths: outcome.removed_paths,
             });
         }
     }
 }
 
 /// Counts from one unattended cleanup.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CleanupOutcome {
     pub removed: usize,
@@ -404,6 +416,7 @@ pub struct CleanupOutcome {
     /// The trash reported a per-item failure.
     pub failed: usize,
     pub bytes: u64,
+    pub removed_paths: Vec<PathBuf>,
 }
 
 /// Perform an unattended cleanup, verifying every entry first.
@@ -442,14 +455,20 @@ pub fn clean_now(
     let paths: Vec<PathBuf> = verified.iter().map(|entry| entry.path.clone()).collect();
     let results = remover.remove(&paths);
 
+    let mut session_titles: Vec<String> = Vec::new();
     for (entry, result) in verified.iter().zip(results.iter()) {
         if result.ok {
             outcome.removed += 1;
             outcome.bytes = outcome.bytes.saturating_add(entry.size);
+            outcome.removed_paths.push(entry.path.clone());
             source.note_removed(entry, now_ms);
+            session_titles.push(entry.name.clone());
         } else {
             outcome.failed += 1;
         }
+    }
+    if !session_titles.is_empty() {
+        source.note_cleanup_session(&session_titles, outcome.bytes, true, now_ms);
     }
     outcome
 }
@@ -470,9 +489,9 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sift_core::VolumeId;
     use sift_analyze::{PathFingerprint, Reason, Safety, VerdictSource};
     use sift_core::NodeKey;
+    use sift_core::VolumeId;
     use sift_store::AutoCleanMode;
     use std::sync::Mutex;
 
@@ -528,6 +547,9 @@ mod tests {
             last_seen_ms: 0,
             times_seen: 1,
             approved_for_auto: approved,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: Reason::key("k"),
         }
     }
 

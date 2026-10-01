@@ -382,7 +382,8 @@ impl ScanTree {
         deletable: bool,
         is_symlink: bool,
     ) -> Option<u32> {
-        if self.depth_of(parent) >= self.config.max_depth || self.nodes.len() >= self.config.max_nodes as usize
+        if self.depth_of(parent) >= self.config.max_depth
+            || self.nodes.len() >= self.config.max_nodes as usize
         {
             self.unrecorded_dirs += 1;
             return None;
@@ -748,6 +749,69 @@ impl ScanTree {
     }
 
     /// Append `child` to `parent`'s sibling chain.
+    /// Adopt a restored node before the coordinator resumes.
+    ///
+    /// A `closed` node is installed already settled with its exact aggregate;
+    /// an `open` node stays pending with zero size and is re-walked. A closed
+    /// node whose parent is open pre-charges that parent (the re-list then skips
+    /// the child, so it is counted once); a closed node under a closed parent
+    /// only renders, since its bytes already live in the parent.
+    pub fn adopt_node(
+        &mut self,
+        parent: u32,
+        key: NodeKey,
+        name: &[u8],
+        mtime_ms: i64,
+        deletable: bool,
+        is_symlink: bool,
+        closed: bool,
+        aggregate: ByteSize,
+        files: u32,
+    ) -> Option<u32> {
+        if self.nodes.len() >= self.config.max_nodes as usize {
+            self.unrecorded_dirs += 1;
+            return None;
+        }
+        let name = self.interner.intern(name);
+        let index = self.nodes.len() as u32;
+        let mut flags = KIND_DIR;
+        if is_symlink {
+            flags |= FLAG_SYMLINK;
+        }
+        if deletable {
+            flags |= FLAG_DELETABLE;
+        }
+        if !closed {
+            flags |= FLAG_PENDING;
+        }
+        let size = if closed { aggregate } else { ByteSize::ZERO };
+        let file_count = if closed { files } else { 0 };
+        self.nodes.push(TreeNode {
+            key,
+            parent,
+            first_child: NONE,
+            next_sibling: NONE,
+            name,
+            size,
+            mtime_ms,
+            file_count,
+            flags,
+        });
+
+        if closed {
+            if let Some(parent_node) = self.nodes.get_mut(parent as usize) {
+                if parent_node.pending() {
+                    parent_node.size += aggregate;
+                    parent_node.file_count = parent_node.file_count.saturating_add(files);
+                }
+            }
+        }
+
+        self.link_child(parent, index);
+        Some(index)
+    }
+
+    /// Append `child` to `parent`'s sibling chain.
     fn link_child(&mut self, parent: u32, child: u32) {
         // Copy linkage state first so no borrow is held across a mutation.
         let head = match self.nodes.get(parent as usize) {
@@ -773,14 +837,12 @@ impl ScanTree {
             cursor = next;
         }
     }
-
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use crate::id::NodeKey;
+    use std::path::Path;
 
     fn key(path: &str) -> NodeKey {
         NodeKey::from_bytes(path.as_bytes())
@@ -836,10 +898,10 @@ mod tests {
     fn file_bytes_roll_up_through_directories() {
         let mut tree = tree();
         let root = tree.root();
-        let a = tree.open_dir(root, key("/a"), b"a", 0, true, false).unwrap();
-        let b = tree
-            .open_dir(a, key("/a/b"), b"b", 0, true, false)
+        let a = tree
+            .open_dir(root, key("/a"), b"a", 0, true, false)
             .unwrap();
+        let b = tree.open_dir(a, key("/a/b"), b"b", 0, true, false).unwrap();
 
         tree.record_file(b, ByteSize::new(1000, 4096), None);
         tree.record_file(a, ByteSize::new(500, 4096), None);
@@ -856,7 +918,9 @@ mod tests {
     fn physical_size_is_tracked_separately() {
         let mut tree = tree();
         let root = tree.root();
-        let a = tree.open_dir(root, key("/a"), b"a", 0, true, false).unwrap();
+        let a = tree
+            .open_dir(root, key("/a"), b"a", 0, true, false)
+            .unwrap();
         // A 1 GiB logical cloned file occupying 4 KiB.
         tree.record_file(a, ByteSize::new(1 << 30, 4096), None);
         tree.close_dir(a);
@@ -869,7 +933,9 @@ mod tests {
     fn hardlinks_are_counted_once() {
         let mut tree = tree();
         let root = tree.root();
-        let a = tree.open_dir(root, key("/a"), b"a", 0, true, false).unwrap();
+        let a = tree
+            .open_dir(root, key("/a"), b"a", 0, true, false)
+            .unwrap();
         let id = FileId::new(1, 99);
         assert!(tree.record_file(a, ByteSize::logical_only(4096), Some(id)));
         assert!(!tree.record_file(a, ByteSize::logical_only(4096), Some(id)));
@@ -885,7 +951,9 @@ mod tests {
     fn the_hardlink_table_only_grows_for_multi_linked_files() {
         let mut tree = tree();
         let root = tree.root();
-        let a = tree.open_dir(root, key("/a"), b"a", 0, true, false).unwrap();
+        let a = tree
+            .open_dir(root, key("/a"), b"a", 0, true, false)
+            .unwrap();
         // A single-linked file passes `None` (what the engine does when
         // `nlink <= 1`), so nothing is remembered.
         for index in 0..100 {
@@ -954,7 +1022,9 @@ mod tests {
             },
         );
         let root = tree.root();
-        let a = tree.open_dir(root, key("/a"), b"a", 0, true, false).unwrap();
+        let a = tree
+            .open_dir(root, key("/a"), b"a", 0, true, false)
+            .unwrap();
         let id = FileId::new(1, 99);
         assert!(tree.record_file(a, ByteSize::logical_only(4096), Some(id)));
         assert!(tree.record_file(a, ByteSize::logical_only(4096), Some(id)));
@@ -972,9 +1042,13 @@ mod tests {
             },
         );
         let root = tree.root();
-        let a = tree.open_dir(root, key("/a"), b"a", 0, true, false).unwrap();
+        let a = tree
+            .open_dir(root, key("/a"), b"a", 0, true, false)
+            .unwrap();
         // Budget of two: root + a. The next directory must be refused.
-        assert!(tree.open_dir(a, key("/a/b"), b"b", 0, true, false).is_none());
+        assert!(tree
+            .open_dir(a, key("/a/b"), b"b", 0, true, false)
+            .is_none());
         tree.add_unrecorded(a, ByteSize::logical_only(777), 3);
         tree.close_dir(a);
         assert_eq!(tree.total().logical, 777);
@@ -986,10 +1060,21 @@ mod tests {
     fn children_by_size_puts_directories_first() {
         let mut tree = tree();
         let root = tree.root();
-        let small = tree.open_dir(root, key("/small"), b"small", 0, true, false).unwrap();
-        let big = tree.open_dir(root, key("/big"), b"big", 0, true, false).unwrap();
+        let small = tree
+            .open_dir(root, key("/small"), b"small", 0, true, false)
+            .unwrap();
+        let big = tree
+            .open_dir(root, key("/big"), b"big", 0, true, false)
+            .unwrap();
         let file = tree
-            .retain_file(root, key("/huge.bin"), b"huge.bin", ByteSize::logical_only(9999), 0, true)
+            .retain_file(
+                root,
+                key("/huge.bin"),
+                b"huge.bin",
+                ByteSize::logical_only(9999),
+                0,
+                true,
+            )
             .unwrap();
         tree.record_file(small, ByteSize::logical_only(10), None);
         tree.close_dir(small);
@@ -1004,8 +1089,12 @@ mod tests {
     fn path_is_reconstructed_from_ancestors() {
         let mut tree = tree();
         let root = tree.root();
-        let a = tree.open_dir(root, key("/Users"), b"Users", 0, true, false).unwrap();
-        let b = tree.open_dir(a, key("/Users/me"), b"me", 0, true, false).unwrap();
+        let a = tree
+            .open_dir(root, key("/Users"), b"Users", 0, true, false)
+            .unwrap();
+        let b = tree
+            .open_dir(a, key("/Users/me"), b"me", 0, true, false)
+            .unwrap();
         let c = tree
             .open_dir(b, key("/Users/me/Documents"), b"Documents", 0, true, false)
             .unwrap();
@@ -1019,10 +1108,19 @@ mod tests {
     fn retained_files_appear_with_their_size() {
         let mut tree = tree();
         let root = tree.root();
-        let a = tree.open_dir(root, key("/a"), b"a", 0, true, false).unwrap();
+        let a = tree
+            .open_dir(root, key("/a"), b"a", 0, true, false)
+            .unwrap();
         tree.record_file(a, ByteSize::logical_only(2 << 20), None);
         let file = tree
-            .retain_file(a, key("/a/big.iso"), b"big.iso", ByteSize::logical_only(2 << 20), 12, true)
+            .retain_file(
+                a,
+                key("/a/big.iso"),
+                b"big.iso",
+                ByteSize::logical_only(2 << 20),
+                12,
+                true,
+            )
             .unwrap();
         tree.close_dir(a);
         assert_eq!(tree.node(file).unwrap().kind(), NodeKind::RetainedFile);
@@ -1036,7 +1134,9 @@ mod tests {
     fn close_dir_is_idempotent_for_pending_flag() {
         let mut tree = tree();
         let root = tree.root();
-        let a = tree.open_dir(root, key("/a"), b"a", 0, true, false).unwrap();
+        let a = tree
+            .open_dir(root, key("/a"), b"a", 0, true, false)
+            .unwrap();
         assert!(tree.is_pending(a));
         tree.close_dir(a);
         assert!(!tree.is_pending(a));
@@ -1050,7 +1150,9 @@ mod tests {
     fn view_exposes_ui_fields() {
         let mut tree = tree();
         let root = tree.root();
-        let a = tree.open_dir(root, key("/a"), b"a", 1234, false, true).unwrap();
+        let a = tree
+            .open_dir(root, key("/a"), b"a", 1234, false, true)
+            .unwrap();
         tree.record_file(a, ByteSize::logical_only(64), None);
         tree.close_dir(a);
         let view = tree.view(a).unwrap();
@@ -1076,7 +1178,14 @@ mod tests {
         let root = tree.root();
         for i in 0..50_000u32 {
             let name = format!("dir-{i}");
-            tree.open_dir(root, NodeKey::from_bytes(name.as_bytes()), name.as_bytes(), 0, true, false);
+            tree.open_dir(
+                root,
+                NodeKey::from_bytes(name.as_bytes()),
+                name.as_bytes(),
+                0,
+                true,
+                false,
+            );
         }
         let per_node = tree.resident_bytes() / tree.node_count() as usize;
         // 50k nodes plus a shared interner; the per-node cost must be tens of bytes.

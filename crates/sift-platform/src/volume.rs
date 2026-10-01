@@ -14,8 +14,8 @@ pub fn list_volumes() -> Vec<Volume> {
         .iter()
         .map(|disk| {
             let mount_point = disk.mount_point().to_path_buf();
-            let file_system = String::from_utf8_lossy(disk.file_system().as_encoded_bytes())
-                .to_string();
+            let file_system =
+                String::from_utf8_lossy(disk.file_system().as_encoded_bytes()).to_string();
             Volume::new(
                 VolumeId::from_mount_point(&mount_point),
                 display_name(&mount_point, disk.name().to_string_lossy().as_ref()),

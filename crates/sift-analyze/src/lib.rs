@@ -22,12 +22,12 @@
 pub mod adjudicate;
 pub mod analyzer;
 pub mod candidate;
-pub mod cleanup_plan;
+pub mod cleanup;
 pub mod habits;
-pub mod mock;
 pub mod prompt;
 pub mod reason;
 pub mod route;
+pub mod simulate;
 pub mod rules;
 
 #[cfg(feature = "remote-ai")]
@@ -39,19 +39,17 @@ pub use adjudicate::{
     Guardrails, RawVerdict, RuleAdjudicator, VerdictCache,
 };
 pub use analyzer::{AnalysisPolicy, AnalysisStage, Analyzer};
-pub use candidate::{
-    redact_path, Candidate, CandidateKind, Evidence, Nomination,
+pub use candidate::{redact_path, Candidate, CandidateKind, Evidence, Nomination};
+pub use cleanup::{
+    display_command, plan_for, CleanupMethod, CleanupPlan, CommandStep,
 };
-pub use cleanup_plan::{CleanupCommand, CleanupImpact};
-pub use habits::{
-    Decision, DecisionLog, DecisionOutcome, RoutineSuggestion, SuggestionReason,
-};
-pub use mock::MockAdjudicator;
-pub use prompt::{build_prompt, PROMPT_VERSION};
+pub use habits::{Decision, DecisionLog, DecisionOutcome, RoutineSuggestion, SuggestionReason};
 pub use reason::{
     clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource,
 };
 pub use route::{RemoteAdjudicator, RoutingAdjudicator};
+pub use prompt::{build as build_prompt_shared, build_at as build_prompt_at_shared, PromptItem};
+pub use simulate::SimulatedAdjudicator;
 pub use rules::{RuleHit, RuleThresholds};
 
 #[cfg(feature = "remote-ai")]

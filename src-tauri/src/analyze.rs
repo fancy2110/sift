@@ -13,26 +13,44 @@
 //!    background watch whose policy can clean approved items unattended.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
+use sift_analyze::cleanup::{display_command, plan_for};
 use sift_analyze::{
-    Adjudicator, AnalysisPolicy, AnalysisStage, Analyzer, Reason, RuleAdjudicator, Safety,
-    VerdictSource,
+    redact_path, Adjudicator, AnalysisPolicy, AnalysisStage, Analyzer, Decision, DecisionOutcome,
+    Reason, RuleAdjudicator, Safety, VerdictSource,
 };
 use sift_monitor::{CleanupSource, Monitor, MonitorEvent};
-use sift_store::{AutoCleanMode, Store};
+use sift_store::{AutoCleanMode, Store, StoreWarning};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::scanner::ScanManager;
+
+/// What the front end needs to know about one item from the last analysis.
+#[derive(Debug, Clone)]
+struct ReportItem {
+    key: sift_core::NodeKey,
+    name: String,
+    display_path: String,
+    is_dir: bool,
+    size: u64,
+    mtime_ms: i64,
+    kind_token: String,
+    safety: Safety,
+}
 
 /// Services the analysis commands need: durable state and the running monitor.
 pub struct AppServices {
     pub store: Arc<Store>,
     pub monitor: Mutex<Option<sift_monitor::MonitorControl>>,
     /// Warnings collected while loading the store, drained by the front end.
-    pub warnings: Mutex<Vec<String>>,
+    pub warnings: Mutex<Vec<StoreWarning>>,
+    /// Items from the most recent analysis keyed by real path, so a cleanup can
+    /// tell an explicitly confirmed review item from an unknown path.
+    last_report: Mutex<HashMap<PathBuf, ReportItem>>,
 }
 
 impl AppServices {
@@ -42,6 +60,7 @@ impl AppServices {
             store: Arc::new(store),
             monitor: Mutex::new(None),
             warnings: Mutex::new(warnings),
+            last_report: Mutex::new(HashMap::new()),
         }
     }
 
@@ -90,6 +109,15 @@ pub struct FindingDto {
     pub known_cleanable: bool,
     /// Approved for unattended cleanup.
     pub approved_for_auto: bool,
+    /// Toolchain-native command preferred for cleanup, when one exists.
+    pub cleanup_command: Option<String>,
+    /// How the item is cleaned: nativeCommand | trashItem | emptyTrash.
+    pub cleanup_method: String,
+    /// Deletion impact: translation key for local verdicts, ready text for a
+    /// model's verdict.
+    pub impact: String,
+    pub impact_kind: String,
+    pub impact_params: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -128,9 +156,17 @@ pub fn analyze_current(
     services: State<'_, AppServices>,
     manager: State<'_, ScanManager>,
 ) -> Result<AnalysisSummaryDto, String> {
+    analyze_current_with(&services, &manager)
+}
+
+/// Analyse the last scan with concrete services, callable from non-command code.
+pub(crate) fn analyze_current_with(
+    services: &AppServices,
+    manager: &ScanManager,
+) -> Result<AnalysisSummaryDto, String> {
     let tree = manager
         .last_tree()
-        .ok_or_else(|| "还没有可分析的扫描结果".to_string())?;
+        .ok_or_else(|| "err.noScanYet".to_string())?;
 
     let settings = services.store.settings();
     let policy = AnalysisPolicy {
@@ -141,12 +177,17 @@ pub fn analyze_current(
     .with_min_bytes(settings.analysis.min_candidate_bytes);
 
     let analyzer = Analyzer::new(policy, dirs_home());
-    let adjudicator = build_adjudicator(&services);
+    let adjudicator = build_adjudicator(services);
     let used_remote = adjudicator.is_remote();
 
     let report = {
         let mut guard = tree.lock().map_err(|err| err.to_string())?;
-        analyzer.analyze(&*adjudicator, &mut guard, now_ms(), |_stage, _done, _total| {})
+        analyzer.analyze(
+            &*adjudicator,
+            &mut guard,
+            now_ms(),
+            |_stage, _done, _total| {},
+        )
     };
 
     // Requirement 2: persist what is definitively cleanable plus the verdicts.
@@ -154,6 +195,27 @@ pub fn analyze_current(
     let _ = services.store.flush_if_dirty();
 
     let cleanable = services.store.cleanable();
+    {
+        // Remember every analyzed item by its real path so clean_paths can
+        // distinguish a confirmed review item from an unknown path.
+        let mut last_report = services.last_report.lock().unwrap();
+        last_report.clear();
+        for item in &report.items {
+            last_report.insert(
+                item.candidate.path.clone(),
+                ReportItem {
+                    key: item.candidate.key,
+                    name: item.candidate.name.clone(),
+                    display_path: item.candidate.display_path.clone(),
+                    is_dir: item.candidate.is_dir,
+                    size: item.candidate.reclaimable(),
+                    mtime_ms: item.candidate.mtime_ms,
+                    kind_token: item.candidate.kind.token().to_string(),
+                    safety: item.verdict.safety,
+                },
+            );
+        }
+    }
     let findings: Vec<FindingDto> = report
         .sorted_by_size()
         .into_iter()
@@ -167,7 +229,7 @@ pub fn analyze_current(
         known_cleanable_bytes: cleanable.total_bytes(),
         source_counts: report.source_counts.clone(),
         used_remote,
-        remote_needs_consent: remote_configured_without_consent(&services),
+        remote_needs_consent: remote_configured_without_consent(services),
     })
 }
 
@@ -194,6 +256,11 @@ pub fn list_cleanable(services: State<'_, AppServices>) -> Vec<FindingDto> {
             kind: entry.kind_token.clone(),
             known_cleanable: true,
             approved_for_auto: entry.approved_for_auto,
+            cleanup_command: entry.cleanup_command.clone(),
+            cleanup_method: entry.cleanup_method.clone(),
+            impact: describe_reason(&entry.impact),
+            impact_kind: reason_kind(&entry.impact).to_string(),
+            impact_params: reason_params(&entry.impact),
         })
         .collect();
     entries.sort_by_key(|entry| std::cmp::Reverse(entry.size));
@@ -207,7 +274,7 @@ pub fn set_cleanable_approval(
     id: String,
     approved: bool,
 ) -> Result<bool, String> {
-    let key = sift_core::NodeKey::from_hex(&id).ok_or_else(|| "无效的节点 id".to_string())?;
+    let key = sift_core::NodeKey::from_hex(&id).ok_or_else(|| "err.invalidNodeId".to_string())?;
     let changed = services.store.set_auto_approval(key, approved);
     let _ = services.store.flush_if_dirty();
     Ok(changed)
@@ -224,55 +291,134 @@ pub fn approve_structural(services: State<'_, AppServices>) -> usize {
 /// Forget one remembered entry.
 #[tauri::command]
 pub fn forget_cleanable(services: State<'_, AppServices>, id: String) -> Result<bool, String> {
-    let key = sift_core::NodeKey::from_hex(&id).ok_or_else(|| "无效的节点 id".to_string())?;
+    let key = sift_core::NodeKey::from_hex(&id).ok_or_else(|| "err.invalidNodeId".to_string())?;
     let removed = services.store.forget_cleanable(key);
     let _ = services.store.flush_if_dirty();
     Ok(removed)
 }
 
-/// Describe cleaning `paths`, or send them to the trash only with `execute`.
-///
-/// Default is dry-run: no filesystem mutation and no decision recorded, so a
-/// preview can be opened repeatedly without side effects.
+/// Send paths to the trash and record the decisions.
 #[tauri::command]
 pub fn clean_paths(
     services: State<'_, AppServices>,
     paths: Vec<String>,
-    execute: bool,
 ) -> Vec<crate::cleanup::DeleteResultItem> {
-    if !execute {
-        return crate::cleanup::preview_delete(paths);
-    }
+    perform_cleanup(&services, &paths, false)
+}
+
+/// One guardrail-checked cleanup, shared by the interactive command, the
+/// routine runner and the daily schedule. A path is removable when it is a
+/// remembered cleanable entry or part of the last analysis and is not a `Keep`;
+/// an unknown path is refused and reported, never silently dropped.
+pub(crate) fn perform_cleanup(
+    services: &AppServices,
+    paths: &[String],
+    automatic: bool,
+) -> Vec<crate::cleanup::DeleteResultItem> {
     let store = services.store();
     let cleanable = store.cleanable();
-    let as_paths: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
-    let results = sift_platform::trash::trash_paths(&as_paths);
+    let last_report = services.last_report.lock().unwrap();
     let now = now_ms();
 
-    for result in &results {
-        if !result.ok {
+    struct Allowed {
+        path: PathBuf,
+        remembered: bool,
+        item: ReportItem,
+    }
+
+    let mut allowed: Vec<Allowed> = Vec::new();
+    let mut results: Vec<crate::cleanup::DeleteResultItem> = Vec::new();
+
+    for text in paths {
+        let path = PathBuf::from(text);
+        let on_cleanable = cleanable.entries().iter().find(|entry| entry.path == path);
+
+        let item = if let Some(entry) = on_cleanable {
+            ReportItem {
+                key: entry.key(),
+                name: entry.name.clone(),
+                display_path: entry.display_path.clone(),
+                is_dir: entry.fingerprint.is_dir,
+                size: entry.size,
+                mtime_ms: entry.fingerprint.mtime_ms,
+                kind_token: entry.kind_token.clone(),
+                safety: entry.safety,
+            }
+        } else if let Some(item) = last_report.get(&path) {
+            item.clone()
+        } else {
+            results.push(crate::cleanup::DeleteResultItem {
+                path: text.clone(),
+                ok: false,
+                error: Some("err.deleteNotConfirmed".into()),
+            });
+            continue;
+        };
+
+        if item.safety == Safety::Keep {
+            results.push(crate::cleanup::DeleteResultItem {
+                path: text.clone(),
+                ok: false,
+                error: Some("err.keepRefused".into()),
+            });
             continue;
         }
-        // Remember the removal, which is what lets habits be mined later.
-        if let Some(entry) = cleanable
-            .entries()
-            .iter()
-            .find(|entry| entry.path == result.path)
-        {
-            store.note_removed(entry, now);
-        }
+        allowed.push(Allowed {
+            path,
+            remembered: on_cleanable.is_some(),
+            item,
+        });
     }
-    let _ = store.flush_if_dirty();
 
-    results
-        .into_iter()
-        .map(|result| crate::cleanup::DeleteResultItem {
+    let as_paths: Vec<PathBuf> = allowed.iter().map(|entry| entry.path.clone()).collect();
+    let trash_results = sift_platform::trash::trash_paths(&as_paths);
+
+    let mut session_bytes: u64 = 0;
+    let mut session_titles: Vec<String> = Vec::new();
+    for (entry, result) in allowed.into_iter().zip(trash_results) {
+        if result.ok && entry.remembered {
+            if let Some(cleanable_entry) = cleanable
+                .entries()
+                .iter()
+                .find(|cleanable_entry| cleanable_entry.path == entry.path)
+            {
+                store.note_removed(cleanable_entry, now);
+            }
+        } else if result.ok {
+            // A confirmed review item that never entered the cleanable list:
+            // record the removal directly so habits still see it.
+            let decision = Decision::new(
+                sift_analyze::PathFingerprint::new(
+                    entry.item.key,
+                    entry.item.size,
+                    entry.item.mtime_ms,
+                    entry.item.is_dir,
+                ),
+                entry.item.display_path,
+                entry.item.name.clone(),
+                entry.item.kind_token,
+                entry.item.size,
+                DecisionOutcome::Removed,
+                now,
+            );
+            store.record_decision(decision);
+        }
+        if result.ok {
+            session_bytes = session_bytes.saturating_add(entry.item.size);
+            session_titles.push(entry.item.name.clone());
+        }
+        results.push(crate::cleanup::DeleteResultItem {
             path: result.path.to_string_lossy().into_owned(),
             ok: result.ok,
             error: result.error,
-            dry_run: false,
-        })
-        .collect()
+        });
+    }
+    if !session_titles.is_empty() {
+        store.note_cleanup_session(&session_titles, session_bytes, automatic, now);
+    }
+
+    let _ = store.flush_if_dirty();
+    results
 }
 
 /// Current monitor state, for the status area.
@@ -285,9 +431,11 @@ pub fn monitor_status(
     let confidence = sift_analyze::ConfidencePolicy::default();
     let cleanable = services.store.cleanable();
     let auto_eligible = cleanable.auto_eligible(&confidence);
-    let root = manager
-        .last_root()
-        .or_else(|| manager.last_tree().map(|tree| tree.lock().unwrap().root_path().to_path_buf()));
+    let root = manager.last_root().or_else(|| {
+        manager
+            .last_tree()
+            .map(|tree| tree.lock().unwrap().root_path().to_path_buf())
+    });
     let (available, total) = root
         .as_deref()
         .and_then(sift_platform::volume::free_space)
@@ -313,18 +461,27 @@ pub fn start_monitor(
     services: State<'_, AppServices>,
     manager: State<'_, ScanManager>,
 ) -> Result<(), String> {
+    start_monitor_with(&app, &services, &manager)
+}
+
+/// Start the monitor from code outside a command handler (the tray menu).
+pub fn start_monitor_with(
+    app: &AppHandle,
+    services: &AppServices,
+    manager: &ScanManager,
+) -> Result<(), String> {
     if services.monitor_running() {
         return Ok(());
     }
     let root = manager
         .last_root()
-        .ok_or_else(|| "请先选择一个磁盘".to_string())?;
+        .ok_or_else(|| "err.noDiskSelected".to_string())?;
     let volume = sift_platform::volume::list_volumes()
         .into_iter()
         .find(|volume| root.starts_with(&volume.mount_point))
-        .ok_or_else(|| "找不到该路径所在的磁盘".to_string())?;
+        .ok_or_else(|| "err.diskNotFound".to_string())?;
 
-    let source: Arc<dyn CleanupSource> = services.store();
+    let source: Arc<dyn CleanupSource> = services.store.clone();
     let handle = Monitor::start(volume, source, dirs_home()).map_err(|err| err.to_string())?;
     let (events, control) = handle.into_parts();
 
@@ -356,9 +513,108 @@ pub fn stop_monitor(services: State<'_, AppServices>) {
     }
 }
 
+/// Switch the unattended cleanup mode: `off` | `notify` | `auto`.
+#[tauri::command]
+pub fn set_auto_clean_mode(services: State<'_, AppServices>, mode: String) -> Result<(), String> {
+    let parsed = match mode.as_str() {
+        "off" => AutoCleanMode::Off,
+        "notify" => AutoCleanMode::NotifyOnly,
+        "auto" => AutoCleanMode::AutoApproved,
+        other => return Err(format!("err.unknownAutoMode|{other}")),
+    };
+    services
+        .store
+        .update_settings(|settings| settings.monitor.auto_mode = parsed);
+    let _ = services.store.flush_if_dirty();
+    Ok(())
+}
+
+/// Mark one path as a user-chosen cleanup candidate.
+///
+/// The path still runs through the same deletion policy as every other
+/// candidate: a protected location, a bundle or an unreadable parent is
+/// refused here. User-marked items are `Review` — a manual choice never
+/// becomes a standing `Safe` approval.
+#[tauri::command]
+pub fn mark_path(services: State<'_, AppServices>, path: String) -> Result<FindingDto, String> {
+    use sift_core::deletable::classify_with_permissions;
+
+    let as_path = PathBuf::from(&path);
+    let verdict = classify_with_permissions(&as_path);
+    if !verdict.is_yes() {
+        let reason = verdict.refusal_key().unwrap_or("delete.refused.unknown");
+        return Err(reason.to_string());
+    }
+
+    let meta = std::fs::symlink_metadata(&as_path).map_err(|err| err.to_string())?;
+    let is_dir = meta.is_dir();
+
+    #[cfg(unix)]
+    let size = {
+        use std::os::unix::fs::MetadataExt;
+        meta.len().max(meta.blocks() * 512)
+    };
+    #[cfg(not(unix))]
+    let size = meta.len();
+
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0);
+
+    let key = sift_core::NodeKey::from_path(&as_path);
+    let name = as_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or(path.clone());
+    let home = dirs_home();
+    let display = redact_path(&as_path, home.as_deref(), None);
+
+    let item = ReportItem {
+        key,
+        name: name.clone(),
+        display_path: display.clone(),
+        is_dir,
+        size,
+        mtime_ms,
+        kind_token: "userMarked".into(),
+        safety: Safety::Review,
+    };
+
+    {
+        let mut last_report = services.last_report.lock().unwrap();
+        last_report.insert(as_path.clone(), item.clone());
+    }
+
+    Ok(FindingDto {
+        id: key.to_string(),
+        name,
+        path,
+        display_path: display,
+        size,
+        is_dir,
+        safety: "review".into(),
+        confidence: 1.0,
+        reason: "reason.userMarked".into(),
+        reason_kind: "key".into(),
+        reason_params: Vec::new(),
+        source: "user".into(),
+        kind: "userMarked".into(),
+        known_cleanable: false,
+        approved_for_auto: false,
+        cleanup_command: None,
+        cleanup_method: "trashItem".into(),
+        impact: "cleanup.impact.markedInTrash".into(),
+        impact_kind: "key".into(),
+        impact_params: Vec::new(),
+    })
+}
+
 /// Warnings collected while loading local state, drained once.
 #[tauri::command]
-pub fn take_store_warnings(services: State<'_, AppServices>) -> Vec<String> {
+pub fn take_store_warnings(services: State<'_, AppServices>) -> Vec<StoreWarning> {
     std::mem::take(&mut *services.warnings.lock().unwrap())
 }
 
@@ -366,6 +622,26 @@ pub fn take_store_warnings(services: State<'_, AppServices>) -> Vec<String> {
 #[tauri::command]
 pub fn store_location(services: State<'_, AppServices>) -> String {
     services.store.root_display()
+}
+
+/// Read the persisted interface language tag.
+#[tauri::command]
+pub fn get_language(services: State<'_, AppServices>) -> String {
+    services.store.settings().language
+}
+
+/// Persist the interface language tag (`zh` | `en`).
+#[tauri::command]
+pub fn set_language(services: State<'_, AppServices>, language: String) -> Result<(), String> {
+    let tag = match language.as_str() {
+        "zh" | "en" => language,
+        other => return Err(format!("err.unknownLanguage|{other}")),
+    };
+    services
+        .store
+        .update_settings(|settings| settings.language = tag);
+    let _ = services.store.flush_if_dirty();
+    Ok(())
 }
 
 /// Suggest routines from the persisted decisions.
@@ -376,6 +652,10 @@ pub fn routine_suggestions(services: State<'_, AppServices>) -> Vec<RoutineSugge
         .decisions()
         .suggest_routines(3, 3)
         .into_iter()
+        .filter(|suggestion| {
+            let key = sift_store::suggestion_key(&suggestion.name, &suggestion.kind_token);
+            !services.store.routines().is_ignored(&key)
+        })
         .map(|suggestion| {
             // Read the derived flags before moving any field out.
             let destructive = suggestion.is_destructive();
@@ -414,8 +694,7 @@ pub struct RoutineSuggestionDto {
 // ---- helpers ---------------------------------------------------------------
 
 /// Build the adjudicator: local rules, plus a remote provider when the user has
-/// configured one and consented to it. With no usable token, an offline mock
-/// sits in the remote slot so the same prompt/contract runs locally.
+/// configured one and consented to it.
 fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
     let ai = services.store.settings().ai;
 
@@ -442,14 +721,13 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
             }
         }
     }
-
-    // No usable real provider: route through the offline mock instead of
-    // dropping the remote stage entirely. Only model-adjudicable families
-    // reach it (via the router), and it never promotes structural families.
-    let mock = sift_analyze::MockAdjudicator::new().with_language(ai.language.clone());
+    let _ = &ai;
+    // No usable real provider (no token configured): run the same pipeline
+    // against the offline simulated adjudicator, so model-adjudicable families
+    // still receive an AI-style judgment and impact without network access.
     Box::new(sift_analyze::RoutingAdjudicator::with_remote(
         RuleAdjudicator::new(),
-        mock,
+        sift_analyze::SimulatedAdjudicator::new(),
         sift_analyze::Guardrails::default(),
     ))
 }
@@ -459,7 +737,10 @@ fn remote_configured_without_consent(services: &AppServices) -> bool {
     (ai.enabled || !ai.endpoint.trim().is_empty()) && !ai.is_usable()
 }
 
-fn finding_dto(item: &sift_analyze::AnalyzedItem, cleanable: &sift_store::CleanableList) -> FindingDto {
+fn finding_dto(
+    item: &sift_analyze::AnalyzedItem,
+    cleanable: &sift_store::CleanableList,
+) -> FindingDto {
     let key = item.candidate.key;
     let remembered = cleanable.get(key);
     FindingDto {
@@ -477,8 +758,185 @@ fn finding_dto(item: &sift_analyze::AnalyzedItem, cleanable: &sift_store::Cleana
         source: item.verdict.source.label(),
         kind: item.candidate.kind.token().to_string(),
         known_cleanable: item.verdict.safety == Safety::Safe,
-        approved_for_auto: remembered.map(|entry| entry.approved_for_auto).unwrap_or(false),
+        approved_for_auto: remembered
+            .map(|entry| entry.approved_for_auto)
+            .unwrap_or(false),
+        cleanup_command: {
+            let plan = plan_for(&item.candidate.kind, &item.candidate.display_path);
+            plan.command.as_ref().map(|step| display_command(step))
+        },
+        cleanup_method: {
+            plan_for(&item.candidate.kind, &item.candidate.display_path)
+                .method
+                .token()
+                .to_string()
+        },
+        impact: {
+            let impact = item.verdict.impact.clone().unwrap_or_else(|| {
+                Reason::key(plan_for(&item.candidate.kind, &item.candidate.display_path).impact_key)
+            });
+            describe_reason(&impact)
+        },
+        impact_kind: {
+            let impact = item.verdict.impact.clone().unwrap_or_else(|| {
+                Reason::key(plan_for(&item.candidate.kind, &item.candidate.display_path).impact_key)
+            });
+            reason_kind(&impact).to_string()
+        },
+        impact_params: {
+            let impact = item.verdict.impact.clone().unwrap_or_else(|| {
+                Reason::key(plan_for(&item.candidate.kind, &item.candidate.display_path).impact_key)
+            });
+            reason_params(&impact)
+        },
     }
+}
+
+// ---- history & saved routines ---------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEntryDto {
+    pub id: String,
+    pub at_ms: i64,
+    pub bytes: u64,
+    pub items: usize,
+    pub automatic: bool,
+    pub titles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineDto {
+    pub id: String,
+    pub title: String,
+    pub kind: String,
+    pub cadence: String,
+    pub average_bytes: u64,
+    /// `auto` | `approve`.
+    pub mode: String,
+}
+
+/// Read the user-facing cleanup timeline, newest first.
+#[tauri::command]
+pub fn list_history(services: State<'_, AppServices>) -> Vec<HistoryEntryDto> {
+    services
+        .store
+        .history()
+        .entries()
+        .iter()
+        .map(|entry| HistoryEntryDto {
+            id: entry.id.clone(),
+            at_ms: entry.at_ms,
+            bytes: entry.bytes,
+            items: entry.items,
+            automatic: entry.automatic,
+            titles: entry.titles.clone(),
+        })
+        .collect()
+}
+
+/// Read every saved routine.
+#[tauri::command]
+pub fn list_routines(services: State<'_, AppServices>) -> Vec<RoutineDto> {
+    services
+        .store
+        .routines()
+        .entries()
+        .iter()
+        .map(|entry| RoutineDto {
+            id: entry.id.clone(),
+            title: entry.title.clone(),
+            kind: entry.kind.clone(),
+            cadence: entry.cadence.clone(),
+            average_bytes: entry.average_bytes,
+            mode: routine_mode_token(entry.mode).to_string(),
+        })
+        .collect()
+}
+
+/// Persist one mined suggestion as a standing routine (approve mode default).
+#[tauri::command]
+pub fn accept_routine_suggestion(
+    services: State<'_, AppServices>,
+    name: String,
+    kind: String,
+) -> Result<(), String> {
+    let suggestion = services
+        .store
+        .decisions()
+        .suggest_routines(3, 3)
+        .into_iter()
+        .find(|suggestion| suggestion.name == name && suggestion.kind_token == kind)
+        .ok_or_else(|| "err.routineSuggestionGone".to_string())?;
+
+    let id = sift_store::suggestion_key(&suggestion.name, &suggestion.kind_token);
+    services.store.upsert_routine(sift_store::RoutineEntry {
+        id,
+        title: suggestion.name,
+        kind: suggestion.kind_token,
+        cadence: suggestion.cadence.label_key().to_string(),
+        average_bytes: suggestion.average_bytes,
+        mode: sift_store::RoutineMode::Approve,
+    });
+    let _ = services.store.flush_if_dirty();
+    Ok(())
+}
+
+/// Dismiss one mined suggestion; it is not suggested again.
+#[tauri::command]
+pub fn dismiss_routine_suggestion(
+    services: State<'_, AppServices>,
+    name: String,
+    kind: String,
+) -> Result<(), String> {
+    let key = sift_store::suggestion_key(&name, &kind);
+    services.store.ignore_routine_suggestion(key);
+    let _ = services.store.flush_if_dirty();
+    Ok(())
+}
+
+/// Delete one saved routine.
+#[tauri::command]
+pub fn delete_routine(services: State<'_, AppServices>, id: String) -> Result<bool, String> {
+    let removed = services.store.delete_routine(&id);
+    let _ = services.store.flush_if_dirty();
+    Ok(removed)
+}
+/// Flip one saved routine between auto-run and approve-before-run.
+#[tauri::command]
+pub fn toggle_routine_mode(services: State<'_, AppServices>, id: String) -> Result<bool, String> {
+    let changed = services.store.toggle_routine_mode(&id);
+    let _ = services.store.flush_if_dirty();
+    Ok(changed)
+}
+
+/// Run one saved routine now: trash every remembered `safe` item of its kind.
+#[tauri::command]
+pub fn run_routine(
+    services: State<'_, AppServices>,
+    id: String,
+) -> Result<Vec<crate::cleanup::DeleteResultItem>, String> {
+    let routine = services
+        .store
+        .routines()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "err.routineNotFound".to_string())?;
+
+    let paths: Vec<String> = services
+        .store
+        .cleanable()
+        .entries()
+        .iter()
+        .filter(|entry| entry.kind_token == routine.kind && entry.safety == Safety::Safe)
+        .map(|entry| entry.path.to_string_lossy().into_owned())
+        .collect();
+
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(perform_cleanup(&services, &paths, true))
 }
 
 fn safety_token(safety: Safety) -> &'static str {
@@ -494,6 +952,13 @@ fn auto_mode_token(mode: AutoCleanMode) -> &'static str {
         AutoCleanMode::Off => "off",
         AutoCleanMode::NotifyOnly => "notify",
         AutoCleanMode::AutoApproved => "auto",
+    }
+}
+
+fn routine_mode_token(mode: sift_store::RoutineMode) -> &'static str {
+    match mode {
+        sift_store::RoutineMode::Auto => "auto",
+        sift_store::RoutineMode::Approve => "approve",
     }
 }
 
@@ -568,12 +1033,14 @@ fn monitor_event_json(event: &MonitorEvent) -> serde_json::Value {
             skipped,
             failed,
             bytes,
+            paths,
         } => serde_json::json!({
             "kind": "cleanupFinished",
             "removed": removed,
             "skipped": skipped,
             "failed": failed,
             "bytes": bytes,
+            "paths": paths,
         }),
         MonitorEvent::Warning(message) => serde_json::json!({
             "kind": "warning",
@@ -657,6 +1124,7 @@ mod tests {
             skipped: 1,
             failed: 0,
             bytes: 4096,
+            paths: vec![PathBuf::from("/tmp/a")],
         };
         let json = monitor_event_json(&event);
         assert_eq!(json["kind"], "cleanupFinished");

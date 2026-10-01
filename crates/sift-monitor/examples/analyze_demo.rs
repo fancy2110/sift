@@ -14,9 +14,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use sift_analyze::{
-    AnalysisPolicy, Analyzer, CachedAdjudicator, Reason, RuleAdjudicator, Safety,
-};
+use sift_analyze::{AnalysisPolicy, Analyzer, CachedAdjudicator, Reason, RuleAdjudicator, Safety};
 use sift_core::{format_bytes, ScanEvent, ScanId, ScanPolicy, ScanRequest};
 use sift_scan::ScanEngine;
 use sift_store::{MonitorSettings, Store, StorePaths};
@@ -68,7 +66,7 @@ fn main() {
     );
     let (store, warnings) = Store::open(store_paths.clone());
     for warning in warnings {
-        println!("提示     : {warning}");
+        println!("提示     : {warning:?}");
     }
     let store = Arc::new(store);
 
@@ -106,7 +104,10 @@ fn main() {
             .join("  ")
     );
 
-    println!("\n{:>10}  {:<6}  {:<18}  对象 / 理由", "可回收", "等级", "来源");
+    println!(
+        "\n{:>10}  {:<6}  {:<18}  对象 / 理由",
+        "可回收", "等级", "来源"
+    );
     println!("{}", "-".repeat(100));
     for item in report.sorted_by_size().into_iter().take(30) {
         let level = match item.verdict.safety {
@@ -121,7 +122,13 @@ fn main() {
             item.verdict.source.label(),
             item.candidate.display_path,
         );
-        println!("{:>10}  {:<6}  {:<18}  └ {}", "", "", "", render_reason(&item.verdict.reason));
+        println!(
+            "{:>10}  {:<6}  {:<18}  └ {}",
+            "",
+            "",
+            "",
+            render_reason(&item.verdict.reason)
+        );
     }
 
     // ---- what was remembered ----------------------------------------------

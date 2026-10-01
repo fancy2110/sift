@@ -19,11 +19,8 @@
 
 use std::time::Duration;
 
-use crate::adjudicate::{
-    apply_remote_verdicts, parse_raw_verdicts, AdjudicateError, Guardrails,
-};
+use crate::adjudicate::{apply_remote_verdicts, parse_raw_verdicts, AdjudicateError, Guardrails};
 use crate::candidate::Candidate;
-use crate::prompt::build_prompt_at;
 use crate::reason::Verdict;
 use crate::route::RemoteAdjudicator;
 
@@ -95,6 +92,80 @@ impl LlmConfig {
     }
 }
 
+/// One candidate as the model sees it.
+///
+/// A dedicated struct rather than serializing [`Candidate`] directly, so that
+/// adding a field to the local model can never accidentally add it to the
+/// payload.
+#[derive(serde::Serialize)]
+struct PromptCandidate<'a> {
+    id: String,
+    path: &'a str,
+    entry_type: &'static str,
+    size_bytes: u64,
+    age_days: u64,
+    family: &'static str,
+    signals: Vec<&'a str>,
+}
+
+/// Build the system and user messages for one batch.
+///
+/// Pure and public so the payload can be asserted in tests: that is the only
+/// practical way to prove no absolute path leaks.
+pub fn build_prompt(batch: &[Candidate], language: &str) -> (String, String) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0);
+    build_prompt_at(batch, language, now_ms)
+}
+
+/// [`build_prompt`] with an explicit clock, for reproducible tests.
+pub fn build_prompt_at(batch: &[Candidate], language: &str, now_ms: i64) -> (String, String) {
+    let system = format!(
+        "You are a conservative disk-cleanup reviewer inside a desktop app. \
+For each item you receive, decide whether it can be deleted.\n\
+Reply with ONLY a JSON array. Each element: {{\"id\": string, \"safety\": \"safe\"|\"review\"|\"keep\", \"confidence\": number 0..1, \"reason\": string, \"impact\": string}}.\n\
+Rules:\n\
+- \"safe\" means deleting it loses nothing the user cannot restore or regenerate.\n\
+- \"review\" means a human must decide. \"keep\" means it should not be deleted.\n\
+- If you are unsure, answer \"review\". Never guess \"safe\".\n\
+- \"reason\" is ONE short sentence in {language}, naming the object and why.\n\
+- \"impact\" is ONE short sentence in {language} describing what breaks or is \
+regenerated after deletion (e.g. which app must rebuild, which data is unrecoverable).\n\
+- Do not propose shell commands: the app attaches the correct cleanup command.\n\
+- Judge only what you are given. You cannot see file contents; do not imply that you did.\n\
+- Return one element per item, using the exact ids given.",
+        language = language
+    );
+
+    let items: Vec<PromptCandidate<'_>> = batch
+        .iter()
+        .map(|candidate| PromptCandidate {
+            id: candidate.key.to_string(),
+            path: candidate.display_path.as_str(),
+            entry_type: if candidate.is_dir {
+                "directory"
+            } else {
+                "file"
+            },
+            size_bytes: candidate.size.dominant(),
+            age_days: crate::rules::age_days(candidate.mtime_ms, now_ms),
+            family: candidate.kind.token(),
+            signals: candidate
+                .evidence
+                .iter()
+                .map(|evidence| evidence.rule.as_str())
+                .collect(),
+        })
+        .collect();
+
+    let user = format!(
+        "Items to review:\n{}",
+        serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".to_string())
+    );
+    (system, user)
+}
 
 /// A remote adjudicator backed by a chat-completions endpoint.
 pub struct OpenAiCompatibleAdjudicator {
@@ -140,6 +211,36 @@ impl OpenAiCompatibleAdjudicator {
         guardrails: &Guardrails,
         now_ms: i64,
     ) -> Result<Vec<Verdict>, AdjudicateError> {
+        // Rate limits are not a failed analysis: wait and retry. Default
+        // back-off is half an hour; a sane `Retry-After` header wins.
+        const MAX_ATTEMPTS: usize = 9; // ~4 h before giving up.
+        let mut attempt = 1usize;
+        loop {
+            match self.request_batch_once(batch, guardrails, now_ms) {
+                Ok(verdicts) => return Ok(verdicts),
+                Err(Retry::RateLimited(wait_ms)) if attempt < MAX_ATTEMPTS => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+                }
+                Err(Retry::RateLimited(_)) => {
+                    return Err(AdjudicateError::Transport(
+                        "rate limit persisted after retries".to_string(),
+                    ))
+                }
+                Err(Retry::Fatal(message)) => {
+                    return Err(AdjudicateError::Transport(message))
+                }
+            }
+        }
+    }
+
+    /// One attempt at a batch.
+    fn request_batch_once(
+        &self,
+        batch: &[Candidate],
+        guardrails: &Guardrails,
+        now_ms: i64,
+    ) -> Result<Vec<Verdict>, Retry> {
         let (system, user) = build_prompt_at(batch, &self.config.language, now_ms);
         let body = serde_json::json!({
             "model": self.config.model,
@@ -157,26 +258,85 @@ impl OpenAiCompatibleAdjudicator {
             .bearer_auth(&self.config.api_key)
             .json(&body)
             .send()
-            .map_err(|err| AdjudicateError::Transport(err.to_string()))?;
+            .map_err(|err| {
+                if is_rate_limit_error(&err) {
+                    Retry::RateLimited(DEFAULT_RETRY_WAIT_MS)
+                } else {
+                    Retry::Fatal(err.to_string())
+                }
+            })?;
 
         let status = response.status();
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_retry_after);
         let text = response
             .text()
-            .map_err(|err| AdjudicateError::Transport(err.to_string()))?;
+            .map_err(|err| Retry::Fatal(err.to_string()))?;
         if !status.is_success() {
-            // The body may contain a provider error; keep it short and never
-            // echo the key.
-            return Err(AdjudicateError::Transport(format!(
+            let code = status.as_u16();
+            let lower = text.to_ascii_lowercase();
+            let mentions_quota = [
+                "rate limit",
+                "rate_limit",
+                "quota",
+                "too many requests",
+            ]
+            .iter()
+            .any(|needle| lower.contains(needle));
+            if code == 429 || code == 503 || mentions_quota {
+                return Err(Retry::RateLimited(
+                    retry_after.unwrap_or(DEFAULT_RETRY_WAIT_MS),
+                ));
+            }
+            return Err(Retry::Fatal(format!(
                 "HTTP {}: {}",
-                status.as_u16(),
+                code,
                 text.chars().take(200).collect::<String>()
             )));
         }
 
-        let content = extract_content(&text)?;
-        let raw = parse_raw_verdicts(&content)?;
-        Ok(apply_remote_verdicts(batch, &raw, guardrails, now_ms))
+        let content =
+            extract_content(&text).map_err(|err| Retry::Fatal(err.to_string()))?;
+        let raw = parse_raw_verdicts(&content).map_err(|err| Retry::Fatal(err.to_string()))?;
+        Ok(apply_remote_verdicts(
+            batch,
+            &raw,
+            guardrails,
+            now_ms,
+            &self.config.provider,
+        ))
     }
+}
+
+/// Outcome of one request attempt.
+enum Retry {
+    /// Provider asked to slow down; back-off in milliseconds.
+    RateLimited(u64),
+    /// A non-rate-limit failure.
+    Fatal(String),
+}
+
+/// Half an hour, the mandated default back-off for token/rate-limit problems.
+const DEFAULT_RETRY_WAIT_MS: u64 = 30 * 60 * 1000;
+
+/// Parse a `Retry-After` value: HTTP-date or delta-seconds. Only a bounded
+/// delta-seconds value is accepted; an HTTP date is ignored here rather than
+/// trusted with clock math.
+fn parse_retry_after(value: &str) -> Option<u64> {
+    let secs: u64 = value.trim().parse().ok()?;
+    // Cap a single wait at 1 h so a header typo cannot park the app for days.
+    Some(secs.clamp(1, 3600) * 1000)
+}
+
+/// Whether a connection-level error reads as a rate limit.
+fn is_rate_limit_error(err: &reqwest::Error) -> bool {
+    let text = err.to_string().to_ascii_lowercase();
+    ["429", "rate limit", "rate_limit", "too many requests", "quota"]
+        .iter()
+        .any(|needle| text.contains(needle))
 }
 
 impl RemoteAdjudicator for OpenAiCompatibleAdjudicator {
@@ -283,10 +443,7 @@ mod tests {
 
         // The privacy property: no absolute path, no user name, no home dir.
         for leak in ["/Users/", "realuser", "秘密", "/Users/realuser"] {
-            assert!(
-                !user.contains(leak),
-                "payload leaked {leak:?}: {user}"
-            );
+            assert!(!user.contains(leak), "payload leaked {leak:?}: {user}");
             assert!(!system.contains(leak));
         }
     }
@@ -294,11 +451,26 @@ mod tests {
     #[test]
     fn prompt_payload_is_valid_json_with_the_expected_fields() {
         let batch = vec![
-            candidate(CandidateKind::Archive { extension: "zip".into() }, "file.archive", "~/a.zip", 10),
-            candidate(CandidateKind::StaleLargeFile, "file.stale_large", "~/b.iso", 20),
+            candidate(
+                CandidateKind::Archive {
+                    extension: "zip".into(),
+                },
+                "file.archive",
+                "~/a.zip",
+                10,
+            ),
+            candidate(
+                CandidateKind::StaleLargeFile,
+                "file.stale_large",
+                "~/b.iso",
+                20,
+            ),
         ];
         let (_, user) = build_prompt_at(&batch, "en", 86_400_000 * 30);
-        let json = user.split_once('\n').map(|(_, rest)| rest).unwrap_or(user.as_str());
+        let json = user
+            .split_once('\n')
+            .map(|(_, rest)| rest)
+            .unwrap_or(user.as_str());
         let parsed: Vec<serde_json::Value> = serde_json::from_str(json.trim()).expect("valid JSON");
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0]["entry_type"], "file");
@@ -330,9 +502,9 @@ mod tests {
             safety: "safe".into(),
             confidence: 1.0,
             reason: "empty it".into(),
-            ..Default::default()
+            impact: String::new(),
         }];
-        let verdicts = apply_remote_verdicts(&[trash], &raw, &Guardrails::default(), 0);
+        let verdicts = apply_remote_verdicts(&[trash], &raw, &Guardrails::default(), 0, "remote");
         assert_eq!(verdicts[0].safety, Safety::Review);
         assert!(verdicts[0].source.is_model());
         assert_eq!(verdicts[0].source, VerdictSource::remote("remote"));

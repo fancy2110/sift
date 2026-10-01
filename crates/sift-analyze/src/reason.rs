@@ -15,8 +15,6 @@ use serde::{Deserialize, Serialize};
 
 use sift_core::id::NodeKey;
 
-use crate::cleanup_plan::{CleanupCommand, CleanupImpact};
-
 /// How consequential removing this entry is.
 ///
 /// Ordered from most to least dangerous so comparisons are meaningful:
@@ -119,7 +117,13 @@ impl Reason {
     pub fn sanitized_text(text: &str) -> Option<Reason> {
         let cleaned: String = text
             .chars()
-            .map(|ch| if ch == '\n' || ch == '\r' || ch == '\t' { ' ' } else { ch })
+            .map(|ch| {
+                if ch == '\n' || ch == '\r' || ch == '\t' {
+                    ' '
+                } else {
+                    ch
+                }
+            })
             .collect();
         let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
         let trimmed = collapsed.trim();
@@ -151,8 +155,6 @@ pub enum VerdictSource {
     UserDecision,
     /// A remote adjudicator (language model).
     Remote { provider: String },
-    /// Deterministic local stand-in used without an API token.
-    Mock { label: String },
 }
 
 impl VerdictSource {
@@ -172,20 +174,9 @@ impl VerdictSource {
         matches!(self, VerdictSource::Remote { .. })
     }
 
-    /// Any non-rule source, including the offline mock.
-    pub fn is_non_rule(&self) -> bool {
-        matches!(
-            self,
-            VerdictSource::Remote { .. } | VerdictSource::Mock { .. }
-        )
-    }
-
     /// Whether this conclusion came from the user (explicitly or by habit).
     pub fn is_user_derived(&self) -> bool {
-        matches!(
-            self,
-            VerdictSource::UserDecision | VerdictSource::Learned
-        )
+        matches!(self, VerdictSource::UserDecision | VerdictSource::Learned)
     }
 
     pub fn label(&self) -> String {
@@ -195,7 +186,6 @@ impl VerdictSource {
             VerdictSource::Learned => "learned".to_string(),
             VerdictSource::UserDecision => "user".to_string(),
             VerdictSource::Remote { provider } => format!("ai:{provider}"),
-            VerdictSource::Mock { label } => format!("mock:{label}"),
         }
     }
 }
@@ -213,22 +203,21 @@ pub struct Verdict {
     pub source: VerdictSource,
     /// Unix milliseconds when the judgment was made.
     pub judged_at_ms: i64,
-    /// What removing this item affects; populated by a remote adjudicator.
+    /// What breaks after deletion. A model returns free text in the user's
+    /// language; local verdicts leave this `None` and the caller attaches the
+    /// deterministic i18n key from the cleanup plan. Absent for old records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub impact: Option<CleanupImpact>,
-    /// Optional copy-paste cleanup command; never executed by the app.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<CleanupCommand>,
+    pub impact: Option<Reason>,
 }
 
 impl Verdict {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         safety: Safety,
         confidence: f32,
         reason: Reason,
         source: VerdictSource,
         judged_at_ms: i64,
+        impact: Option<Reason>,
     ) -> Self {
         Self {
             safety,
@@ -236,8 +225,7 @@ impl Verdict {
             reason,
             source,
             judged_at_ms,
-            impact: None,
-            commands: Vec::new(),
+            impact,
         }
     }
 
@@ -253,14 +241,12 @@ impl Verdict {
             },
             judged_at_ms,
             impact: None,
-            commands: Vec::new(),
         }
     }
 
     /// Whether an unattended cleanup may act on this verdict under `policy`.
     pub fn is_automatically_removable(&self, policy: &ConfidencePolicy) -> bool {
-        self.safety.is_automatic()
-            && self.confidence >= policy.minimum_for_source(&self.source)
+        self.safety.is_automatic() && self.confidence >= policy.minimum_for_source(&self.source)
     }
 }
 
@@ -314,7 +300,6 @@ impl ConfidencePolicy {
             VerdictSource::Learned => self.learned,
             VerdictSource::UserDecision => self.user,
             VerdictSource::Remote { .. } => self.remote,
-            VerdictSource::Mock { .. } => self.rule,
         }
     }
 }
@@ -399,6 +384,7 @@ mod tests {
             Reason::key("k"),
             VerdictSource::rule("r"),
             0,
+            None,
         );
         assert_eq!(verdict.confidence, 0.0);
     }
@@ -412,6 +398,7 @@ mod tests {
             Reason::key("k"),
             VerdictSource::rule("cache"),
             0,
+            None,
         );
         let model = Verdict::new(
             Safety::Safe,
@@ -419,6 +406,7 @@ mod tests {
             Reason::text("looks like a cache"),
             VerdictSource::remote("test"),
             0,
+            None,
         );
         assert!(rule.is_automatically_removable(&policy));
         assert!(
@@ -436,6 +424,7 @@ mod tests {
             Reason::key("k"),
             VerdictSource::UserDecision,
             0,
+            None,
         );
         assert!(verdict.is_automatically_removable(&policy));
     }
@@ -470,8 +459,14 @@ mod tests {
     fn fingerprint_requires_every_field_to_match() {
         let base = fingerprint(100, 1000);
         assert!(base.still_describes(&fingerprint(100, 1000)));
-        assert!(!base.still_describes(&fingerprint(101, 1000)), "size changed");
-        assert!(!base.still_describes(&fingerprint(100, 1001)), "mtime changed");
+        assert!(
+            !base.still_describes(&fingerprint(101, 1000)),
+            "size changed"
+        );
+        assert!(
+            !base.still_describes(&fingerprint(100, 1001)),
+            "mtime changed"
+        );
         let as_file = PathFingerprint::new(NodeKey::from_bytes(b"/x"), 100, 1000, false);
         assert!(!base.still_describes(&as_file), "kind changed");
     }
@@ -484,6 +479,7 @@ mod tests {
             Reason::key("k"),
             VerdictSource::remote("ark"),
             123,
+            None,
         );
         let json = serde_json::to_string(&verdict).unwrap();
         let back: Verdict = serde_json::from_str(&json).unwrap();

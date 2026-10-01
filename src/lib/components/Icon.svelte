@@ -47,6 +47,8 @@
     alert: 'M12 4L2.5 20h19zM12 10v5M12 18v.5',
     info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 7.8v.2',
     arrowRight: 'M5 12h14M13 6l6 6-6 6',
+    pause: 'M7 5h3.5v14H7zM13.5 5H17v14h-3.5z',
+    play: 'M8 5.5v13l11-6.5z',
     layers: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5',
     refresh: 'M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4',
     hardDrive:

@@ -42,9 +42,31 @@ pub enum LoadOutcome<T> {
     /// Unusable (wrong version, truncated, not JSON). The old file was moved to
     /// `backup` when possible, and defaults should be used.
     Reset {
-        reason: String,
+        reason: ResetReason,
         backup: Option<PathBuf>,
     },
+}
+
+/// Why a document could not be read and had to be reset.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+#[non_exhaustive]
+pub enum ResetReason {
+    Io { message: String },
+    JsonParse { message: String },
+    SchemaMismatch { found: u32, expected: u32 },
+}
+
+/// A load problem in a structure the UI can render without parsing strings.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreWarning {
+    /// Top-level translation key (`store.reset` | `store.resetWithBackup`).
+    pub key: &'static str,
+    /// Translation key naming the affected document (`store.what.*`).
+    pub what: &'static str,
+    pub reason: ResetReason,
+    pub backup: Option<String>,
 }
 
 impl<T> LoadOutcome<T> {
@@ -72,14 +94,17 @@ impl<T> LoadOutcome<T> {
     }
 
     /// A warning suitable for the UI, or `None` when the load was clean.
-    pub fn warning(&self, what: &str) -> Option<String> {
+    pub fn warning(&self, what: &'static str) -> Option<StoreWarning> {
         match self {
-            LoadOutcome::Reset { reason, backup } => Some(match backup {
-                Some(path) => format!(
-                    "{what} 无法读取（{reason}），已重置；原文件备份于 {}",
-                    path.display()
-                ),
-                None => format!("{what} 无法读取（{reason}），已重置"),
+            LoadOutcome::Reset { reason, backup } => Some(StoreWarning {
+                key: if backup.is_some() {
+                    "store.resetWithBackup"
+                } else {
+                    "store.reset"
+                },
+                what,
+                reason: reason.clone(),
+                backup: backup.as_ref().map(|path| path.display().to_string()),
             }),
             _ => None,
         }
@@ -144,7 +169,9 @@ pub fn read_document<T: DeserializeOwned>(path: &Path) -> LoadOutcome<T> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return LoadOutcome::Missing,
         Err(err) => {
             return LoadOutcome::Reset {
-                reason: err.to_string(),
+                reason: ResetReason::Io {
+                    message: err.to_string(),
+                },
                 backup: None,
             }
         }
@@ -154,7 +181,9 @@ pub fn read_document<T: DeserializeOwned>(path: &Path) -> LoadOutcome<T> {
         Ok(envelope) => envelope,
         Err(err) => {
             return LoadOutcome::Reset {
-                reason: format!("JSON 解析失败：{err}"),
+                reason: ResetReason::JsonParse {
+                    message: err.to_string(),
+                },
                 backup: archive_corrupt(path),
             }
         }
@@ -162,10 +191,10 @@ pub fn read_document<T: DeserializeOwned>(path: &Path) -> LoadOutcome<T> {
 
     if envelope.version != SCHEMA_VERSION {
         return LoadOutcome::Reset {
-            reason: format!(
-                "schema 版本 {} 与当前 {} 不一致",
-                envelope.version, SCHEMA_VERSION
-            ),
+            reason: ResetReason::SchemaMismatch {
+                found: envelope.version,
+                expected: SCHEMA_VERSION,
+            },
             backup: archive_corrupt(path),
         };
     }
@@ -190,7 +219,8 @@ mod tests {
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("sift-store-atomic-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("sift-store-atomic-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -232,7 +262,7 @@ mod tests {
             }
             other => panic!("expected a reset, got {other:?}"),
         }
-        assert!(loaded.warning("分析结论").is_some());
+        assert!(loaded.warning("store.what.settings").is_some());
         let _ = fs::remove_dir_all(&dir);
     }
 

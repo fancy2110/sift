@@ -18,13 +18,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use sift_analyze::{
-    AnalysisPolicy, AnalysisReport, Analyzer, RuleAdjudicator, Safety,
-};
+use sift_analyze::{AnalysisPolicy, AnalysisReport, Analyzer, RuleAdjudicator, Safety};
 use sift_core::{ScanEvent, ScanId, ScanOutcome, ScanPolicy, ScanRequest};
-use sift_monitor::{
-    clean_now, evaluate, DiskSample, MonitorConfig, Remover,
-};
+use sift_monitor::{clean_now, evaluate, DiskSample, MonitorConfig, Remover};
 use sift_platform::trash::TrashResult;
 use sift_scan::ScanEngine;
 use sift_store::{AutoCleanMode, MonitorSettings, Store, StorePaths};
@@ -82,9 +78,21 @@ fn fixture(tag: &str) -> PathBuf {
     std::fs::create_dir_all(base.join("project/build")).unwrap();
     std::fs::create_dir_all(base.join("Downloads")).unwrap();
     // Real bytes so the aggregate is real.
-    std::fs::write(base.join("project/node_modules/dep/lib.bin"), vec![7u8; 256 * KB as usize]).unwrap();
-    std::fs::write(base.join("project/build/output.bin"), vec![8u8; 128 * KB as usize]).unwrap();
-    std::fs::write(base.join("Downloads/Installer.dmg"), vec![9u8; 64 * KB as usize]).unwrap();
+    std::fs::write(
+        base.join("project/node_modules/dep/lib.bin"),
+        vec![7u8; 256 * KB as usize],
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("project/build/output.bin"),
+        vec![8u8; 128 * KB as usize],
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("Downloads/Installer.dmg"),
+        vec![9u8; 64 * KB as usize],
+    )
+    .unwrap();
     base
 }
 
@@ -99,7 +107,10 @@ fn scan(root: &Path) -> (sift_scan::ScanHandle, ScanOutcome) {
         .expect("scan starts");
     let mut outcome = ScanOutcome::Failed;
     while let Ok(event) = handle.events.recv() {
-        if let ScanEvent::Finished { outcome: finished, .. } = event {
+        if let ScanEvent::Finished {
+            outcome: finished, ..
+        } = event
+        {
             outcome = finished;
             break;
         }
@@ -155,7 +166,11 @@ fn scan_analyze_persist_then_monitor_and_clean() {
         "a local verdict explains itself with a translation key"
     );
     let build = by_name("build");
-    assert_eq!(build.verdict.safety, Safety::Review, "project dirs need a human");
+    assert_eq!(
+        build.verdict.safety,
+        Safety::Review,
+        "project dirs need a human"
+    );
     // The file pass found the installer and treated it as a decision.
     let installer = by_name("Installer.dmg");
     assert_eq!(installer.verdict.safety, Safety::Review);
@@ -163,10 +178,15 @@ fn scan_analyze_persist_then_monitor_and_clean() {
     // ---- 2. conclusions persist, and only the safe ones are remembered -----
     let (store, paths) = store_at("full");
     let summary = store.record_analysis(&report, 1_000);
-    assert_eq!(summary.inserted, 1, "only node_modules is definitively cleanable");
+    assert_eq!(
+        summary.inserted, 1,
+        "only node_modules is definitively cleanable"
+    );
     assert_eq!(summary.not_cleanable, 2);
     assert_eq!(store.cleanable_len(), 1);
-    assert!(store.lookup_verdict(&modules.candidate.fingerprint(), 0).is_some());
+    assert!(store
+        .lookup_verdict(&modules.candidate.fingerprint(), 0)
+        .is_some());
 
     // Nothing is auto-eligible until the user approves it.
     let config = MonitorConfig::from_settings(&MonitorSettings {
@@ -186,7 +206,11 @@ fn scan_analyze_persist_then_monitor_and_clean() {
     drop(store);
     let (store, warnings) = Store::open(paths.clone());
     assert!(warnings.is_empty());
-    assert_eq!(store.cleanable_len(), 1, "the cleanable list survived a restart");
+    assert_eq!(
+        store.cleanable_len(),
+        1,
+        "the cleanable list survived a restart"
+    );
     let entry = store.cleanable().entries()[0].clone();
     assert_eq!(entry.name, "node_modules");
     assert!(entry.approved_for_auto, "approval survived too");
@@ -194,7 +218,10 @@ fn scan_analyze_persist_then_monitor_and_clean() {
     // ---- 4. the monitor decides, the remover acts ------------------------
     let entries = store.cleanable().entries().to_vec();
     let decision = evaluate(&config, &at_critical, &entries, Some(&base), None, None, 0);
-    assert!(decision.deletes(), "a critical disk with approved entries acts");
+    assert!(
+        decision.deletes(),
+        "a critical disk with approved entries acts"
+    );
     assert_eq!(decision.selected().len(), 1);
     assert_eq!(decision.selected()[0].name, "node_modules");
 
@@ -212,8 +239,14 @@ fn scan_analyze_persist_then_monitor_and_clean() {
     assert_eq!(outcome.failed, 0);
     assert!(outcome.bytes > 0);
     assert_eq!(remover.asked().len(), 1);
-    assert!(!base.join("project/node_modules").exists(), "gone from disk");
-    assert!(base.join("project/build").exists(), "review items are untouched");
+    assert!(
+        !base.join("project/node_modules").exists(),
+        "gone from disk"
+    );
+    assert!(
+        base.join("project/build").exists(),
+        "review items are untouched"
+    );
 
     // The store learned from it: the entry left the list, a decision remains.
     assert_eq!(store.cleanable_len(), 0);
@@ -229,7 +262,14 @@ fn scan_analyze_persist_then_monitor_and_clean() {
     // Approve, then move the home boundary away from the entry.
     store2.approve_all_structural();
     let entries2 = store2.cleanable().entries().to_vec();
-    let elsewhere = clean_now(entries2.as_slice(), Some(Path::new("/somewhere/else")), true, &store2, &RecordingRemover::default(), 0);
+    let elsewhere = clean_now(
+        entries2.as_slice(),
+        Some(Path::new("/somewhere/else")),
+        true,
+        &store2,
+        &RecordingRemover::default(),
+        0,
+    );
     assert_eq!(elsewhere.removed, 0);
     assert_eq!(elsewhere.skipped, 1, "outside home is skipped, not deleted");
     assert!(fresh.join("project/node_modules").exists());

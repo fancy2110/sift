@@ -13,14 +13,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use sift_analyze::{
-    AnalysisReport, AnalyzedItem, Decision, DecisionLog, DecisionOutcome, PathFingerprint,
-    Verdict, VerdictCache,
+    AnalysisReport, AnalyzedItem, Decision, DecisionLog, DecisionOutcome, PathFingerprint, Verdict,
+    VerdictCache,
 };
 use sift_core::NodeKey;
 
 use crate::atomic::{read_document, write_document};
 use crate::cleanable::{CleanableEntry, CleanableList, RecordSummary, DEFAULT_CLEANABLE_CAP};
+use crate::history::{CleanupHistory, HistoryEntry, DEFAULT_HISTORY_CAP};
 use crate::paths::StorePaths;
+use crate::routines::{RoutineEntry, RoutineList, DEFAULT_ROUTINE_CAP};
 use crate::settings::Settings;
 use crate::verdicts::{VerdictRecord, VerdictTable, DEFAULT_VERDICT_CAP};
 
@@ -33,6 +35,8 @@ struct Inner {
     cleanable: CleanableList,
     decisions: DecisionLog,
     settings: Settings,
+    history: CleanupHistory,
+    routines: RoutineList,
 }
 
 /// One place for every piece of durable local state.
@@ -61,7 +65,7 @@ impl Store {
     ///
     /// Returns warnings instead of failing: unusable documents are archived and
     /// replaced with defaults, and the caller decides how to surface that.
-    pub fn open_default() -> (Self, Vec<String>) {
+    pub fn open_default() -> (Self, Vec<crate::atomic::StoreWarning>) {
         match StorePaths::discover() {
             Some(paths) => Self::open(paths),
             None => (Self::in_memory(), Vec::new()),
@@ -69,7 +73,7 @@ impl Store {
     }
 
     /// Open the store at `paths`, loading whatever is usable.
-    pub fn open(paths: StorePaths) -> (Self, Vec<String>) {
+    pub fn open(paths: StorePaths) -> (Self, Vec<crate::atomic::StoreWarning>) {
         let mut warnings = Vec::new();
 
         let verdicts = match read_document::<Vec<VerdictRecord>>(&paths.verdicts()) {
@@ -77,7 +81,7 @@ impl Store {
                 VerdictTable::from_records(records, DEFAULT_VERDICT_CAP)
             }
             other => {
-                if let Some(warning) = other.warning("历史判定缓存") {
+                if let Some(warning) = other.warning("store.what.verdicts") {
                     warnings.push(warning);
                 }
                 VerdictTable::default()
@@ -89,7 +93,7 @@ impl Store {
                 CleanableList::from_entries(entries, DEFAULT_CLEANABLE_CAP)
             }
             other => {
-                if let Some(warning) = other.warning("可清理清单") {
+                if let Some(warning) = other.warning("store.what.cleanable") {
                     warnings.push(warning);
                 }
                 CleanableList::default()
@@ -99,7 +103,7 @@ impl Store {
         let decisions = match read_document::<DecisionLog>(&paths.decisions()) {
             crate::atomic::LoadOutcome::Loaded(log) => log,
             other => {
-                if let Some(warning) = other.warning("决策记录") {
+                if let Some(warning) = other.warning("store.what.decisions") {
                     warnings.push(warning);
                 }
                 DecisionLog::new()
@@ -109,10 +113,34 @@ impl Store {
         let settings = match read_document::<Settings>(&paths.settings()) {
             crate::atomic::LoadOutcome::Loaded(settings) => settings.normalized(),
             other => {
-                if let Some(warning) = other.warning("设置") {
+                if let Some(warning) = other.warning("store.what.settings") {
                     warnings.push(warning);
                 }
                 Settings::default()
+            }
+        };
+
+        let history = match read_document::<Vec<HistoryEntry>>(&paths.history()) {
+            crate::atomic::LoadOutcome::Loaded(entries) => {
+                CleanupHistory::from_entries(entries, DEFAULT_HISTORY_CAP)
+            }
+            other => {
+                if let Some(warning) = other.warning("store.what.history") {
+                    warnings.push(warning);
+                }
+                CleanupHistory::with_cap(DEFAULT_HISTORY_CAP)
+            }
+        };
+
+        let routines = match read_document::<crate::routines::RoutineDoc>(&paths.routines()) {
+            crate::atomic::LoadOutcome::Loaded(doc) => {
+                RoutineList::from_doc(doc, DEFAULT_ROUTINE_CAP)
+            }
+            other => {
+                if let Some(warning) = other.warning("store.what.routines") {
+                    warnings.push(warning);
+                }
+                RoutineList::with_cap(DEFAULT_ROUTINE_CAP)
             }
         };
 
@@ -124,6 +152,8 @@ impl Store {
                     cleanable,
                     decisions,
                     settings,
+                    history,
+                    routines,
                 }),
                 dirty: AtomicBool::new(false),
                 decision_cap: DEFAULT_DECISION_CAP,
@@ -142,6 +172,8 @@ impl Store {
                 cleanable: CleanableList::default(),
                 decisions: DecisionLog::new(),
                 settings: Settings::default(),
+                history: CleanupHistory::with_cap(DEFAULT_HISTORY_CAP),
+                routines: RoutineList::with_cap(DEFAULT_ROUTINE_CAP),
             }),
             dirty: AtomicBool::new(false),
             decision_cap: DEFAULT_DECISION_CAP,
@@ -176,7 +208,11 @@ impl Store {
     // ---- verdict cache -----------------------------------------------------
 
     pub fn lookup_verdict(&self, fingerprint: &PathFingerprint, now_ms: i64) -> Option<Verdict> {
-        self.inner.lock().unwrap().verdicts.lookup(fingerprint, now_ms)
+        self.inner
+            .lock()
+            .unwrap()
+            .verdicts
+            .lookup(fingerprint, now_ms)
     }
 
     pub fn store_verdict(&self, fingerprint: &PathFingerprint, verdict: &Verdict, now_ms: i64) {
@@ -252,13 +288,7 @@ impl Store {
 
     /// Forget one remembered entry.
     pub fn forget_cleanable(&self, key: NodeKey) -> bool {
-        let removed = self
-            .inner
-            .lock()
-            .unwrap()
-            .cleanable
-            .remove(key)
-            .is_some();
+        let removed = self.inner.lock().unwrap().cleanable.remove(key).is_some();
         if removed {
             self.dirty.store(true, Ordering::Relaxed);
         }
@@ -340,6 +370,88 @@ impl Store {
         self.inner.lock().unwrap().decisions.clone()
     }
 
+    // ---- history ----------------------------------------------------------
+
+    pub fn history(&self) -> CleanupHistory {
+        self.inner.lock().unwrap().history.clone()
+    }
+
+    /// Append one finished cleanup session to the user-facing timeline.
+    pub fn record_history(&self, entry: HistoryEntry) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.history.record(entry);
+        }
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// Record a finished cleanup session from short labels and totals.
+    pub fn note_cleanup_session(
+        &self,
+        titles: &[String],
+        bytes: u64,
+        automatic: bool,
+        now_ms: i64,
+    ) {
+        let entry = HistoryEntry {
+            id: crate::history::new_id(now_ms),
+            at_ms: now_ms,
+            bytes,
+            items: titles.len(),
+            automatic,
+            titles: titles.to_vec(),
+        };
+        self.record_history(entry);
+    }
+
+    // ---- routines ---------------------------------------------------------
+
+    pub fn routines(&self) -> RoutineList {
+        self.inner.lock().unwrap().routines.clone()
+    }
+
+    /// Add or replace one saved routine.
+    pub fn upsert_routine(&self, entry: RoutineEntry) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.routines.upsert(entry);
+        }
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// Delete one saved routine; returns whether it existed.
+    pub fn delete_routine(&self, id: &str) -> bool {
+        let removed = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.routines.remove(id)
+        };
+        if removed {
+            self.dirty.store(true, Ordering::Relaxed);
+        }
+        removed
+    }
+
+    /// Persistently dismiss one mined suggestion.
+    pub fn ignore_routine_suggestion(&self, key: String) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.routines.ignore_suggestion(key);
+        }
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// Flip one routine between auto-run and approve-before-run.
+    pub fn toggle_routine_mode(&self, id: &str) -> bool {
+        let changed = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.routines.toggle_mode(id)
+        };
+        if changed {
+            self.dirty.store(true, Ordering::Relaxed);
+        }
+        changed
+    }
+
     // ---- persistence -------------------------------------------------------
 
     /// Write every document. Atomic per file, so a partial failure leaves the
@@ -358,11 +470,17 @@ impl Store {
                 inner.settings.clone(),
             )
         };
+        let (history, routines) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.history.entries().to_vec(), inner.routines.to_doc())
+        };
 
         write_document(&paths.verdicts(), &verdicts)?;
         write_document(&paths.cleanable(), &cleanable)?;
         write_document(&paths.decisions(), &decisions)?;
         write_document(&paths.settings(), &settings)?;
+        write_document(&paths.history(), &history)?;
+        write_document(&paths.routines(), &routines)?;
 
         self.dirty.store(false, Ordering::Relaxed);
         Ok(())
@@ -416,9 +534,7 @@ impl Drop for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sift_analyze::{
-        Candidate, CandidateKind, Evidence, Reason, Safety, VerdictSource,
-    };
+    use sift_analyze::{Candidate, CandidateKind, Evidence, Reason, Safety, VerdictSource};
     use sift_core::ByteSize;
     use std::path::{Path, PathBuf};
 
@@ -437,11 +553,11 @@ mod tests {
             true,
             ByteSize::new(size, size),
             0,
-            CandidateKind::RebuildableCache {
-                tool: "npm".into(),
-            },
+            CandidateKind::RebuildableCache { tool: "npm".into() },
         );
-        candidate.evidence.push(Evidence::new("dir.node_modules", "detail.x"));
+        candidate
+            .evidence
+            .push(Evidence::new("dir.node_modules", "detail.x"));
         AnalyzedItem::new(
             candidate,
             Verdict::new(
@@ -450,6 +566,7 @@ mod tests {
                 Reason::key("reason.rebuildableCache"),
                 VerdictSource::rule("dir.node_modules"),
                 1,
+                None,
             ),
         )
     }
@@ -463,7 +580,10 @@ mod tests {
         let store = Store::in_memory();
         assert!(store.root().is_none());
         assert_eq!(store.root_display(), "<memory>");
-        assert!(store.save().is_ok(), "saving in memory is a no-op, not a failure");
+        assert!(
+            store.save().is_ok(),
+            "saving in memory is a no-op, not a failure"
+        );
     }
 
     #[test]
@@ -573,7 +693,7 @@ mod tests {
 
         let (reopened, warnings) = Store::open(paths.clone());
         assert_eq!(warnings.len(), 1, "the failure must be reported");
-        assert!(warnings[0].contains("可清理清单"));
+        assert_eq!(warnings[0].what, "store.what.cleanable");
         assert!(reopened.cleanable().is_empty());
         // The verdict cache is untouched, so the next analysis still benefits.
         assert_eq!(reopened.verdict_count(), 1);
@@ -636,7 +756,10 @@ mod tests {
         store.record_analysis(&report(vec![item("node_modules", Safety::Safe, 1)]), 1);
         let text = format!("{store:?}");
         assert!(text.contains("cleanable: 1"));
-        assert!(!text.contains("/Users/me"), "debug output must not leak paths");
+        assert!(
+            !text.contains("/Users/me"),
+            "debug output must not leak paths"
+        );
         let _ = Path::new("/");
     }
 }

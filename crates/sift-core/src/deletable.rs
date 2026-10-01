@@ -7,34 +7,6 @@
 
 use std::path::{Component, Path};
 
-/// Paths that are structurally off-limits regardless of permissions.
-///
-/// Deleting any of these breaks the machine, and no amount of user intent makes
-/// it a good idea to enable the button.
-const REFUSED_PREFIXES_UNIX: [&str; 11] = [
-    "/System",
-    "/bin",
-    "/sbin",
-    "/usr",
-    "/private",
-    "/dev",
-    "/etc",
-    "/Library/Apple",
-    "/System/Volumes/Preboot",
-    "/System/Volumes/VM",
-    "/System/Volumes/Update",
-];
-
-#[cfg(windows)]
-const REFUSED_PREFIXES_WINDOWS: [&str; 6] = [
-    r"c:\windows",
-    r"c:\program files",
-    r"c:\program files (x86)",
-    r"c:\programdata",
-    r"c:\$recycle.bin",
-    r"c:\recovery",
-];
-
 /// The volume root and every one of its ancestors are never deletion targets.
 ///
 /// On macOS the synthetic mount directory `/Volumes` exists only to hold mount
@@ -62,19 +34,41 @@ pub fn is_volume_root(path: &Path) -> bool {
 pub fn is_protected_location(path: &Path) -> bool {
     #[cfg(unix)]
     {
-        let text = path.to_string_lossy();
-        REFUSED_PREFIXES_UNIX.iter().any(|prefix| {
-            text == *prefix
-                || text.starts_with(&format!("{prefix}/"))
-        })
+        // Allocation-free match on the first path component; the refused roots
+        // are all top-level except `/Library/Apple`, which needs one more.
+        let mut components = path.components();
+        if !matches!(components.next(), Some(Component::RootDir)) {
+            return false;
+        }
+        let Some(Component::Normal(first)) = components.next() else {
+            return false;
+        };
+        match first.as_encoded_bytes() {
+            b"System" | b"bin" | b"sbin" | b"usr" | b"private" | b"dev" | b"etc" => true,
+            b"Library" => matches!(
+                components.next(),
+                Some(Component::Normal(second)) if second.as_encoded_bytes() == b"Apple"
+            ),
+            _ => false,
+        }
     }
     #[cfg(windows)]
     {
-        let text = path.to_string_lossy().to_lowercase();
-        let text = text.replace('/', "\\");
-        REFUSED_PREFIXES_WINDOWS
-            .iter()
-            .any(|prefix| text == *prefix || text.starts_with(&format!("{prefix}\\")))
+        let mut components = path.components();
+        let Some(Component::Prefix(_)) = components.next() else {
+            return false;
+        };
+        if !matches!(components.next(), Some(Component::RootDir)) {
+            return false;
+        }
+        let Some(Component::Normal(first)) = components.next() else {
+            return false;
+        };
+        match first.to_string_lossy().to_lowercase().as_str() {
+            "windows" | "programdata" | "recovery" | "program files"
+            | "program files (x86)" | "$recycle.bin" => true,
+            _ => false,
+        }
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -96,8 +90,16 @@ pub fn is_traversal(path: &Path) -> bool {
 
 /// Bundle and OS-container suffixes.
 const BUNDLE_SUFFIXES: [&str; 10] = [
-    ".app", ".framework", ".kext", ".bundle", ".xpc", ".appex", ".plugin", ".prefpane",
-    ".mdimporter", ".qlgenerator",
+    ".app",
+    ".framework",
+    ".kext",
+    ".bundle",
+    ".xpc",
+    ".appex",
+    ".plugin",
+    ".prefpane",
+    ".mdimporter",
+    ".qlgenerator",
 ];
 
 /// Whether the entry itself is an application bundle or OS-owned container that a
@@ -106,7 +108,13 @@ pub fn is_bundle(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    BUNDLE_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+    name_is_bundle(name.as_bytes())
+}
+
+/// Whether a raw file name ends with an application/OS-container suffix.
+#[inline]
+fn name_is_bundle(name: &[u8]) -> bool {
+    BUNDLE_SUFFIXES.iter().any(|suffix| name.ends_with(suffix.as_bytes()))
 }
 
 /// Whether *any* component of `path` is a bundle.
@@ -177,6 +185,41 @@ pub fn classify(path: &Path) -> Deletable {
         return Deletable::ProtectedLocation;
     }
     if is_bundle(path) {
+        return Deletable::Bundle;
+    }
+    Deletable::Yes
+}
+
+/// Policy verdict for one child of `parent_path`, without building the joined
+/// path or allocating. `parent_protected` is [`is_protected_location`] on the
+/// parent itself; when true, every descendant inherits the refusal.
+#[inline]
+pub fn classify_child(
+    parent_path: &str,
+    name: &[u8],
+    parent_protected: bool,
+) -> Deletable {
+    // A direct child of /Volumes is a mount point, not a removable entry.
+    if parent_path == "/Volumes" {
+        return Deletable::VolumeRoot;
+    }
+    if parent_protected {
+        return Deletable::ProtectedLocation;
+    }
+    // The only protected root nested one level under a non-protected parent.
+    if parent_path == "/Library" && name == b"Apple" {
+        return Deletable::ProtectedLocation;
+    }
+    // At the filesystem root the entry name is the first path component.
+    if parent_path == "/" {
+        match name {
+            b"System" | b"bin" | b"sbin" | b"usr" | b"private" | b"dev" | b"etc" => {
+                return Deletable::ProtectedLocation;
+            }
+            _ => {}
+        }
+    }
+    if name_is_bundle(name) {
         return Deletable::Bundle;
     }
     Deletable::Yes
@@ -281,8 +324,14 @@ mod tests {
         // A mount point under /Volumes is a volume root; its contents are not.
         #[cfg(target_os = "macos")]
         {
-            assert_eq!(classify(Path::new("/Volumes/Backup")), Deletable::VolumeRoot);
-            assert_eq!(classify(Path::new("/Volumes")), Deletable::ProtectedLocation);
+            assert_eq!(
+                classify(Path::new("/Volumes/Backup")),
+                Deletable::VolumeRoot
+            );
+            assert_eq!(
+                classify(Path::new("/Volumes")),
+                Deletable::ProtectedLocation
+            );
             assert!(classify(Path::new("/Volumes/Backup/Users/me")).is_yes());
         }
     }
@@ -340,12 +389,12 @@ mod tests {
     #[test]
     fn bundle_membership_is_checked_through_the_whole_path() {
         assert!(inside_bundle(Path::new("/Applications/ChatGPT.app")));
-        assert!(inside_bundle(
-            Path::new("/Applications/ChatGPT.app/Contents/Resources/node_modules")
-        ));
-        assert!(inside_bundle(
-            Path::new("/System/Library/Frameworks/AppKit.framework/Versions/A")
-        ));
+        assert!(inside_bundle(Path::new(
+            "/Applications/ChatGPT.app/Contents/Resources/node_modules"
+        )));
+        assert!(inside_bundle(Path::new(
+            "/System/Library/Frameworks/AppKit.framework/Versions/A"
+        )));
         // A directory merely named like one is not inside a bundle.
         assert!(!inside_bundle(Path::new("/Users/me/project/node_modules")));
         assert!(!inside_bundle(Path::new("/Users/me/apples")));
@@ -360,10 +409,7 @@ mod tests {
         assert!(is_traversal(Path::new("../../etc/passwd")));
         assert!(is_traversal(Path::new("./relative")));
         assert!(!is_traversal(Path::new("/Users/me/file")));
-        assert_eq!(
-            classify(Path::new("../escape")),
-            Deletable::UnresolvedPath
-        );
+        assert_eq!(classify(Path::new("../escape")), Deletable::UnresolvedPath);
     }
 
     #[test]

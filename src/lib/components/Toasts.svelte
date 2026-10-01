@@ -12,7 +12,7 @@
         background: color-mix(in oklch, var(--color-surface-2) 94%, transparent);
         border-color: var(--color-border-strong);
         backdrop-filter: blur(12px);
-        box-shadow: 0 16px 40px -16px black;
+        box-shadow: 0 16px 40px -16px var(--color-shadow);
         animation: toast-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.1);
       "
       in:fly={{ duration: 200, x: 40 }}

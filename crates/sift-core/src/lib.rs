@@ -11,9 +11,8 @@
 //! * [`scan`] — volumes, scan policy, progress, and the event contract;
 //! * [`deletable`] — whether an entry may be sent to the trash, and why not.
 //!
-//! The crate has no dependency on any windowing toolkit or IPC layer: it is the
-//! seam that lets the Tauri front end and the GPUI front end show the same disk
-//! with the same numbers.
+//! The crate has no dependency on any windowing toolkit or IPC layer: it is
+//! the model the Tauri front end renders.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 

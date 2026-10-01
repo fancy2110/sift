@@ -9,11 +9,13 @@
 //! (bulk directory reading); it has no idea which front end is attached.
 
 mod engine;
+pub mod journal;
 pub mod priority;
-pub mod snapshot;
-mod timing;
 
-pub use engine::{ScanControl, ScanEngine, ScanHandle};
+pub use engine::{
+    reset_timing_stats, timing_stats, ScanControl, ScanEngine, ScanHandle,
+};
+pub use journal::{
+    ClosedDir, DiscoveredDir, RestoredDir, RestoredScan, ScanJournal, NullJournal,
+};
 pub use priority::{category, JobKind};
-pub use snapshot::{stat_mtime_ms, DirSnapshot, SnapshotStore};
-pub use timing::{timings_enabled, ScanTimings, TimingsHandle};

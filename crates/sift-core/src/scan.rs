@@ -1,7 +1,7 @@
 //! Volumes, scan policy and the progress/event contract shared by every front
 //! end.
 //!
-//! Nothing here knows about Tauri, GPUI, or any particular scan implementation:
+//! Nothing here knows about Tauri or any particular scan implementation:
 //! the engine publishes these types, the adapters translate them into their own
 //! event vocabulary, and both front ends describe the disk in the same words.
 
@@ -118,10 +118,10 @@ pub struct ScanPolicy {
     pub file_detail_min_bytes: u64,
     /// Hardlink deduplication. Costs a hash entry per multiply-linked file.
     pub dedupe_hardlinks: bool,
-    /// Yield CPU to foreground apps: fewer workers plus a short pause between
-    /// directory batches. Doubles wall time roughly, but keeps the machine
-    /// responsive on battery or under load.
-    pub frugal_cpu: bool,
+    /// Optional depth ceiling for an overview scan. `0` means "no limit"
+    /// (a full, exact walk). A positive value truncates discovery at that
+    /// depth for a fast first pass; an exact pass can deepen afterwards.
+    pub max_depth: u16,
 }
 
 impl Default for ScanPolicy {
@@ -139,7 +139,7 @@ impl ScanPolicy {
             want_physical_size: true,
             file_detail_min_bytes: u64::MAX,
             dedupe_hardlinks: true,
-            frugal_cpu: false,
+            max_depth: 0,
         }
     }
 
@@ -151,28 +151,8 @@ impl ScanPolicy {
             want_physical_size: false,
             file_detail_min_bytes: u64::MAX,
             dedupe_hardlinks: false,
-            frugal_cpu: false,
+            max_depth: 0,
         }
-    }
-
-    /// Background-friendly pass: half the workers, no physical-size pass, and
-    /// periodic yielding. Use on battery or while the user is actively using
-    /// the machine.
-    pub const fn frugal() -> Self {
-        Self {
-            threads: 2,
-            stay_on_volume: true,
-            want_physical_size: false,
-            file_detail_min_bytes: u64::MAX,
-            dedupe_hardlinks: false,
-            frugal_cpu: true,
-        }
-    }
-
-    /// Toggle the background-friendly flag.
-    pub const fn with_frugal_cpu(mut self, frugal: bool) -> Self {
-        self.frugal_cpu = frugal;
-        self
     }
 
     /// Keep a record for files at or above `bytes`.
@@ -190,21 +170,15 @@ impl ScanPolicy {
     /// Resolved worker count for this policy on this machine.
     pub fn resolved_threads(&self) -> usize {
         if self.threads > 0 {
-            return (self.threads as usize).max(1);
+            return self.threads as usize;
         }
         let cores = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        // Directory walking is syscall-bound with a high per-call latency. On
-        // a saturated SSD/NVMe queue, matching workers to cores contends for
-        // the same I/O paths; measured throughput peaks around 3/4 of cores,
-        // so leave headroom for the OS and the coordinator.
-        let scaled = (cores.saturating_mul(3) / 4).clamp(2, 12);
-        if self.frugal_cpu {
-            (scaled / 2).max(1)
-        } else {
-            scaled
-        }
+        // Directory walking is syscall-bound with a high per-call latency; more
+        // workers than cores keeps the I/O queue full without thrashing, but
+        // past 4x the benefit disappears and lock contention grows.
+        cores.clamp(2, 16)
     }
 }
 
@@ -247,6 +221,9 @@ pub struct Progress {
     pub denied: u64,
     /// Entries skipped because they were already counted hardlinks.
     pub hardlinks_skipped: u64,
+    /// Directories skipped because they cross a volume boundary or were
+    /// already visited through another path (e.g. a firmlink).
+    pub boundary_skipped: u64,
     /// Bytes counted so far.
     pub bytes: ByteSize,
     /// Directories currently queued or in flight.
@@ -339,15 +316,18 @@ impl ScanRequest {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ScanEvent {
+    /// Restored directories from an interrupted scan, published before normal
+    /// discovery so already-walked subtrees render immediately.
+    NodesAdopted { scan: ScanId, nodes: Vec<AdoptedNode> },
     /// A directory's contents are known and its own total is final. It may
     /// still gain bytes from unvisited subdirectories, so `pending` stays true
     /// for the UI until `DirectoryClosed` or the scan ends.
-    DirectoryListed {
-        scan: ScanId,
-        dir: DirectorySummary,
-    },
+    DirectoryListed { scan: ScanId, dir: DirectorySummary },
     /// A directory's subtree is fully accounted for.
-    DirectoryClosed { scan: ScanId, key: crate::id::NodeKey },
+    DirectoryClosed {
+        scan: ScanId,
+        key: crate::id::NodeKey,
+    },
     /// An interim total for a directory that is still filling in.
     DirectorySized {
         scan: ScanId,
@@ -358,17 +338,6 @@ pub enum ScanEvent {
     },
     /// Periodic counters. Emitted at most a few times a second.
     Progress { scan: ScanId, progress: Progress },
-    /// A previously predicted giant directory was exactly measured: its
-    /// measured totals and the delta propagated to the volume total.
-    Calibrated {
-        scan: ScanId,
-        key: crate::id::NodeKey,
-        size: ByteSize,
-        files: u64,
-    },
-    /// All background calibration finished; emitted after the scan's
-    /// `Finished`, telling listeners draining late events they can stop.
-    CalibrationFinished { scan: ScanId },
     /// The scan stopped.
     Finished {
         scan: ScanId,
@@ -378,19 +347,61 @@ pub enum ScanEvent {
     /// A non-fatal problem worth surfacing once (permission denied root, a
     /// volume that vanished, a full hardlink table).
     Warning { scan: ScanId, message: String },
+    /// Exact totals for a previously predicted giant directory, measured after
+    /// the main scan. The delta has already been propagated through the tree.
+    Calibrated {
+        scan: ScanId,
+        key: crate::id::NodeKey,
+        size: ByteSize,
+        files: u64,
+    },
+    /// Background calibration has finished.
+    CalibrationFinished { scan: ScanId },
+}
+
+/// One directory restored from a previous interrupted scan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AdoptedNode {
+    pub key: String,
+    pub parent_key: String,
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub mtime_ms: i64,
+    pub deletable: bool,
+    /// `false` while its subtree was unfinished and will be re-walked.
+    pub closed: bool,
+}
+
+impl AdoptedNode {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        key: String,
+        parent_key: String,
+        name: String,
+        path: String,
+        size: u64,
+        mtime_ms: i64,
+        deletable: bool,
+        closed: bool,
+    ) -> Self {
+        Self { key, parent_key, name, path, size, mtime_ms, deletable, closed }
+    }
 }
 
 impl ScanEvent {
     pub fn scan_id(&self) -> ScanId {
         match self {
+            ScanEvent::NodesAdopted { scan, .. } => *scan,
             ScanEvent::DirectoryListed { scan, .. }
             | ScanEvent::DirectoryClosed { scan, .. }
             | ScanEvent::DirectorySized { scan, .. }
             | ScanEvent::Progress { scan, .. }
-            | ScanEvent::Calibrated { scan, .. }
-            | ScanEvent::CalibrationFinished { scan, .. }
             | ScanEvent::Finished { scan, .. }
-            | ScanEvent::Warning { scan, .. } => *scan,
+            | ScanEvent::Warning { scan, .. }
+            | ScanEvent::Calibrated { scan, .. }
+            | ScanEvent::CalibrationFinished { scan, .. } => *scan,
         }
     }
 }

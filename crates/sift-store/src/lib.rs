@@ -21,16 +21,25 @@
 
 pub mod atomic;
 pub mod cleanable;
+pub mod history;
+pub mod journal_sqlite;
 pub mod paths;
+pub mod routines;
 pub mod settings;
 pub mod store;
 pub mod verdicts;
 
-pub use atomic::{read_document, write_atomic, write_document, LoadOutcome, SCHEMA_VERSION};
-pub use cleanable::{CleanableEntry, CleanableList, RecordSummary, Upsert, DEFAULT_CLEANABLE_CAP};
-pub use paths::{StorePaths, APP_DIR};
-pub use settings::{
-    AiSettings, AnalysisSettings, AutoCleanMode, MonitorSettings, Settings,
+pub use atomic::{
+    read_document, write_atomic, write_document, LoadOutcome, ResetReason, StoreWarning,
+    SCHEMA_VERSION,
 };
+pub use cleanable::{CleanableEntry, CleanableList, RecordSummary, Upsert, DEFAULT_CLEANABLE_CAP};
+pub use history::{CleanupHistory, HistoryEntry, DEFAULT_HISTORY_CAP};
+pub use journal_sqlite::SqliteScanJournal;
+pub use paths::{StorePaths, APP_DIR};
+pub use routines::{
+    suggestion_key, RoutineDoc, RoutineEntry, RoutineList, RoutineMode, DEFAULT_ROUTINE_CAP,
+};
+pub use settings::{AiSettings, AnalysisSettings, AutoCleanMode, MonitorSettings, Settings};
 pub use store::Store;
 pub use verdicts::{VerdictRecord, VerdictTable, DEFAULT_VERDICT_CAP};
