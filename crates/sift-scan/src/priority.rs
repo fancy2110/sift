@@ -39,9 +39,6 @@ pub enum JobKind {
     /// Read the whole subtree and return only the summed size: the node budget
     /// refused to record this directory, but its bytes still count.
     SizeOnly,
-    /// A predicted giant flat directory: do not enumerate it; the coordinator
-    /// closes it at zero and an exact calibration runs after the scan.
-    Predicted,
 }
 
 /// One entry in the shared work queue.

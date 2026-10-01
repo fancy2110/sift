@@ -55,7 +55,8 @@ use sift_core::{
     ScanPolicy, ScanRequest, ScanTree, TreeConfig,
 };
 use sift_platform::dir::{
-    close_raw_fd, read_with_children, BulkBuffer, ChildFdMap, DirReader, RawEntry,
+    close_raw_fd, fd_size, path_size, read_with_children, BulkBuffer, ChildFdMap, DirReader,
+    RawEntry,
 };
 
 use crate::priority::{category, JobKind, OrdDir, QueuedDir};
@@ -711,10 +712,6 @@ fn coordinator_loop(
                     parent: job.queued.index,
                     path: job.queued.path.clone(),
                 },
-                JobKind::Predicted => DirJob::Predicted {
-                    index: job.queued.index,
-                    preopened: job.preopened,
-                },
             };
             if dispatch_tx.send(dispatch).is_err() {
                 outcome = ScanOutcome::Failed;
@@ -939,15 +936,9 @@ fn process_dir_entries(
                 let preopened = child_fds.take(&entry.name);
                 let count = state.pending_children.entry(index).or_insert(0);
                 *count += 1;
-                // The child's own `st_size` rode back in the parent's bulk
-                // result: a directory at or past the giant threshold is never
-                // enumerated during the main scan. It closes at zero now and
-                // is measured exactly by the post-scan calibration.
-                let kind = if entry.logical_size >= PREDICT_MIN_DIR_SIZE {
-                    JobKind::Predicted
-                } else {
-                    JobKind::Tracked
-                };
+                // Giant detection happens in the worker via one `fstat` on
+                // this preopened descriptor (directory size does not come back
+                // in the bulk result on APFS).
                 let child_seq = state.next_seq();
                 state.queue.push(OrdDir {
                     queued: QueuedDir {
@@ -955,7 +946,7 @@ fn process_dir_entries(
                         path: PathBuf::from(&child_path),
                         depth: tree.depth_of(child_ix),
                         seq: child_seq,
-                        kind,
+                        kind: JobKind::Tracked,
                         writable: entry.writable_by_us(),
                     },
                     category: category(Path::new(&child_path), &state.focus),
@@ -1344,12 +1335,6 @@ enum DirJob {
         preopened: Option<i32>,
     },
     SizeOnly { parent: u32, path: PathBuf },
-    /// A predicted giant: close the inherited descriptor and return without
-    /// reading; the coordinator queues exact calibration.
-    Predicted {
-        index: u32,
-        preopened: Option<i32>,
-    },
 }
 
 enum DirResult {
@@ -1376,6 +1361,22 @@ fn read_job(job: DirJob, want_physical: bool, buffer: &mut BulkBuffer) -> DirRes
             writable,
             preopened,
         } => {
+            // One fstat on the descriptor already in hand decides whether
+            // this is a giant flat directory, which is skipped during the
+            // main scan and measured exactly afterward. The scan root is
+            // exempt: never predict the whole walk away.
+            let dir_size = match preopened {
+                Some(fd) => fd_size(fd),
+                None => path_size(&path),
+            };
+            if index != 0
+                && dir_size.is_some_and(|size| size >= PREDICT_MIN_DIR_SIZE)
+            {
+                if let Some(fd) = preopened {
+                    close_raw_fd(fd);
+                }
+                return DirResult::Predicted { index };
+            }
             let outcome =
                 read_with_children(preopened, &path, want_physical, buffer);
             DirResult::Tracked {
@@ -1392,12 +1393,6 @@ fn read_job(job: DirJob, want_physical: bool, buffer: &mut BulkBuffer) -> DirRes
                 size,
                 files,
             }
-        }
-        DirJob::Predicted { index, preopened } => {
-            if let Some(fd) = preopened {
-                close_raw_fd(fd);
-            }
-            DirResult::Predicted { index }
         }
     }
 }

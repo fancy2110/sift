@@ -265,6 +265,27 @@ pub fn close_raw_fd(fd: std::os::unix::io::RawFd) {
     unsafe { libc::close(fd) };
 }
 
+/// `st_size` of an already-open descriptor, via `fstat(2)`.
+///
+/// Used to spot a giant directory before enumerating it: on APFS the
+/// directory's size tracks its entry count. The descriptor must stay open;
+/// this is not a destructive probe.
+#[cfg(unix)]
+pub fn fd_size(fd: std::os::unix::io::RawFd) -> Option<u64> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } == 0 {
+        Some(unsafe { stat.assume_init() }.st_size as u64)
+    } else {
+        None
+    }
+}
+
+/// `st_size` via a path-stat, when no descriptor is available (the scan root
+/// or a portable-fallback walk).
+pub fn path_size(path: &Path) -> Option<u64> {
+    std::fs::symlink_metadata(path).ok().map(|meta| meta.len())
+}
+
 /// Open every real subdirectory child with `openat` relative to `parent`,
 /// returning `(name, fd)` pairs. Symlinks and `.`/`..` are skipped. Done
 /// while the parent descriptor is open, so no path resolution is needed.
