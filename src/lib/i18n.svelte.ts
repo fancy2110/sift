@@ -239,7 +239,6 @@ const zh: Record<string, string> = {
   'permission.tccTag': '隐私保护',
   'permission.adminTag': '系统保护',
   'permission.adminNeeded': '该目录受系统权限保护，需要管理员授权，Sift 无法直接访问',
-  'permission.more': '另有 {0} 个目录未授权',
   'permission.heading': '未授权目录 · {0}',
   // Directory status badges
   'status.estimated': '估算',
@@ -577,7 +576,6 @@ const en: Record<string, string> = {
   'permission.tccTag': 'Privacy',
   'permission.adminTag': 'System',
   'permission.adminNeeded': 'This directory is protected by system permissions and needs an administrator. Sift cannot access it directly.',
-  'permission.more': '{0} more restricted directories',
   'permission.heading': 'Restricted directories · {0}',
   // Directory status badges
   'status.estimated': 'estimated',

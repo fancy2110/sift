@@ -54,6 +54,13 @@
     Math.min(1, (Math.min(centerW, centerH) - 8) / desiredW)
   );
 
+  // With few requests the list flows at natural height (no scroll box); once
+  // it would get tall, switch to a fixed vh scroll area. vh is definite, which
+  // avoids the indefinite-flex sizing that made the area collapse/overflow.
+  const PERM_SCROLL_AFTER = 3;
+  let permScrollMode = $derived(
+    store.permissionRequests.length > PERM_SCROLL_AFTER);
+
   // Once a review-triggered scan finishes and produces findings, enter smart.
   $effect(() => {
     if (reviewRequested && !store.scanning && store.hasFindings) {
@@ -75,8 +82,6 @@
 
   // r = 92 → circumference of the progress arc.
   const RING_C = 2 * Math.PI * 92;
-  // Permission cards are grantable-first; keep the list compact.
-  const MAX_PERM_CARDS = 6;
   // Byte-coverage percent is available once the volume capacity is known.
   let hasPercent = $derived(store.progress.totalBytes > 0);
   let arcLen = $derived(
@@ -245,53 +250,51 @@
     </button>
     </div>
    </div>
-
-   {#if store.permissionRequests.length}
-     {@const sorted = [...store.permissionRequests].sort(
-       (a, b) => Number(b.tcc) - Number(a.tcc))}
-     {@const visible = sorted.slice(0, MAX_PERM_CARDS)}
-     <div class="perm-list">
-       <div class="perm-head">
-         <span>{t('permission.heading', [sorted.length])}</span>
-         <button
-           type="button"
-           class="perm-skipall"
-           onclick={() => store.skipAllPermissions()}
-         >
-           {t('permission.skipAll')}
-         </button>
-       </div>
-       {#each visible as req (req.id)}
-         <div class="perm-card" class:posix={!req.tcc} in:fly={{ y: 14, duration: 380, easing: cubicOut }}>
-           <p class="perm-title">
-             <span class="perm-tag" class:tag-posix={!req.tcc}>
-               {req.tcc ? t('permission.tccTag') : t('permission.adminTag')}
-             </span>
-             {req.name}
-           </p>
-           <p class="perm-msg">
-             {req.tcc ? t('permission.message', [req.name]) : t('permission.adminNeeded')}
-           </p>
-           <div class="perm-actions">
-             {#if req.tcc}
-               <button type="button" class="perm-btn primary" onclick={() => store.grantPermission(req)}>
-                 {t('permission.grant')}
-               </button>
-             {/if}
-             <button type="button" class="perm-btn" onclick={() => store.skipPermission(req)}>
-               {t('permission.skip')}
-             </button>
-           </div>
-         </div>
-       {/each}
-       {#if sorted.length > visible.length}
-         <p class="perm-more">
-           {t('permission.more', [sorted.length - visible.length])}
-         </p>
-       {/if}
-     </div>
-   {/if}
   </div>
+
+  <!-- permission requests: a flex sibling of the stage so its fixed-height
+       scroller can never slide underneath the entry cards. -->
+  {#if store.permissionRequests.length}
+    {@const sorted = [...store.permissionRequests].sort(
+      (a, b) => Number(b.tcc) - Number(a.tcc))}
+    <div class="perm-list" class:scroll-mode={permScrollMode}>
+      <div class="perm-head">
+        <span>{t('permission.heading', [sorted.length])}</span>
+        <button
+          type="button"
+          class="perm-skipall"
+          onclick={() => store.skipAllPermissions()}
+        >
+          {t('permission.skipAll')}
+        </button>
+      </div>
+      <div class="perm-scroll">
+      {#each sorted as req (req.id)}
+        <div class="perm-card" class:posix={!req.tcc} in:fly={{ y: 14, duration: 380, easing: cubicOut }}>
+          <p class="perm-title">
+            <span class="perm-tag" class:tag-posix={!req.tcc}>
+              {req.tcc ? t('permission.tccTag') : t('permission.adminTag')}
+            </span>
+            {req.name}
+          </p>
+          <p class="perm-msg">
+            {req.tcc ? t('permission.message', [req.name]) : t('permission.adminNeeded')}
+          </p>
+          <div class="perm-actions">
+            {#if req.tcc}
+              <button type="button" class="perm-btn primary" onclick={() => store.grantPermission(req)}>
+                {t('permission.grant')}
+              </button>
+            {/if}
+            <button type="button" class="perm-btn" onclick={() => store.skipPermission(req)}>
+              {t('permission.skip')}
+            </button>
+          </div>
+        </div>
+      {/each}
+      </div>
+    </div>
+  {/if}
 
   <!-- entry cards -->
   <div class="hub-cards">
@@ -394,7 +397,11 @@
 
   .hub-center {
     position: relative;
-    flex: 1;
+    /* Zero basis: the stage takes only the leftover after the permission
+       panel (a flex sibling) and the entry cards claim their definite
+       heights, so the ring shrinks predictably when many requests park. */
+    flex: 1 1 0;
+    min-height: 0;
     width: 100%;
     display: flex;
     flex-direction: column;
@@ -746,11 +753,47 @@
   }
 
   .perm-list {
-    flex-shrink: 0;
+    /* Direct flex child of .hub: never shrink; the ring stage (flex:1 with
+       min-height:0) absorbs the shortage through fitScale. */
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: 820px;
     display: flex;
     flex-direction: column;
     gap: 10px;
-    margin-top: 22px;
+    margin: 18px 0 6px;
+  }
+  /* A few requests: the wrapper just lays the cards out naturally. */
+  .perm-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 2px 6px 2px 0;
+  }
+  /* Many requests: fixed vh (always definite) scroll area, so the list can
+     neither collapse nor overflow over the entry cards. */
+  .perm-list.scroll-mode .perm-scroll {
+    flex: none;
+    height: 38vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color:
+      color-mix(in oklch, var(--color-border-strong) 80%, transparent)
+      transparent;
+  }
+  .perm-list.scroll-mode .perm-scroll::-webkit-scrollbar {
+    width: 8px;
+  }
+  .perm-list.scroll-mode .perm-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .perm-list.scroll-mode .perm-scroll::-webkit-scrollbar-thumb {
+    border-radius: 8px;
+    background: color-mix(in oklch, var(--color-border-strong) 70%, transparent);
+  }
+  .perm-list.scroll-mode .perm-scroll::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--color-faint) 60%, transparent);
   }
   .perm-head {
     display: flex;
@@ -817,14 +860,6 @@
   .perm-msg {
     margin: 0;
     font-size: 12.5px;
-    color: var(--color-faint);
-  }
-  .perm-more {
-    margin: 0;
-    text-align: center;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    letter-spacing: 0.1em;
     color: var(--color-faint);
   }
   .perm-actions {
