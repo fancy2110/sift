@@ -20,6 +20,7 @@ enum WriterMsg {
     Discovered { root: String, dirs: Vec<DiscoveredDir> },
     Closed { root: String, updates: Vec<ClosedDir> },
     Load { root: String, reply: Sender<RestoredScan> },
+    PruneOpen(String),
     Complete(String),
     Shutdown,
 }
@@ -60,6 +61,12 @@ impl SqliteScanJournal {
                         WriterMsg::Load { root, reply } => {
                             let scan = load_scan(&conn, &root).unwrap_or_default();
                             let _ = reply.send(scan);
+                        }
+                        WriterMsg::PruneOpen(root) => {
+                            let _ = conn.execute(
+                                "DELETE FROM dirs WHERE root=?1 AND closed=0",
+                                rusqlite::params![root],
+                            );
                         }
                         WriterMsg::Complete(root) => {
                             let _ = apply_complete(&conn, &root);
@@ -255,6 +262,10 @@ impl ScanJournal for SqliteScanJournal {
             root: scan_root.to_string(),
             updates,
         });
+    }
+
+    fn prune_open(&self, root: &str) {
+        let _ = self.cmd.send(WriterMsg::PruneOpen(root.to_string()));
     }
 
     fn load(&self, root: &str) -> RestoredScan {

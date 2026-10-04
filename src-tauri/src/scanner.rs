@@ -15,7 +15,9 @@ use std::time::Instant;
 
 use serde::Serialize;
 use sift_core::id::NodeKey;
-use sift_core::{ScanEvent, ScanId, ScanOutcome, ScanPolicy, ScanRequest, ScanTree};
+use sift_core::{
+    DirCloseStatus, ScanEvent, ScanId, ScanOutcome, ScanPolicy, ScanRequest, ScanTree,
+};
 use sift_scan::{ScanControl, ScanEngine, ScanHandle};
 use sift_store::{SqliteScanJournal, StorePaths};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -24,6 +26,21 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const PROGRESS_INTERVAL_MS: u128 = 250;
 
 // ---- DTOs the Svelte front end consumes ------------------------------------
+
+/// How a directory's size was obtained. Serialized as the lowercase string
+/// the Svelte store renders badges from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeStatus {
+    /// Walked and (once closed) measured exactly.
+    Ok,
+    /// Main scan skipped it; exact calibration is pending or in progress.
+    Estimated,
+    /// Unreadable or explicitly skipped by the user; size is unknown.
+    Denied,
+    /// Parked waiting for a macOS authorization decision.
+    Awaiting,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +54,7 @@ pub struct NodeInfo {
     pub modified_ms: Option<i64>,
     pub deletable: bool,
     pub pending: bool,
+    pub status: NodeStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,6 +62,15 @@ pub struct NodeInfo {
 pub struct ProgressInfo {
     pub files: u64,
     pub dirs: u64,
+    /// Logical bytes accounted for so far.
+    pub bytes: u64,
+    /// Bytes in use on the scanned volume (the percent denominator).
+    pub total_bytes: u64,
+    /// `0..=100`, byte-coverage based.
+    pub percent: f64,
+    pub rate_bytes_per_sec: f64,
+    /// Directories parked pending an authorization decision.
+    pub awaiting: u64,
     pub tracked_nodes: usize,
 }
 
@@ -51,8 +78,23 @@ pub struct ProgressInfo {
 #[serde(rename_all = "camelCase")]
 pub struct SizedInfo {
     pub id: String,
-    pub size: u64,
+    /// New size, or `None` for a status-only update that must not change the
+    /// last size the UI already showed.
+    pub size: Option<u64>,
     pub pending: bool,
+    pub status: NodeStatus,
+}
+
+/// A directory is parked pending macOS authorization; the front end shows a
+/// card with "grant" / "skip" actions.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionInfo {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    /// `true` — grantable via an open panel (TCC); `false` — needs an admin.
+    pub tcc: bool,
 }
 
 /// One batched scan update. The pump thread coalesces a time window of
@@ -63,6 +105,7 @@ pub struct SizedInfo {
 pub struct BatchUpdate {
     pub discovered: Vec<NodeInfo>,
     pub sized: Vec<SizedInfo>,
+    pub permissions: Vec<PermissionInfo>,
     /// Attached only on the progress cadence.
     pub progress: Option<ProgressInfo>,
 }
@@ -201,13 +244,30 @@ pub fn start_scan_with(
         return Err("scan already running".into());
     }
 
+    // A previous scan's coordinator may be lingering so its authorization
+    // cards stay usable. Stop it and take its control before installing the
+    // replacement; the old pump then disconnects on its own.
+    if let Some(old) = manager.control.lock().unwrap().take() {
+        old.shutdown();
+    }
+
     manager.paused.store(false, Ordering::SeqCst);
     manager.files.store(0, Ordering::SeqCst);
     let root_path = PathBuf::from(&root);
+
+    // Bytes actually in use on the target volume: feeds the percent ring and
+    // the engine's coverage. `free_space` only matches absolute paths.
+    let volume_used = sift_platform::volume::free_space(&root_path)
+        .map(|(total, available)| total.saturating_sub(available))
+        .unwrap_or(0);
+
     let engine = ScanEngine::new();
-    let request = ScanRequest::new(manager.next_scan_id(), root_path.clone())
+    let mut request = ScanRequest::new(manager.next_scan_id(), root_path.clone())
         .with_focus(PathBuf::from(&focus))
         .with_policy(ScanPolicy::thorough());
+    if volume_used > 0 {
+        request = request.with_volume_used_bytes(volume_used);
+    }
 
     let handle = match manager.journal() {
         Some(journal) => engine
@@ -235,14 +295,11 @@ pub fn start_scan_with(
     std::thread::Builder::new()
         .name("sift-tauri-scan".into())
         .spawn(move || {
-            pump_events(app_for_pump.clone(), handle, root_path);
-            // The engine finished; clear the running flag through the app state.
-            if let Some(manager) = app_for_pump.try_state::<ScanManager>() {
-                manager.running.store(false, Ordering::SeqCst);
-                manager.paused.store(false, Ordering::SeqCst);
-                manager.menu_refreshing.store(false, Ordering::SeqCst);
-                *manager.control.lock().unwrap() = None;
-            }
+            // Finished sets running=false; the control is kept in the manager
+            // after the pump exits so post-completion grants could still have
+            // been accepted, and a replacing scan clears it in
+            // `start_scan_with`.
+            pump_events(app_for_pump, handle, root_path, volume_used);
         })
         .map_err(|err| err.to_string())?;
 
@@ -288,10 +345,34 @@ pub fn scan_running(manager: State<'_, ScanManager>) -> bool {
     manager.is_running()
 }
 
+/// Feed the user's decision back to a directory parked pending authorization.
+/// `granted = true` re-walks it; `false` closes it as denied/unknown. When the
+/// user selected an ancestor folder in the panel, `granted_path` carries it.
+#[tauri::command]
+pub fn resolve_permission(
+    manager: State<'_, ScanManager>,
+    id: String,
+    granted: bool,
+    granted_path: Option<String>,
+) -> Result<(), String> {
+    let control = manager.control.lock().unwrap();
+    let Some(control) = control.as_ref() else {
+        return Err("no active scan".into());
+    };
+    control
+        .resolve_permission(id, granted, granted_path)
+        .map_err(|err| err.to_string())
+}
+
 // ---- event pump ------------------------------------------------------------
 
 /// Drain engine events until the scan ends, re-emitting the legacy vocabulary.
-fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
+fn pump_events(
+    app: AppHandle,
+    handle: ScanHandle,
+    root: PathBuf,
+    volume_used: u64,
+) {
     let root_text = root.to_string_lossy().to_string();
     let root_key = NodeKey::from_path(&root);
 
@@ -310,37 +391,57 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
         modified_ms: None,
         deletable: false,
         pending: true,
+        status: NodeStatus::Ok,
     };
 
     let mut last_progress = Instant::now();
     let mut outcome = ScanOutcome::Failed;
-    let mut files = 0u64;
-    let mut dirs = 0u64;
+    let mut latest = sift_core::Progress::default();
 
     let mut discovered: Vec<NodeInfo> = vec![root_info];
     let mut sized: Vec<SizedInfo> = Vec::new();
+    let mut permissions: Vec<PermissionInfo> = Vec::new();
     let mut progress_due = false;
 
     let flush = |discovered: &mut Vec<NodeInfo>,
                  sized: &mut Vec<SizedInfo>,
-                 progress: Option<ProgressInfo>| {
-        if discovered.is_empty() && sized.is_empty() && progress.is_none() {
+                 permissions: &mut Vec<PermissionInfo>,
+                 progress: Option<ProgressInfo>,
+                 last_flush: &mut Instant| {
+        if discovered.is_empty()
+            && sized.is_empty()
+            && permissions.is_empty()
+            && progress.is_none()
+        {
             return;
         }
-        let _ = app.emit(
+        let result = app.emit(
             "scan://batch",
             BatchUpdate {
                 discovered: std::mem::take(discovered),
                 sized: std::mem::take(sized),
+                permissions: std::mem::take(permissions),
                 progress,
             },
         );
+        if let Err(err) = result {
+            eprintln!("scan batch emit failed: {err}");
+        }
+        *last_flush = Instant::now();
     };
 
-    // Coalesce every engine event arriving inside BATCH_WINDOW_MS into one
-    // emission; an idle receiver flushes early so the visible directory never
-    // waits for the window to fill.
+    // Events are coalesced into one emission per BATCH_WINDOW_MS of wall clock,
+    // and never beyond the per-batch caps. Flushing on a deadline (rather than
+    // only on an idle gap, as an earlier version did) bounds IPC payloads even
+    // when the engine streams events without pause — a full-volume burst would
+    // otherwise become a single multi-million-node batch that pins the webview
+    // for minutes and consumes gigabytes.
     const BATCH_WINDOW_MS: u64 = 64;
+    const BATCH_WINDOW: std::time::Duration = std::time::Duration::from_millis(BATCH_WINDOW_MS);
+    const MAX_DISCOVERED: usize = 2_000;
+    const MAX_SIZED: usize = 2_000;
+    let mut last_flush = Instant::now();
+    let mut done_emitted = false;
     'pump: loop {
         let event = match handle
             .events
@@ -349,12 +450,18 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
                 let progress = if progress_due {
-                    Some(build_progress(&handle, files, dirs))
+                    Some(build_progress(&handle, latest, volume_used))
                 } else {
                     None
                 };
                 progress_due = false;
-                flush(&mut discovered, &mut sized, progress);
+                flush(
+                    &mut discovered,
+                    &mut sized,
+                    &mut permissions,
+                    progress,
+                    &mut last_flush,
+                );
                 continue 'pump;
             }
             Err(RecvTimeoutError::Disconnected) => break 'pump,
@@ -376,17 +483,35 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
                         modified_ms: Some(node.mtime_ms).filter(|value| *value != 0),
                         deletable: node.deletable,
                         pending: !node.closed,
+                        status: NodeStatus::Ok,
                     });
+                    // A single restore can carry hundreds of thousands of nodes;
+                    // never let one batch exceed the cap.
+                    if discovered.len() >= MAX_DISCOVERED {
+                        flush(
+                            &mut discovered,
+                            &mut sized,
+                            &mut permissions,
+                            None,
+                            &mut last_flush,
+                        );
+                    }
                 }
             }
             ScanEvent::DirectoryListed { dir, .. } => {
                 // The directory itself is known and still filling in.
                 sized.push(SizedInfo {
                     id: dir.key.to_string(),
-                    size: dir.size.dominant(),
+                    size: Some(dir.size.dominant()),
                     pending: true,
+                    status: NodeStatus::Ok,
                 });
                 for entry in &dir.entries {
+                    // Files are not retained on the front end; the explorer
+                    // fetches an open folder's files on demand (list_dir_files).
+                    if !entry.is_dir {
+                        continue;
+                    }
                     let path = join_path(&dir.path, &entry.name);
                     discovered.push(NodeInfo {
                         id: entry.key.to_string(),
@@ -398,30 +523,55 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
                         modified_ms: Some(entry.mtime_ms).filter(|value| *value != 0),
                         deletable: entry.deletable,
                         pending: entry.pending,
+                        status: NodeStatus::Ok,
                     });
+                    if discovered.len() >= MAX_DISCOVERED {
+                        flush(
+                            &mut discovered,
+                            &mut sized,
+                            &mut permissions,
+                            None,
+                            &mut last_flush,
+                        );
+                    }
                 }
             }
             ScanEvent::DirectorySized {
                 key,
                 size: new_size,
                 pending,
+                estimated,
                 ..
             } => {
                 sized.push(SizedInfo {
                     id: key.to_string(),
-                    size: new_size.dominant(),
+                    size: Some(new_size.dominant()),
                     pending,
+                    status: if estimated {
+                        NodeStatus::Estimated
+                    } else {
+                        NodeStatus::Ok
+                    },
                 });
             }
-            ScanEvent::DirectoryClosed { .. } => {
+            ScanEvent::DirectoryClosed { key, status, .. } => {
                 // The final size arrives through the `DirectorySized` flush;
-                // nothing extra to publish here.
+                // publish only the terminal status.
+                sized.push(SizedInfo {
+                    id: key.to_string(),
+                    size: None,
+                    pending: false,
+                    status: match status {
+                        DirCloseStatus::Denied => NodeStatus::Denied,
+                        DirCloseStatus::Awaiting => NodeStatus::Awaiting,
+                        DirCloseStatus::Ok => NodeStatus::Ok,
+                    },
+                });
             }
             ScanEvent::Progress { progress, .. } => {
-                files = progress.files;
-                dirs = progress.dirs;
+                latest = progress;
                 if let Some(manager) = app.try_state::<ScanManager>() {
-                    manager.set_file_count(files);
+                    manager.set_file_count(progress.files);
                 }
                 if last_progress.elapsed().as_millis() >= PROGRESS_INTERVAL_MS {
                     progress_due = true;
@@ -435,51 +585,138 @@ fn pump_events(app: AppHandle, handle: ScanHandle, root: PathBuf) {
                 // Exact size of a previously predicted giant directory.
                 sized.push(SizedInfo {
                     id: key.to_string(),
-                    size: size.dominant(),
+                    size: Some(size.dominant()),
                     pending: false,
+                    status: NodeStatus::Ok,
+                });
+            }
+            ScanEvent::PermissionRequested { key, path, name, tcc, .. } => {
+                // Ask the front end to drive an NSOpenPanel grant or a skip;
+                // mark the parked node without touching its last known size.
+                permissions.push(PermissionInfo {
+                    id: key.to_string(),
+                    path,
+                    name,
+                    tcc,
+                });
+                sized.push(SizedInfo {
+                    id: key.to_string(),
+                    size: None,
+                    pending: false,
+                    status: NodeStatus::Awaiting,
                 });
             }
             ScanEvent::CalibrationFinished { .. } => {
-                break;
+                // Predicted-giant calibration finished; the coordinator keeps
+                // lingering for authorization grants, so keep pumping.
             }
             ScanEvent::Finished {
-                outcome: finished, ..
+                scan: _,
+                outcome: finished,
+                progress: final_progress,
             } => {
-                // The main scan is done; keep pumping only when background
-                // calibration follows. With nothing to calibrate the event
-                // sender is dropped and the next receive disconnects.
+                // Main walk done. Flush every buffered discovery/size and emit
+                // done so the UI presents results; the coordinator stays alive
+                // for post-completion grants, so the loop keeps pumping the
+                // refresh events that follow.
                 outcome = finished;
+                latest = final_progress;
+                progress_due = false;
+                flush(
+                    &mut discovered,
+                    &mut sized,
+                    &mut permissions,
+                    Some(build_progress(&handle, latest, volume_used)),
+                    &mut last_flush,
+                );
+                let _ = app.emit(
+                    "scan://done",
+                    serde_json::json!({
+                        "cancelled": matches!(outcome, ScanOutcome::Cancelled),
+                        "root": root_text,
+                    }),
+                );
+                done_emitted = true;
+                if let Some(manager) = app.try_state::<ScanManager>() {
+                    manager.running.store(false, Ordering::SeqCst);
+                    manager.paused.store(false, Ordering::SeqCst);
+                    manager.menu_refreshing.store(false, Ordering::SeqCst);
+                }
+            }
+            ScanEvent::RefreshFinished { path, .. } => {
+                // A post-completion grant finished patching totals; tell the
+                // front end to refresh analysis without a new full scan.
+                let _ = app.emit(
+                    "scan://refreshed",
+                    serde_json::json!({ "path": path }),
+                );
             }
             // `ScanEvent` is non-exhaustive; an unknown future variant is
             // ignored rather than mistaken for completion.
             _ => {}
         }
+
+        // Bound payloads while events stream back-to-back: flush when the
+        // coalescing window elapses or a buffer reaches its cap.
+        if last_flush.elapsed() >= BATCH_WINDOW
+            || discovered.len() >= MAX_DISCOVERED
+            || sized.len() >= MAX_SIZED
+        {
+            let progress = if progress_due {
+                Some(build_progress(&handle, latest, volume_used))
+            } else {
+                None
+            };
+            progress_due = false;
+            flush(
+                &mut discovered,
+                &mut sized,
+                &mut permissions,
+                progress,
+                &mut last_flush,
+            );
+        }
     }
 
-    // Drain anything still buffered, always with a final progress reading.
+    // Drain anything still buffered, with a final progress reading.
     flush(
         &mut discovered,
         &mut sized,
-        Some(build_progress(&handle, files, dirs)),
+        &mut permissions,
+        Some(build_progress(&handle, latest, volume_used)),
+        &mut last_flush,
     );
-    let _ = app.emit(
-        "scan://done",
-        serde_json::json!({
-            "cancelled": matches!(outcome, ScanOutcome::Cancelled),
-            "root": root_text,
-        }),
-    );
+    // Normal path: `Finished` already emitted done. Defensive fallback for an
+    // unexpected early disconnect.
+    if !done_emitted {
+        let _ = app.emit(
+            "scan://done",
+            serde_json::json!({
+                "cancelled": matches!(outcome, ScanOutcome::Cancelled),
+                "root": root_text,
+            }),
+        );
+    }
 }
 
-fn build_progress(handle: &ScanHandle, files: u64, dirs: u64) -> ProgressInfo {
+fn build_progress(
+    handle: &ScanHandle,
+    progress: sift_core::Progress,
+    volume_used: u64,
+) -> ProgressInfo {
     let tracked = handle
         .tree
         .lock()
         .map(|tree| tree.node_count() as usize)
         .unwrap_or(0);
     ProgressInfo {
-        files,
-        dirs,
+        files: progress.files,
+        dirs: progress.dirs,
+        bytes: progress.bytes.dominant(),
+        total_bytes: volume_used,
+        percent: progress.coverage * 100.0,
+        rate_bytes_per_sec: progress.bytes_per_sec(),
+        awaiting: progress.awaiting,
         tracked_nodes: tracked,
     }
 }
@@ -496,6 +733,42 @@ fn join_path(dir: &str, name: &str) -> String {
 /// Compatibility shim for the old `node_id` helper used by the watcher module.
 pub fn node_id(path: &str) -> String {
     NodeKey::from_path(Path::new(path)).to_string()
+}
+
+/// On-demand snapshot of a folder's entries for the explorer.
+///
+/// The scan tree records directories permanently, but individual file entries
+/// are not retained by the front end (a full-volume scan has millions), so the
+/// explorer reads the folder live when it is opened. Returns every immediate
+/// entry; the front end already holds the directory children.
+#[tauri::command]
+pub(crate) fn list_dir_files(path: String) -> Result<Vec<NodeInfo>, String> {
+    let dir = PathBuf::from(&path);
+    let reader = sift_platform::dir::DirReader::read(&dir, true)
+        .map_err(|err| err.to_string())?;
+    let parent_key = NodeKey::from_path(&dir);
+    let mut entries = Vec::new();
+    for raw in reader.entries() {
+        if raw.name == b"." || raw.name == b".." {
+            continue;
+        }
+        let name = String::from_utf8_lossy(&raw.name).into_owned();
+        let child_path = join_path(&path, &name);
+        let key = NodeKey::from_path(Path::new(&child_path));
+        entries.push(NodeInfo {
+            id: key.to_string(),
+            parent_id: Some(parent_key.to_string()),
+            name,
+            path: child_path,
+            is_dir: raw.is_dir,
+            size: raw.size().dominant(),
+            modified_ms: Some(raw.mtime_ms).filter(|value| *value != 0),
+            deletable: raw.writable_by_us(),
+            pending: false,
+            status: NodeStatus::Ok,
+        });
+    }
+    Ok(entries)
 }
 
 #[cfg(test)]

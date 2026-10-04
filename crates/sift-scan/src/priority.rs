@@ -74,6 +74,27 @@ impl PartialEq for OrdDir {
 }
 impl Eq for OrdDir {}
 
+/// Close a preopened descriptor if a queued entry is dropped without being
+/// dispatched (cancellation drains the heap). When popped and dispatched the
+/// descriptor moves into the `DirJob`, so this does not double-close.
+#[cfg(target_os = "macos")]
+impl Drop for OrdDir {
+    fn drop(&mut self) {
+        if let Some(fd) = self.preopened.take() {
+            sift_platform::dir::close_queued_fd(fd);
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+impl Drop for OrdDir {
+    fn drop(&mut self) {
+        if let Some(fd) = self.preopened.take() {
+            sift_platform::dir::close_raw_fd(fd);
+        }
+    }
+}
+
 impl PartialOrd for OrdDir {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))

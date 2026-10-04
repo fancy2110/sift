@@ -99,6 +99,8 @@ const FLAG_PENDING: u8 = 0b0000_0100;
 const FLAG_SYMLINK: u8 = 0b0000_1000;
 const FLAG_DELETABLE: u8 = 0b0001_0000;
 const FLAG_ESTIMATED: u8 = 0b0010_0000;
+const FLAG_AWAITING_AUTH: u8 = 0b0100_0000;
+const FLAG_DENIED: u8 = 0b1000_0000;
 
 impl TreeNode {
     #[inline]
@@ -143,8 +145,34 @@ impl TreeNode {
             | (if estimated { FLAG_ESTIMATED } else { 0 });
     }
 
+    /// The directory is parked because it needs an OS authorization decision;
+    /// its parent's pending slot stays held until the decision arrives.
     #[inline]
-    fn set_pending(&mut self, pending: bool) {
+    pub fn awaiting(&self) -> bool {
+        self.flags & FLAG_AWAITING_AUTH != 0
+    }
+
+    #[inline]
+    pub fn set_awaiting(&mut self, awaiting: bool) {
+        self.flags = (self.flags & !FLAG_AWAITING_AUTH)
+            | (if awaiting { FLAG_AWAITING_AUTH } else { 0 });
+    }
+
+    /// The directory could not be read (permission refused) or the user
+    /// explicitly skipped it; its totals are unknown rather than zero-by-choice.
+    #[inline]
+    pub fn denied(&self) -> bool {
+        self.flags & FLAG_DENIED != 0
+    }
+
+    #[inline]
+    pub fn set_denied(&mut self, denied: bool) {
+        self.flags = (self.flags & !FLAG_DENIED)
+            | (if denied { FLAG_DENIED } else { 0 });
+    }
+
+    #[inline]
+    pub fn set_pending(&mut self, pending: bool) {
         self.flags = (self.flags & !FLAG_PENDING) | (if pending { FLAG_PENDING } else { 0 });
     }
 
@@ -280,8 +308,13 @@ pub struct ScanTree {
     root_path: PathBuf,
     interner: NameInterner,
     config: TreeConfig,
-    /// Seen (device, inode) pairs for files with `nlink > 1`.
-    hardlinks: HashMap<FileId, ()>,
+    /// Seen (device, inode) pairs for files with `nlink > 1`, tagged with the
+    /// walk epoch that recorded them. A post-completion refresh walk bumps the
+    /// epoch, so files it re-measures are not rejected as duplicates of their
+    /// original walk while genuine hardlinks inside the refresh still dedup.
+    hardlinks: HashMap<FileId, u64>,
+    /// Current walk epoch; 0 is the original scan.
+    hardlink_epoch: u64,
     unrecorded_dirs: u64,
     hardlink_table_full: bool,
     /// Reused by [`ScanTree::path`] so repeated queries do not reallocate.
@@ -317,6 +350,7 @@ impl ScanTree {
             interner,
             config,
             hardlinks: HashMap::new(),
+            hardlink_epoch: 0,
             unrecorded_dirs: 0,
             hardlink_table_full: false,
             scratch: Vec::new(),
@@ -417,14 +451,22 @@ impl ScanTree {
     /// Returns `true` when the file was counted, `false` when it was recognised
     /// as an already-counted hardlink. Passing an unusable `file_id` (inode 0)
     /// always counts.
+    /// Begin a new walk (a post-completion refresh): files measured from here
+    /// dedup against each other, not against the original scan.
+    pub fn bump_hardlink_epoch(&mut self) {
+        self.hardlink_epoch = self.hardlink_epoch.saturating_add(1);
+    }
+
     pub fn record_file(&mut self, parent: u32, size: ByteSize, file_id: Option<FileId>) -> bool {
         if let (Some(id), true) = (file_id, self.config.dedupe_hardlinks) {
             if id.is_usable() {
-                if self.hardlinks.contains_key(&id) {
+                // Only a file seen within the SAME walk epoch is a duplicate
+                // hardlink; entries from an earlier epoch are overwritten.
+                if self.hardlinks.get(&id) == Some(&self.hardlink_epoch) {
                     return false;
                 }
                 if self.hardlinks.len() < self.config.max_hardlink_entries as usize {
-                    self.hardlinks.insert(id, ());
+                    self.hardlinks.insert(id, self.hardlink_epoch);
                 } else {
                     self.hardlink_table_full = true;
                 }
@@ -560,6 +602,87 @@ impl ScanTree {
         (signed_size, file_delta)
     }
 
+    /// Prepare a closed subtree for a refresh walk: subtract its current
+    /// totals from the node itself and every (closed) ancestor, so the walk
+    /// starts from a zero base without the ancestors doubling the old bytes
+    /// when the freshly measured totals are propagated back.
+    pub fn prep_refresh(&mut self, index: u32) {
+        let Some(node) = self.nodes.get(index as usize).copied() else {
+            return;
+        };
+        let old = node.size;
+        let files = node.file_count;
+        let mut cursor = index;
+        loop {
+            let Some(node) = self.nodes.get(cursor as usize).copied() else {
+                break;
+            };
+            if let Some(n) = self.nodes.get_mut(cursor as usize) {
+                n.size -= old;
+                n.file_count = n.file_count.saturating_sub(files);
+            }
+            if node.parent == NONE {
+                break;
+            }
+            cursor = node.parent;
+        }
+    }
+
+    /// Reset a node's accumulated subtree totals to zero without touching its
+    /// identity, linkage or flags.
+    pub fn reset_totals(&mut self, index: u32) {
+        if let Some(node) = self.nodes.get_mut(index as usize) {
+            node.size = ByteSize::ZERO;
+            node.file_count = 0;
+        }
+    }
+
+    /// Mark a refreshed subtree settled and credit its freshly measured totals
+    /// to the ancestors that need it.
+    ///
+    /// The node already holds `size`/`files` from the walk (its base was zeroed
+    /// by [`ScanTree::prep_refresh`]); only its pending flag is cleared. Each
+    /// ancestor receives the totals, but the walk **stops at (and includes) the
+    /// first ancestor still open**: an open directory has not yet rolled its
+    /// contents into its parent, so the bytes reach higher levels naturally
+    /// when it later closes. Closed ancestors (the normal case for a
+    /// post-completion grant) all receive the totals, up to the root.
+    ///
+    /// Returns the changed ancestors, root-first, so a caller can publish one
+    /// size update per stale node.
+    pub fn refresh_propagate(
+        &mut self,
+        index: u32,
+        size: ByteSize,
+        files: u32,
+    ) -> Vec<u32> {
+        let Some(node) = self.nodes.get_mut(index as usize) else {
+            return Vec::new();
+        };
+        node.set_pending(false);
+        let parent = node.parent;
+
+        let mut changed: Vec<u32> = Vec::new();
+        let mut cursor = parent;
+        while cursor != NONE {
+            let Some(node) = self.nodes.get(cursor as usize).copied() else {
+                break;
+            };
+            let open = node.pending();
+            if let Some(n) = self.nodes.get_mut(cursor as usize) {
+                n.size += size;
+                n.file_count = n.file_count.saturating_add(files);
+            }
+            changed.push(cursor);
+            if open {
+                break;
+            }
+            cursor = node.parent;
+        }
+        changed.reverse();
+        changed
+    }
+
     pub fn add_unrecorded(&mut self, parent: u32, size: ByteSize, files: u32) {
         if let Some(node) = self.nodes.get_mut(parent as usize) {
             node.size += size;
@@ -686,8 +809,10 @@ impl ScanTree {
             right
                 .is_dir()
                 .cmp(&left.is_dir())
-                .then_with(|| right.size.logical.cmp(&left.size.logical))
+                // Allocated (real) bytes are the primary product number;
+                // logical only breaks ties between equal allocations.
                 .then_with(|| right.size.physical.cmp(&left.size.physical))
+                .then_with(|| right.size.logical.cmp(&left.size.logical))
                 // Stable, deterministic tie-break on identity so a re-render
                 // never reshuffles equal-sized siblings.
                 .then_with(|| left.key.cmp(&right.key))
@@ -698,7 +823,8 @@ impl ScanTree {
     pub fn stats(&self) -> TreeStats {
         let node_bytes = self.nodes.capacity() * std::mem::size_of::<TreeNode>();
         let interner_bytes = self.interner.resident_bytes();
-        let hardlink_bytes = self.hardlinks.capacity() * (std::mem::size_of::<FileId>() + 1);
+        let hardlink_bytes =
+            self.hardlinks.capacity() * (std::mem::size_of::<FileId>() + std::mem::size_of::<u64>());
         TreeStats {
             nodes: self.nodes.len() as u32,
             unrecorded_dirs: self.unrecorded_dirs,

@@ -48,14 +48,18 @@ impl ByteSize {
         }
     }
 
-    /// The size to lay out and sort by. Logical is the user-facing number, so it
-    /// wins whenever it was measured.
+    /// The size to lay out and sort by.
+    ///
+    /// This is a disk-space tool, so the bytes the volume actually spends win
+    /// whenever the platform reported them: a 64 GB VM image that occupies
+    /// 8 GB counts as 8 GB, and a sparse file counts by its extents. Logical
+    /// size remains the fallback when allocation was not reported.
     #[inline]
     pub const fn dominant(self) -> u64 {
-        if self.logical > 0 {
-            self.logical
-        } else {
+        if self.physical > 0 {
             self.physical
+        } else {
+            self.logical
         }
     }
 
@@ -121,9 +125,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dominant_prefers_logical() {
-        assert_eq!(ByteSize::new(100, 4096).dominant(), 100);
+    fn dominant_prefers_physical_allocation() {
+        // A VM/sparse file claims 100 logical bytes but occupies 4096:
+        // real disk usage is what the product counts.
+        assert_eq!(ByteSize::new(100, 4096).dominant(), 4096);
         assert_eq!(ByteSize::logical_only(0).dominant(), 0);
+        // Allocation unknown: logical is all there is.
+        assert_eq!(ByteSize::logical_only(100).dominant(), 100);
         assert_eq!(ByteSize::new(0, 4096).dominant(), 4096);
     }
 

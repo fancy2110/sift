@@ -31,13 +31,19 @@ pub mod fd {
     use std::os::unix::io::RawFd;
     use std::path::Path;
 
-    /// Open a directory by absolute path.
+    /// Open a directory by absolute path. On success the descriptor consumes
+    /// one walker-budget slot, released when it is closed with
+    /// [`super::close_raw_fd`].
     pub fn open_path(path: &Path) -> io::Result<RawFd> {
         let c_path = CString::new(path.as_os_str().as_bytes())?;
+        #[cfg(target_os = "macos")]
+        super::fd_budget::acquire();
         let fd = unsafe {
             libc::open(c_path.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY)
         };
         if fd < 0 {
+            #[cfg(target_os = "macos")]
+            super::fd_budget::release();
             Err(io::Error::last_os_error())
         } else {
             Ok(fd)
@@ -67,6 +73,246 @@ pub mod fd {
             Err(io::Error::last_os_error())
         } else {
             Ok(())
+        }
+    }
+}
+
+/// Why a directory could not be read. Coarse on purpose: the scan engine only
+/// needs to tell "the user can grant this" apart from real failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReadErrorKind {
+    /// The directory vanished or never existed.
+    NotFound,
+    /// Access denied by the macOS TCC privacy subsystem even though this
+    /// process satisfies the POSIX owner/mode bits. A user selection in an
+    /// open panel grants persistent access.
+    PermissionTcc,
+    /// Access denied by POSIX ownership/mode bits themselves (typically a
+    /// root-owned 0700 system directory). A panel user selection cannot
+    /// grant this; only an administrator can.
+    PermissionPosix,
+    /// Any other I/O error.
+    Other,
+}
+
+/// Map an OS error to a [`ReadErrorKind`]. Permission errors are classified
+/// against `path` (see [`classify_denial`]).
+fn classify_io_error_at(err: &io::Error, path: &Path) -> ReadErrorKind {
+    #[cfg(unix)]
+    {
+        match err.raw_os_error() {
+            Some(libc::ENOENT) => return ReadErrorKind::NotFound,
+            Some(libc::EACCES | libc::EPERM) => return classify_denial(path),
+            _ => {}
+        }
+    }
+    match err.kind() {
+        io::ErrorKind::NotFound => ReadErrorKind::NotFound,
+        io::ErrorKind::PermissionDenied => ReadErrorKind::PermissionTcc,
+        _ => ReadErrorKind::Other,
+    }
+}
+
+/// Classify an EACCES/EPERM on `path` as TCC or POSIX. The POSIX decision is
+/// reconstructed from the directory's stat (stat itself is not gated by TCC):
+/// when this process would pass the owner/group/other check yet `open` failed,
+/// the denial comes from TCC; otherwise the mode bits keep us out.
+fn classify_denial(path: &Path) -> ReadErrorKind {
+    #[cfg(unix)]
+    {
+        if let Ok(meta) = std::fs::metadata(path) {
+            use std::os::unix::fs::MetadataExt;
+            let mode = meta.mode();
+            let posix_allows = if unsafe { libc::geteuid() } == meta.uid() {
+                mode & 0o500 == 0o500
+            } else {
+                let mut groups = [0u32; 64];
+                let count = unsafe {
+                    libc::getgroups(groups.len() as i32, groups.as_mut_ptr())
+                };
+                let in_group = count > 0
+                    && groups[..count as usize].contains(&meta.gid());
+                if in_group {
+                    mode & 0o050 == 0o050
+                } else {
+                    mode & 0o005 == 0o005
+                }
+            };
+            return if posix_allows {
+                ReadErrorKind::PermissionTcc
+            } else {
+                ReadErrorKind::PermissionPosix
+            };
+        }
+    }
+    let _ = path;
+    // Stat failed: optimistically offer the grant flow rather than blocking it.
+    ReadErrorKind::PermissionTcc
+}
+
+/// Process-wide budget on descriptors held by the walker: preopened child
+/// descriptors riding the scan queue plus one transient descriptor per
+/// reading worker.
+///
+/// Without the cap, a directory containing thousands of subdirectories (nested
+/// package caches, build trees) would push the process to EMFILE, and
+/// cancelling a scan would leak every descriptor still queued. The cap means
+/// children beyond the budget simply are not preopened and fall back to a
+/// path open when dispatched.
+#[cfg(target_os = "macos")]
+mod fd_budget {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::OnceLock;
+
+    static HELD: AtomicUsize = AtomicUsize::new(0);
+    static LIMIT: OnceLock<usize> = OnceLock::new();
+    /// Subset of HELD: preopened descriptors riding the priority queue,
+    /// waiting to be dispatched.
+    static QUEUED: AtomicUsize = AtomicUsize::new(0);
+
+    /// Descriptors reserved for everything but the walker (stdio, loaded
+    /// libraries, IPC, the SQLite journal...).
+    const RESERVE: usize = 64;
+    /// Absolute ceiling even when `rlimit` allows far more: keeps the set of
+    /// fds riding the queue small and predictable.
+    const MAX_HELD: usize = 448;
+    /// Preferred open-file table size; macOS' default soft limit is 256.
+    const PREFERRED_NOFILE: u64 = 1024;
+
+    /// Number of descriptors the walker may hold at once.
+    pub fn limit() -> usize {
+        *LIMIT.get_or_init(|| {
+            raise_nofile();
+            let soft = current_nofile();
+            soft.saturating_sub(RESERVE).clamp(1, MAX_HELD)
+        })
+    }
+
+    /// Try to claim one descriptor slot without blocking.
+    pub fn try_acquire() -> bool {
+        let cap = limit();
+        let mut current = HELD.load(Ordering::Relaxed);
+        loop {
+            if current >= cap {
+                return false;
+            }
+            match HELD.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    /// Claim a slot for a transient (path-opened) directory descriptor,
+    /// briefly waiting for one to free up. If the budget stays exhausted —
+    /// only possible under pathological scheduling — the count is allowed to
+    /// oversubscribe by one so a worker can never deadlock: every close is
+    /// symmetric, so the counter returns under the cap as the queue drains.
+    pub fn acquire() {
+        if try_acquire() {
+            return;
+        }
+        for _ in 0..256 {
+            std::thread::yield_now();
+            if try_acquire() {
+                return;
+            }
+        }
+        for _ in 0..16 {
+            std::thread::sleep(std::time::Duration::from_micros(100));
+            if try_acquire() {
+                return;
+            }
+        }
+        HELD.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Return one slot after a descriptor is closed.
+    pub fn release() {
+        let previous = HELD.fetch_sub(1, Ordering::Release);
+        debug_assert!(previous > 0, "fd budget released without an acquire");
+    }
+
+    /// Cap on descriptors queued ahead of dispatch. Kept far below the main
+    /// cap so a backlog of preopened jobs cannot grab every slot and then sit
+    /// behind higher-priority path-open jobs (which would sleep in `acquire`
+    /// while the fds ride jobs that never pop — observed as a minutes-long,
+    /// CPU-burning stall with zero UI progress).
+    const QUEUED_CAP: usize = 48;
+
+    /// Claim a slot for a preopened descriptor that will ride the queue.
+    pub fn try_acquire_queued() -> bool {
+        if QUEUED.load(Ordering::Relaxed) >= QUEUED_CAP {
+            return false;
+        }
+        if !try_acquire() {
+            return false;
+        }
+        QUEUED.fetch_add(1, Ordering::AcqRel);
+        true
+    }
+
+    /// A queued descriptor is being dispatched to a worker: it becomes an
+    /// ordinary transient slot. HELD is untouched; only the queued subset
+    /// drops.
+    pub fn adopt_queued() {
+        let previous = QUEUED.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "queued fd adopted without a queued slot");
+    }
+
+    /// Release a queued descriptor that was closed before dispatch (a job
+    /// dropped during cancellation, an un-adopted child).
+    pub fn release_queued() {
+        let previous = QUEUED.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "queued fd released without a queued slot");
+        release();
+    }
+
+    /// Walker-held slot count, for tests asserting acquire/release symmetry.
+    #[cfg(test)]
+    pub fn held() -> usize {
+        HELD.load(Ordering::Relaxed)
+    }
+
+    fn current_nofile() -> usize {
+        let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) } != 0 {
+            return 0;
+        }
+        let limit = unsafe { limit.assume_init() };
+        if limit.rlim_cur == libc::RLIM_INFINITY {
+            usize::MAX
+        } else {
+            limit.rlim_cur as usize
+        }
+    }
+
+    /// Raise the soft `RLIMIT_NOFILE` toward [`PREFERRED_NOFILE`], bounded by
+    /// the hard limit. Best effort: a failure leaves the default in place and
+    /// the budget shrinks accordingly.
+    fn raise_nofile() {
+        let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) } != 0 {
+            return;
+        }
+        let mut limit = unsafe { limit.assume_init() };
+        if limit.rlim_cur >= PREFERRED_NOFILE {
+            return;
+        }
+        let target = if limit.rlim_max == libc::RLIM_INFINITY {
+            PREFERRED_NOFILE
+        } else {
+            limit.rlim_max.min(PREFERRED_NOFILE)
+        };
+        if target > limit.rlim_cur {
+            limit.rlim_cur = target;
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
         }
     }
 }
@@ -242,14 +488,31 @@ impl ChildFdMap {
     /// Close every descriptor still held, once the coordinator has picked the
     /// children it wants.
     pub fn close_remaining(&mut self) {
-        if let Some(map) = self.built.as_mut() {
-            for (_, fd) in map.drain() {
-                unsafe { libc::close(fd) };
+        // Map-held descriptors still carry their queued classification:
+        // release both counters on macOS.
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(map) = self.built.as_mut() {
+                for (_, fd) in map.drain() {
+                    close_queued_fd(fd);
+                }
+                return;
             }
-            return;
+            for (_, fd) in self.pairs.drain(..) {
+                close_queued_fd(fd);
+            }
         }
-        for (_, fd) in self.pairs.drain(..) {
-            unsafe { libc::close(fd) };
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Some(map) = self.built.as_mut() {
+                for (_, fd) in map.drain() {
+                    close_raw_fd(fd);
+                }
+                return;
+            }
+            for (_, fd) in self.pairs.drain(..) {
+                close_raw_fd(fd);
+            }
         }
     }
 
@@ -258,12 +521,44 @@ impl ChildFdMap {
     }
 }
 
+/// Safety net: descriptors left in a map when it is dropped (an early return,
+/// a cancelled scan) are closed instead of leaking.
+#[cfg(unix)]
+impl Drop for ChildFdMap {
+    fn drop(&mut self) {
+        self.close_remaining();
+    }
+}
+
 /// Close a raw descriptor. Small unix-only seam so callers do not need their
 /// own `libc` dependency for descriptor cleanup.
 #[cfg(unix)]
 pub fn close_raw_fd(fd: std::os::unix::io::RawFd) {
     unsafe { libc::close(fd) };
+    // Every descriptor the walker closes came from a budgeted open
+    // (`open_path` / `open_child_dirs`); release its slot.
+    #[cfg(target_os = "macos")]
+    fd_budget::release();
 }
+
+/// Close a preopened descriptor that never left the queue (a job dropped
+/// during cancellation) and release its queued slot.
+#[cfg(target_os = "macos")]
+pub fn close_queued_fd(fd: std::os::unix::io::RawFd) {
+    unsafe { libc::close(fd) };
+    fd_budget::release_queued();
+}
+
+/// The descriptor riding `job` is dispatched and becomes transient; drop its
+/// queued classification. No-op off macOS.
+#[cfg(target_os = "macos")]
+pub fn adopt_queued_fd() {
+    fd_budget::adopt_queued();
+}
+
+/// See [`adopt_queued_fd`].
+#[cfg(not(target_os = "macos"))]
+pub fn adopt_queued_fd() {}
 
 /// `st_size` of an already-open descriptor, via `fstat(2)`.
 ///
@@ -301,6 +596,12 @@ pub fn open_child_dirs(
             && entry.name != b"."
             && entry.name != b".."
         {
+            // Claim a queued slot before opening; when the budget (or the
+            // smaller queue cap) is exhausted skip the preopen — the child
+            // job opens by path later.
+            if !fd_budget::try_acquire_queued() {
+                continue;
+            }
             if let Ok(name) = std::ffi::CString::new(entry.name.as_slice()) {
                 let fd = unsafe {
                     libc::openat(
@@ -311,7 +612,13 @@ pub fn open_child_dirs(
                 };
                 if fd >= 0 {
                     pairs.push((entry.name.clone(), fd));
+                } else {
+                    // Open failed (TCC denial, vanished entry): give the slot
+                    // back rather than closing an acquired descriptor.
+                    fd_budget::release_queued();
                 }
+            } else {
+                fd_budget::release_queued();
             }
         }
     }
@@ -330,7 +637,10 @@ pub fn open_child_dirs(
 /// preopened descriptors for every real subdirectory, so the child jobs can
 /// skip path resolution entirely.
 pub struct ReadOutcome {
-    pub entries: Option<Vec<RawEntry>>,
+    /// Entries of the directory, or why it could not be read. The error is
+    /// classified so the engine can wait for authorization instead of
+    /// treating every failure alike.
+    pub entries: Result<Vec<RawEntry>, ReadErrorKind>,
     pub child_fds: ChildFdMap,
 }
 
@@ -350,21 +660,27 @@ pub fn read_with_children(
 ) -> ReadOutcome {
     #[cfg(target_os = "macos")]
     {
-        let owned_fd = match preopened {
-            Some(fd) => Some(fd),
-            None => fd::open_path(path).ok(),
+        let opened = match preopened {
+            Some(fd) => Ok(fd),
+            None => fd::open_path(path),
         };
-        let Some(dir_fd) = owned_fd else {
-            return ReadOutcome {
-                entries: None,
-                child_fds: ChildFdMap::default(),
-            };
+        let dir_fd = match opened {
+            Ok(fd) => fd,
+            Err(err) => {
+                return ReadOutcome {
+                    entries: Err(classify_io_error_at(&err, path)),
+                    child_fds: ChildFdMap::default(),
+                };
+            }
         };
-        let entries = DirReader::read_fd_reusing(dir_fd, want_physical, buffer).ok();
-        let pairs = open_child_dirs(dir_fd, entries.as_deref().unwrap_or(&[]));
+        let entries = DirReader::read_fd_reusing(dir_fd, want_physical, buffer);
+        // Preopen children even if the bulk read failed; the entries list is
+        // simply empty in that case.
+        let pairs =
+            open_child_dirs(dir_fd, entries.as_ref().map(Vec::as_slice).unwrap_or(&[]));
         close_raw_fd(dir_fd);
         ReadOutcome {
-            entries,
+            entries: entries.map_err(|err| classify_io_error_at(&err, path)),
             child_fds: ChildFdMap::from_pairs(pairs),
         }
     }
@@ -373,8 +689,8 @@ pub fn read_with_children(
         debug_assert!(preopened.is_none(), "fd support exists only on macOS");
         let _ = buffer;
         let entries = DirReader::read_portable(path, want_physical)
-            .ok()
-            .map(|reader| reader.into_parts().1);
+            .map(|reader| reader.into_parts().1)
+            .map_err(|err| classify_io_error_at(&err, path));
         ReadOutcome {
             entries,
             child_fds: ChildFdMap::default(),
@@ -762,6 +1078,9 @@ mod macos {
 
     /// macOS returns entries in groups; this is the max we buffer in one call.
     const CHUNK_BYTES: usize = 1024 * 1024;
+    /// Ceiling for a worker's reusable bulk buffer, so ERANGE growth stays
+    /// bounded (16 MiB per worker worst case).
+    const MAX_BACKING_BYTES: usize = 16 * 1024 * 1024;
     /// Most directories hold a handful of entries, so start small and grow only
     /// when a listing asks for more — avoids zeroing a megabyte per directory.
     const INITIAL_BYTES: usize = 16 * 1024;
@@ -939,7 +1258,14 @@ mod macos {
                 let err = io::Error::last_os_error();
                 return match err.raw_os_error() {
                     Some(libc::ERANGE) => {
-                        // Buffer too small for the chunk; grow and retry.
+                        // Buffer too small for the chunk; grow and retry, but
+                        // stop at MAX_BACKING_BYTES so one pathological entry
+                        // cannot make a worker's buffer grow without bound.
+                        if backing.len() * 8 >= MAX_BACKING_BYTES {
+                            return Err(BulkError::Fallback(
+                                "entry exceeds bulk buffer cap",
+                            ));
+                        }
                         backing.resize(
                             backing.len().saturating_mul(2).max(CHUNK_BYTES / 8),
                             0,
@@ -1324,5 +1650,76 @@ mod tests {
         assert_eq!(e2.file_id(), Some(FileId::new(1, 42)));
         assert_eq!(e2.size().logical, 10);
         assert_eq!(e2.size().physical, 4096);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn denial_is_classified_tcc_vs_posix() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir()
+            .join(format!("sift-deny-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let tcc_like = base.join("openbits");
+        let posix_like = base.join("nobits");
+        std::fs::create_dir_all(&tcc_like).unwrap();
+        std::fs::create_dir_all(&posix_like).unwrap();
+
+        // Owner's r+x bits present: a hypothetical denial must come from TCC.
+        assert_eq!(classify_denial(&tcc_like), ReadErrorKind::PermissionTcc);
+
+        // Owner bits stripped: POSIX itself denies us.
+        let mut perms = std::fs::metadata(&posix_like).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&posix_like, perms).unwrap();
+        assert_eq!(classify_denial(&posix_like), ReadErrorKind::PermissionPosix);
+
+        // Through the OS-error mapper both errnos take the same path-based call.
+        assert_eq!(
+            classify_io_error_at(
+                &io::Error::from_raw_os_error(libc::EACCES),
+                &posix_like
+            ),
+            ReadErrorKind::PermissionPosix
+        );
+
+        let mut perms = std::fs::metadata(&posix_like).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&posix_like, perms).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_entry_errno_classifies_as_not_found() {
+        assert_eq!(
+            classify_io_error_at(
+                &io::Error::from_raw_os_error(libc::ENOENT),
+                Path::new("/nonexistent")
+            ),
+            ReadErrorKind::NotFound
+        );
+    }
+
+    /// Exhaust the budget through the non-blocking path: no slot is granted
+    /// past the cap, and releasing every taken slot restores the starting
+    /// count (every claim is paired with a release).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fd_budget_is_capped_and_symmetric() {
+        let start = fd_budget::held();
+        let mut taken = 0;
+        while fd_budget::try_acquire() {
+            taken += 1;
+            assert!(fd_budget::held() <= fd_budget::limit());
+        }
+        assert_eq!(fd_budget::held(), fd_budget::limit(), "budget fully held");
+        assert!(
+            !fd_budget::try_acquire(),
+            "no descriptor slot past the cap"
+        );
+        for _ in 0..taken {
+            fd_budget::release();
+        }
+        assert_eq!(fd_budget::held(), start, "net held count must be zero");
     }
 }

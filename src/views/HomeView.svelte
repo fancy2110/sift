@@ -72,6 +72,36 @@
     const preferred = store.volumes.find((v) => !v.isRemovable) ?? store.volumes[0];
     if (preferred) await store.selectDisk(preferred.id);
   }
+
+  // r = 92 → circumference of the progress arc.
+  const RING_C = 2 * Math.PI * 92;
+  // Permission cards are grantable-first; keep the list compact.
+  const MAX_PERM_CARDS = 6;
+  // Byte-coverage percent is available once the volume capacity is known.
+  let hasPercent = $derived(store.progress.totalBytes > 0);
+  let arcLen = $derived(
+    hasPercent
+      ? Math.max(2, (RING_C * store.progress.percent) / 100)
+      : 260
+  );
+
+  // Elapsed-time counter inside the ring: starts with the scan and ticks until
+  // it ends (including while parked on a permission request).
+  let scanStartedAt = $state(0);
+  let scanNow = $state(0);
+  $effect(() => {
+    if (!store.scanning) return;
+    scanStartedAt = performance.now();
+    scanNow = scanStartedAt;
+    const timer = setInterval(() => (scanNow = performance.now()), 250);
+    return () => clearInterval(timer);
+  });
+  let elapsedLabel = $derived.by(() => {
+    const secs = Math.max(0, Math.floor((scanNow - scanStartedAt) / 1000));
+    const mins = Math.floor(secs / 60);
+    const rest = (secs % 60).toString().padStart(2, '0');
+    return `${mins}:${rest}`;
+  });
 </script>
 
 <div class="hub">
@@ -88,7 +118,7 @@
       class="hub-settings-btn"
       aria-label={t('home.settings')}
       title={t('home.settings')}
-      onclick={() => (store.settingsOpen = true)}
+      onclick={() => store.openSettings()}
     >
       <Icon name="settings" size={14} />
     </button>
@@ -109,14 +139,18 @@
       aria-hidden="true"
     >
       {#if store.scanning}
-        <svg class="prog-ring spin-slow" viewBox="0 0 200 200">
+        <svg
+          class="prog-ring"
+          class:spin-slow={!hasPercent}
+          viewBox="0 0 200 200"
+        >
           <circle class="prog-track" cx="100" cy="100" r="92" />
           <circle
             class="prog-arc"
             cx="100"
             cy="100"
             r="92"
-            stroke-dasharray="260 318"
+            stroke-dasharray={`${arcLen} ${RING_C}`}
             transform="rotate(-90 100 100)"
           />
         </svg>
@@ -164,25 +198,42 @@
       bind:this={stackEl}
     >
     <p class="hub-eyebrow" in:fade={{ duration: 480, delay: 120 }}>
-      {store.scanning ? t('home.scanning') : t('home.total')}
+      {store.scanning
+        ? (store.progress.awaiting > 0
+            ? t('home.awaitingAuth')
+            : t('home.scanning'))
+        : t('home.total')}
     </p>
     {#if store.scanning}
-      <h1 class="hub-total num">
-        {store.scannedFiles.toLocaleString()}<span class="hub-pct">{t('home.itemsUnit')}</span>
-      </h1>
+      {#if hasPercent}
+        <h1 class="hub-total num">
+          {Math.round(store.progress.percent)}<span class="hub-pct">%</span>
+        </h1>
+      {:else}
+        <h1 class="hub-total num">
+          {store.scannedFiles.toLocaleString()}<span class="hub-pct">{t('home.itemsUnit')}</span>
+        </h1>
+      {/if}
     {:else}
       {@const main = formatSizeParts(store.totalReclaimable)}
       <h1 class="hub-total num" in:fly={{ y: 16, duration: 620, delay: 180, easing: cubicOut }}>
         {main.value}<span class="hub-unit">{main.unit}</span>
       </h1>
     {/if}
-    <p
-      class="hub-state"
-      class:state-scanning={store.scanning}
-    >
-      <span class="state-dot"></span>
-      {store.scanning ? t('home.stateScanning') : t('home.stateReady')}
-    </p>
+    {#if store.scanning}
+      {@const p = store.progress}
+      {@const bytes = formatSizeParts(p.bytes)}
+      <p class="hub-state hub-scan-stats state-scanning">
+        <span class="state-dot"></span>
+        {p.files.toLocaleString()} {t('home.itemsUnit')} · {p.dirs.toLocaleString()} · {bytes.value}{bytes.unit}
+      </p>
+      <p class="hub-scan-time num">{elapsedLabel}</p>
+    {:else}
+      <p class="hub-state">
+        <span class="state-dot"></span>
+        {t('home.stateReady')}
+      </p>
+    {/if}
 
     <button
       class="hub-cta"
@@ -194,6 +245,52 @@
     </button>
     </div>
    </div>
+
+   {#if store.permissionRequests.length}
+     {@const sorted = [...store.permissionRequests].sort(
+       (a, b) => Number(b.tcc) - Number(a.tcc))}
+     {@const visible = sorted.slice(0, MAX_PERM_CARDS)}
+     <div class="perm-list">
+       <div class="perm-head">
+         <span>{t('permission.heading', [sorted.length])}</span>
+         <button
+           type="button"
+           class="perm-skipall"
+           onclick={() => store.skipAllPermissions()}
+         >
+           {t('permission.skipAll')}
+         </button>
+       </div>
+       {#each visible as req (req.id)}
+         <div class="perm-card" class:posix={!req.tcc} in:fly={{ y: 14, duration: 380, easing: cubicOut }}>
+           <p class="perm-title">
+             <span class="perm-tag" class:tag-posix={!req.tcc}>
+               {req.tcc ? t('permission.tccTag') : t('permission.adminTag')}
+             </span>
+             {req.name}
+           </p>
+           <p class="perm-msg">
+             {req.tcc ? t('permission.message', [req.name]) : t('permission.adminNeeded')}
+           </p>
+           <div class="perm-actions">
+             {#if req.tcc}
+               <button type="button" class="perm-btn primary" onclick={() => store.grantPermission(req)}>
+                 {t('permission.grant')}
+               </button>
+             {/if}
+             <button type="button" class="perm-btn" onclick={() => store.skipPermission(req)}>
+               {t('permission.skip')}
+             </button>
+           </div>
+         </div>
+       {/each}
+       {#if sorted.length > visible.length}
+         <p class="perm-more">
+           {t('permission.more', [sorted.length - visible.length])}
+         </p>
+       {/if}
+     </div>
+   {/if}
   </div>
 
   <!-- entry cards -->
@@ -630,5 +727,131 @@
   .card-sub {
     font-size: 12px;
     color: var(--color-muted);
+  }
+
+  .hub-scan-stats {
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .hub-scan-time {
+    margin: 0 0 36px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--color-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .perm-list {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .perm-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    color: var(--color-faint);
+  }
+  .perm-skipall {
+    padding: 4px 10px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in oklch, var(--color-border-strong) 60%, transparent);
+    background: transparent;
+    color: var(--color-faint);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    cursor: default;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .perm-skipall:hover {
+    background: color-mix(in oklch, var(--color-surface-3, var(--color-surface-2)) 70%, transparent);
+    color: var(--color-fg);
+  }
+  .perm-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 16px;
+    border-radius: 14px;
+    border: 1px solid color-mix(in oklch, var(--color-border-strong) 55%, transparent);
+    background: color-mix(in oklch, var(--color-surface) 92%, var(--color-shadow) 6%);
+    box-shadow: 0 16px 36px -24px var(--color-shadow);
+  }
+  .perm-card.posix {
+    border-color: color-mix(in oklch, var(--color-amber, #c8852c) 38%, transparent);
+  }
+  .perm-title {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--color-fg);
+  }
+  .perm-tag {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 7px;
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
+    color: var(--color-violet);
+    background: color-mix(in oklch, var(--color-violet) 14%, transparent);
+  }
+  .perm-tag.tag-posix {
+    color: var(--color-amber, #c8852c);
+    background: color-mix(in oklch, var(--color-amber, #c8852c) 14%, transparent);
+  }
+  .perm-msg {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--color-faint);
+  }
+  .perm-more {
+    margin: 0;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    color: var(--color-faint);
+  }
+  .perm-actions {
+    display: flex;
+    gap: 8px;
+    align-self: flex-end;
+  }
+  .perm-btn {
+    padding: 7px 14px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in oklch, var(--color-border-strong) 60%, transparent);
+    background: transparent;
+    color: var(--color-fg);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: default;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .perm-btn:hover {
+    background: color-mix(in oklch, var(--color-surface-3, var(--color-surface-2)) 70%, transparent);
+  }
+  .perm-btn.primary {
+    border-color: transparent;
+    background: var(--color-violet);
+    color: #fff;
+  }
+  .perm-btn.primary:hover {
+    background: color-mix(in oklch, var(--color-violet) 88%, #fff 6%);
   }
 </style>

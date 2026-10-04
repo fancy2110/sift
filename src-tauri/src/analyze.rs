@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sift_analyze::cleanup::{display_command, plan_for};
 use sift_analyze::{
     redact_path, Adjudicator, AnalysisPolicy, AnalysisStage, Analyzer, Decision, DecisionOutcome,
@@ -132,6 +132,36 @@ pub struct AnalysisSummaryDto {
     pub used_remote: bool,
     /// A provider that is configured but not consented to, so the UI can ask.
     pub remote_needs_consent: bool,
+}
+
+/// AI provider configuration for the settings sheet.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConfigDto {
+    pub enabled: bool,
+    pub provider: String,
+    pub endpoint: String,
+    pub model: String,
+    pub language: String,
+    pub batch_size: usize,
+    /// Whether a token is stored (Keychain or the `SIFT_AI_API_KEY`
+    /// environment variable); the secret itself is never returned.
+    pub has_token: bool,
+}
+
+/// Settings-sheet submission. `token` semantics: `None` keeps the stored
+/// secret, `Some("")` clears it, `Some(value)` replaces it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveAiConfigInput {
+    pub enabled: bool,
+    pub provider: String,
+    pub endpoint: String,
+    pub model: String,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -691,6 +721,86 @@ pub struct RoutineSuggestionDto {
     pub cadence: String,
 }
 
+/// Read the AI provider configuration for the settings sheet.
+#[tauri::command]
+pub fn get_ai_config(services: State<'_, AppServices>) -> AiConfigDto {
+    let ai = services.store.settings().ai;
+    let has_token = ai.api_key_from_env().is_some() || crate::credentials::has_token();
+    AiConfigDto {
+        enabled: ai.enabled,
+        provider: ai.provider,
+        endpoint: ai.endpoint,
+        model: ai.model,
+        language: ai.language,
+        batch_size: ai.batch_size,
+        has_token,
+    }
+}
+
+/// Persist the AI provider configuration and, when supplied, its token.
+#[tauri::command]
+pub fn save_ai_config(
+    services: State<'_, AppServices>,
+    config: SaveAiConfigInput,
+) -> Result<AiConfigDto, String> {
+    let endpoint = config.endpoint.trim().to_string();
+    let model = config.model.trim().to_string();
+    let provider = config.provider.trim().to_string();
+
+    // Handle the token first so an enable without a secret cannot succeed
+    // before storage fails below it.
+    let token_after = match config.token.as_deref() {
+        None => crate::credentials::has_token(),
+        Some(value) if value.trim().is_empty() => {
+            crate::credentials::delete_token()?;
+            false
+        }
+        Some(value) => {
+            crate::credentials::set_token(value.trim())?;
+            true
+        }
+    };
+    let env_key_present = services.store.settings().ai.api_key_from_env().is_some();
+
+    if config.enabled && (endpoint.is_empty() || model.is_empty()) {
+        return Err("err.aiEndpointRequired".to_string());
+    }
+    if config.enabled && !(token_after || env_key_present) {
+        return Err("err.aiTokenRequired".to_string());
+    }
+
+    services.store.update_settings(|settings| {
+        let ai = &mut settings.ai;
+        ai.enabled = config.enabled;
+        // Enabling is itself the explicit consent: the sheet shows exactly
+        // what metadata leaves the machine. Disabling leaves the recorded
+        // consent in place so re-enabling needs no second acknowledgement.
+        if config.enabled {
+            ai.consent_granted = true;
+        }
+        ai.provider = provider;
+        ai.endpoint = endpoint;
+        ai.model = model;
+        if let Some(language) = config.language.as_deref() {
+            if !language.trim().is_empty() {
+                ai.language = language.trim().to_string();
+            }
+        }
+    });
+    let _ = services.store.flush_if_dirty();
+
+    let ai = services.store.settings().ai;
+    Ok(AiConfigDto {
+        enabled: ai.enabled,
+        provider: ai.provider,
+        endpoint: ai.endpoint,
+        model: ai.model,
+        language: ai.language,
+        batch_size: ai.batch_size,
+        has_token: token_after || env_key_present,
+    })
+}
+
 // ---- helpers ---------------------------------------------------------------
 
 /// Build the adjudicator: local rules, plus a remote provider when the user has
@@ -701,7 +811,10 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
     #[cfg(feature = "remote-ai")]
     {
         if ai.is_usable() {
-            if let Some(api_key) = ai.api_key_from_env() {
+            // Prefer the environment variable; otherwise the token kept in
+            // the user's Keychain by the settings sheet.
+            let stored_key = ai.api_key_from_env().or_else(crate::credentials::token);
+            if let Some(api_key) = stored_key {
                 let config = sift_analyze::LlmConfig::new(
                     ai.provider.clone(),
                     ai.endpoint.clone(),

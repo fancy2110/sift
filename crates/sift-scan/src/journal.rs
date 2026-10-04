@@ -86,6 +86,13 @@ pub trait ScanJournal: Send + Sync {
     /// Persist final aggregates of directories that just closed.
     fn closed(&self, scan_root: &str, updates: Vec<ClosedDir>);
 
+    /// Drop incomplete (still-open) directory records for `root` before a new
+    /// scan loads the journal. Open directories are re-walked from scratch
+    /// regardless, so they have no reuse value; they only accumulate whenever a
+    /// previous scan was killed mid-run. Completed (closed) records survive and
+    /// stay available for reuse. Default is a no-op.
+    fn prune_open(&self, _root: &str) {}
+
     /// Load an earlier, interrupted session for `root`. Empty when nothing is
     /// resumable.
     fn load(&self, root: &str) -> RestoredScan;

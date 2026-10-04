@@ -273,7 +273,14 @@
                       {/if}
                     </span>
 
-                    <span class="num ex-size">{formatSize(entry.size)}</span>
+                    <span class="num ex-size">
+                      {#if entry.isDir && entry.status !== 'ok'}
+                        <span class="ex-status ex-status-{entry.status}">
+                          {t(`status.${entry.status}`)}
+                        </span>
+                      {/if}
+                      {formatSize(entry.size)}
+                    </span>
 
                     <span class="ex-action">
                       {#if entry.risk === 'keep'}
@@ -824,11 +831,33 @@
     color: var(--color-fg);
   }
   .ex-size {
-    width: 62px;
+    width: 92px;
     flex: none;
-    text-align: right;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
     font-size: 11.5px;
     color: var(--color-muted);
+  }
+  .ex-status {
+    padding: 1px 6px;
+    border-radius: 5px;
+    font-size: 9.5px;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+  }
+  .ex-status-estimated {
+    color: var(--color-warn);
+    background: color-mix(in oklch, var(--color-warn) 12%, transparent);
+  }
+  .ex-status-denied {
+    color: var(--color-danger);
+    background: color-mix(in oklch, var(--color-danger) 12%, transparent);
+  }
+  .ex-status-awaiting {
+    color: var(--color-violet);
+    background: color-mix(in oklch, var(--color-violet) 13%, transparent);
   }
   .ex-action {
     width: 60px;

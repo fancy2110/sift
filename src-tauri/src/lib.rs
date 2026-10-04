@@ -7,6 +7,7 @@
 
 mod analyze;
 mod cleanup;
+mod credentials;
 mod disks;
 mod places;
 mod scanner;
@@ -18,7 +19,8 @@ use analyze::AppServices;
 use disks::list_volumes;
 use places::list_places;
 use scanner::{
-    cancel_scan, pause_scan, resume_scan, scan_running, set_scan_focus, start_scan, ScanManager,
+    cancel_scan, list_dir_files, pause_scan, resolve_permission, resume_scan, scan_running,
+    set_scan_focus, start_scan, ScanManager,
 };
 use tauri::Manager as _;
 use watcher::{unwatch_fs, watch_fs, FsWatcherState};
@@ -47,6 +49,8 @@ pub fn run() {
             resume_scan,
             set_scan_focus,
             scan_running,
+            resolve_permission,
+            list_dir_files,
             // deletion and filesystem awareness
             watch_fs,
             unwatch_fs,
@@ -74,6 +78,8 @@ pub fn run() {
             analyze::run_routine,
             analyze::get_language,
             analyze::set_language,
+            analyze::get_ai_config,
+            analyze::save_ai_config,
         ])
         .setup(|app| {
             tray::build(app.handle())?;

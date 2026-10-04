@@ -232,6 +232,8 @@ pub struct Progress {
     pub coverage: f64,
     /// Seconds since the scan started.
     pub elapsed_secs: f64,
+    /// Directories parked while the user decides an authorization prompt.
+    pub awaiting: u64,
 }
 
 impl Progress {
@@ -327,6 +329,8 @@ pub enum ScanEvent {
     DirectoryClosed {
         scan: ScanId,
         key: crate::id::NodeKey,
+        /// How the close should be presented.
+        status: DirCloseStatus,
     },
     /// An interim total for a directory that is still filling in.
     DirectorySized {
@@ -335,6 +339,8 @@ pub enum ScanEvent {
         size: ByteSize,
         files: u32,
         pending: bool,
+        /// Totals are still an estimate pending exact calibration.
+        estimated: bool,
     },
     /// Periodic counters. Emitted at most a few times a second.
     Progress { scan: ScanId, progress: Progress },
@@ -357,6 +363,42 @@ pub enum ScanEvent {
     },
     /// Background calibration has finished.
     CalibrationFinished { scan: ScanId },
+    /// A directory needs an OS authorization decision (macOS TCC). The scan
+    /// parks it instead of skipping: the front end prompts the user, then the
+    /// decision is fed back to the engine, which either re-walks the
+    /// directory or closes it as explicitly skipped.
+    PermissionRequested {
+        scan: ScanId,
+        key: crate::id::NodeKey,
+        /// Absolute path the user should select in the open panel.
+        path: String,
+        /// Display name of the directory.
+        name: String,
+        /// `true` when the denial comes from macOS TCC (an open-panel user
+        /// selection grants it); `false` for POSIX owner/mode denials that
+        /// need an administrator.
+        tcc: bool,
+    },
+    /// A post-completion authorization grant finished re-walking the subtree;
+    /// totals were already patched through the tree and its ancestors. The
+    /// front end uses this to refresh analysis without a new full scan.
+    RefreshFinished {
+        scan: ScanId,
+        /// The directory that was re-walked.
+        path: String,
+    },
+}
+
+/// How a directory's final close is presented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirCloseStatus {
+    /// Walked completely; its size is exact.
+    Ok,
+    /// Unreadable or explicitly skipped by the user; size is unknown.
+    Denied,
+    /// Settled at zero pending an authorization decision the user can make
+    /// after the scan completes.
+    Awaiting,
 }
 
 /// One directory restored from a previous interrupted scan.
@@ -401,7 +443,9 @@ impl ScanEvent {
             | ScanEvent::Finished { scan, .. }
             | ScanEvent::Warning { scan, .. }
             | ScanEvent::Calibrated { scan, .. }
-            | ScanEvent::CalibrationFinished { scan, .. } => *scan,
+            | ScanEvent::CalibrationFinished { scan, .. }
+            | ScanEvent::PermissionRequested { scan, .. }
+            | ScanEvent::RefreshFinished { scan, .. } => *scan,
         }
     }
 }
