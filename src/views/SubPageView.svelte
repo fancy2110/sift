@@ -212,7 +212,8 @@
           <div class="ex-body">
             <div class="ex-list" data-od-id="explorer-list">
               <div class="ex-cols">
-                <span>{t('sub.col.name')}</span>
+                <span class="ex-col-icon"></span>
+                <span class="ex-col-name">{t('sub.col.name')}</span>
                 <span class="ex-col-note">{t('sub.col.note')}</span>
                 <span class="ex-col-size">{t('sub.col.size')}</span>
                 <span class="ex-col-action">{t('sub.col.action')}</span>
@@ -419,8 +420,8 @@
   .sp-head {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 20px 40px 14px;
+    gap: 12px;
+    padding: 18px clamp(14px, 2.6vw, 32px) 12px;
     flex: none;
   }
   .sp-back {
@@ -442,6 +443,7 @@
     background: color-mix(in oklch, var(--color-surface) 80%, transparent);
     font-size: 12px;
     color: var(--color-faint);
+    white-space: nowrap;
   }
   .sp-total-big {
     font-size: 13px;
@@ -460,6 +462,7 @@
     color: var(--color-cta-fg);
     font-size: 13px;
     font-weight: 620;
+    white-space: nowrap;
     cursor: default;
     box-shadow:
       0 1px 0 color-mix(in oklch, var(--color-sheen) 60%, transparent) inset,
@@ -470,7 +473,7 @@
     cursor: default;
   }
   .sp-tabbar {
-    padding: 0 40px;
+    padding: 0 clamp(14px, 2.6vw, 32px);
     flex: none;
   }
   .segmented {
@@ -515,7 +518,7 @@
   .sp-body {
     flex: 1;
     min-height: 0;
-    margin: 14px 40px 0;
+    margin: 14px clamp(14px, 2.6vw, 32px) 0;
     overflow: hidden;
     border-radius: 16px;
     border: 1px solid var(--color-border);
@@ -769,7 +772,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 11px 16px 8px;
+    /* Match the rows' x-padding so every header sits over its column. */
+    padding: 11px 8px 8px;
     flex: none;
     font-family: var(--font-mono);
     font-size: 10px;
@@ -777,26 +781,42 @@
     letter-spacing: 0.1em;
     color: var(--color-faint);
   }
+  .ex-col-icon {
+    width: 18px;
+    flex: none;
+  }
+  .ex-col-name {
+    flex: 0 1 150px;
+    min-width: 56px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
   .ex-col-size {
     width: 104px;
     flex: none;
     text-align: right;
+    white-space: nowrap;
   }
   .ex-col-note {
     flex: 1 1 0;
     min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
   }
   .ex-col-action {
-    width: 68px;
+    /* Wide enough for "No permission" on one line. */
+    width: 84px;
     flex: none;
     text-align: right;
+    white-space: nowrap;
   }
   .ex-rows {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     margin: 0;
-    padding: 2px 8px 10px;
+    /* No x-padding here: each row carries its own 8px, matching the header. */
+    padding: 2px 0 10px;
     list-style: none;
   }
   .ex-row {
@@ -866,7 +886,7 @@
     background: color-mix(in oklch, var(--color-violet) 13%, transparent);
   }
   .ex-action {
-    width: 68px;
+    width: 84px;
     flex: none;
     display: flex;
     justify-content: flex-end;
@@ -874,6 +894,7 @@
   .ex-protected {
     font-size: 10.5px;
     color: var(--color-faint);
+    white-space: nowrap;
   }
   .ex-sift-btn {
     display: inline-flex;
