@@ -238,6 +238,19 @@ impl Monitor {
         let cancel = Arc::new(AtomicBool::new(false));
         let finished = Arc::new(AtomicBool::new(false));
 
+        // The home boundary must name a real location. Canonicalize once up
+        // front: a home given but unresolvable is treated as missing, since a
+        // boundary we cannot prove is no boundary at all.
+        let home = home.and_then(|path| match std::fs::canonicalize(&path) {
+            Ok(real) => Some(real),
+            Err(_) => {
+                let _ = event_tx.send(MonitorEvent::Warning(
+                    "err.monitorNoHome".to_string(),
+                ));
+                None
+            }
+        });
+
         let thread_cancel = Arc::clone(&cancel);
         let thread_finished = Arc::clone(&finished);
         std::thread::Builder::new()
@@ -292,7 +305,23 @@ fn monitor_loop(
 
         match read_sample(&volume) {
             Some(sample) => {
-                let entries = source.cleanable().entries().to_vec();
+                // Prove the home boundary against the filesystem now: a
+                // remembered path that is a symlink out of the home, or one we
+                // can no longer resolve, is invisible to the policy rather
+                // than merely lexically checked.
+                let entries: Vec<CleanableEntry> = source
+                    .cleanable()
+                    .entries()
+                    .iter()
+                    .filter(|entry| {
+                        !config.home_only
+                            || crate::policy::resolved_inside_home(
+                                &entry.path,
+                                home.as_deref(),
+                            )
+                    })
+                    .cloned()
+                    .collect();
                 let decision = evaluate(
                     &config,
                     &sample,
@@ -437,7 +466,9 @@ pub fn clean_now(
     let mut verified: Vec<&CleanableEntry> = Vec::with_capacity(selected.len());
 
     for entry in selected {
-        if home_only && !crate::policy::inside_home(&entry.path, home) {
+        // Re-prove the boundary immediately before the move: realpath catches
+        // a path that became an outside-pointing symlink after selection.
+        if home_only && !crate::policy::resolved_inside_home(&entry.path, home) {
             outcome.skipped += 1;
             continue;
         }
@@ -665,6 +696,34 @@ mod tests {
         assert_eq!(outcome.skipped, 1);
         assert_eq!(outcome.removed, 0);
         assert!(cache.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_cleanup_skips_a_symlink_pointing_out_of_home() {
+        use std::fs;
+        let base =
+            std::env::temp_dir().join(format!("sift-monitor-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let outside = base.join("outside");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let link = home.join("link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let entry = fake_entry("link", link.clone(), 100, true);
+        let source: Arc<dyn CleanupSource> = Arc::new(FakeSource::new(
+            CleanableList::default(),
+            MonitorSettings::default(),
+        ));
+        let outcome = clean_now(std::slice::from_ref(&entry), Some(&home), true, &*source, &SystemTrash, 0);
+
+        assert_eq!(outcome.skipped, 1, "realpath must reveal the escape");
+        assert_eq!(outcome.removed, 0);
+        assert!(outside.exists(), "the target outside home must survive");
+
         let _ = std::fs::remove_dir_all(&base);
     }
 
