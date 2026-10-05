@@ -266,49 +266,6 @@
         </div>
       </div>
 
-      <p class="set-section-label" style="margin-top: 22px">{t('settings.routines')}</p>
-
-      <ul class="set-rt-list">
-        {#each store.routines as r, i (r.id)}
-          <li class="set-rt" in:listIn={{ index: i }}>
-            <span class="set-rt-icon" class:set-rt-icon-on={r.mode === 'auto'}>
-              <Icon name={r.mode === 'auto' ? 'bolt' : 'clock'} size={14} />
-            </span>
-            <button
-              type="button"
-              class="set-rt-info"
-              title={t('settings.toggleMode')}
-              onclick={() => store.toggleSavedRoutineMode(r.id)}
-            >
-              <span class="set-rt-name">{r.title}</span>
-              <span class="set-rt-cad">
-                {t(r.cadence)} · ≈{formatSize(r.averageBytes)} ·
-                {r.mode === 'auto' ? t('routine.mode.auto') : t('routine.mode.approve')}
-              </span>
-            </button>
-            <button
-              type="button"
-              class="btn-icon routine-run"
-              title={t('settings.runNow')}
-              aria-label={t('settings.runNow')}
-              onclick={() => store.runSavedRoutine(r.id)}
-            >
-              <Icon name="bolt" size={13} />
-            </button>
-            <button
-              type="button"
-              class="btn-icon routine-del"
-              title={t('settings.delete')}
-              aria-label={t('settings.delete')}
-              onclick={() => store.deleteSavedRoutine(r.id)}
-            >
-              <Icon name="trash" size={13} />
-            </button>
-          </li>
-        {:else}
-          <li class="set-empty">{t('routines.empty2')}</li>
-        {/each}
-      </ul>
     </div>
 
     <footer class="set-foot">
@@ -468,61 +425,6 @@
     box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
   }
 
-  .set-rt-list {
-    list-style: none;
-    margin: 0;
-    padding: 0 0 4px;
-  }
-  .set-rt {
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    padding: 9px 4px;
-    border-bottom: 1px solid color-mix(in oklch, var(--color-border) 60%, transparent);
-  }
-  .set-rt:last-child {
-    border-bottom: none;
-  }
-  .set-rt-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    border-radius: 9px;
-    color: var(--color-muted);
-    background: var(--color-surface-2);
-    flex: none;
-  }
-  .set-rt-icon-on {
-    color: var(--color-accent-hi);
-    background: color-mix(in oklch, var(--color-accent) 15%, transparent);
-  }
-  .set-rt-info {
-    flex: 1;
-    min-width: 0;
-    border: none;
-    background: transparent;
-    text-align: left;
-    cursor: default;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .set-rt-name {
-    font-size: 12.5px;
-    font-weight: 620;
-    color: var(--color-fg);
-  }
-  .set-rt-cad {
-    font-size: 10.5px;
-    color: var(--color-faint);
-  }
-  .set-empty {
-    padding: 12px 4px;
-    font-size: 12px;
-    color: var(--color-faint);
-  }
   .ai-form {
     margin-top: 12px;
     padding: 12px 14px 2px;

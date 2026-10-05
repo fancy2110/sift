@@ -114,6 +114,9 @@
         <div class="panel-head">
           <h2 class="section-title">{t('dash.routines')}</h2>
           <span class="chip">{t('dash.itemCount', [store.routines.length])}</span>
+          <button class="btn btn-quiet btn-sm" onclick={() => store.goSub('routines')}>
+            {t('routines.manage')}
+          </button>
         </div>
         <div class="rt-list">
           {#each store.routines as rt}

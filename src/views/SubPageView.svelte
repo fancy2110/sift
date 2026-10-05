@@ -4,7 +4,7 @@
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
   import type { Node } from '../lib/types';
-  type SubTab = 'smart' | 'explorer' | 'history';
+  type SubTab = 'smart' | 'explorer' | 'history' | 'routines';
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { t } from '../lib/i18n.svelte';
@@ -74,13 +74,14 @@
     };
   }
 
-  const tabIndex = { smart: 0, explorer: 1, history: 2 } as const;
-  const pagerOffset = $derived(tabIndex[store.subTab] * (100 / 3));
+  const tabIndex = { smart: 0, explorer: 1, history: 2, routines: 3 } as const;
+  const pagerOffset = $derived(tabIndex[store.subTab] * (100 / 4));
 
   const TABS: [SubTab, string, string][] = [
     ['smart', 'spark', t('sub.tab.smart')],
     ['explorer', 'layers', t('sub.tab.explorer')],
-    ['history', 'clock', t('sub.tab.history')]
+    ['history', 'clock', t('sub.tab.history')],
+    ['routines', 'routine', t('sub.tab.routines')]
   ];
 </script>
 
@@ -115,7 +116,7 @@
     <div class="segmented" role="tablist" aria-label={t('sub.tabsLabel')}>
       <span
         class="segmented-thumb"
-        style="width: calc(100%/3); transform: translateX({tabIndex[store.subTab] * 100}%)"
+        style="width: calc(100%/4); transform: translateX({tabIndex[store.subTab] * 100}%)"
         aria-hidden="true"
       ></span>
       {#each TABS as [tabId, icon, label]}
@@ -394,6 +395,111 @@
           {/each}
         </div>
       </section>
+
+      <!-- ROUTINES -->
+      <section class="pager-panel" role="tabpanel">
+        <div class="routine-scroll">
+          <div class="rt-block">
+            <div class="rt-block-head">
+              <h3 class="rt-block-title">{t('routines.suggested')}</h3>
+              <span class="rt-count chip">{store.routineSuggestions.length}</span>
+            </div>
+            {#each store.routineSuggestions as s, i (s.kind + s.name)}
+              <article class="rt-card" in:listIn={{ index: i }}>
+                <span class="rt-card-icon">
+                  <Icon name="routine" size={15} />
+                </span>
+                <div class="rt-card-body">
+                  <div class="rt-card-top">
+                    <p class="rt-card-name">{s.name}</p>
+                    <span class="rt-chip">{t(s.cadence)}</span>
+                  </div>
+                  <p class="rt-card-meta num">
+                    {t('routines.cadence', [s.distinctDays, s.occurrences])} · ≈{formatSize(s.averageBytes)}
+                  </p>
+                  <p class="rt-card-reason">{t(s.reason)}</p>
+                </div>
+                <div class="rt-card-actions">
+                  <button
+                    type="button"
+                    class="rt-btn rt-btn-primary"
+                    onclick={() => store.acceptSuggestion(s.name, s.kind)}
+                  >
+                    <Icon name="check" size={11} stroke={2.2} /> {t('routines.accept')}
+                  </button>
+                  <button
+                    type="button"
+                    class="rt-btn"
+                    title={t('routines.ignoreTitle')}
+                    aria-label={t('routines.ignoreAria', [s.name])}
+                    onclick={() => store.dismissSuggestion(s.name, s.kind)}
+                  >
+                    <Icon name="x" size={12} />
+                  </button>
+                </div>
+              </article>
+            {:else}
+              <p class="rt-empty">{t('routines.empty1')}</p>
+            {/each}
+          </div>
+
+          <div class="rt-block">
+            <div class="rt-block-head">
+              <h3 class="rt-block-title">{t('routines.saved')}</h3>
+              <span class="rt-count chip">{store.routines.length}</span>
+            </div>
+            {#each store.routines as r, i (r.id)}
+              <article class="rt-card" in:listIn={{ index: i }}>
+                <span class="rt-card-icon" class:rt-card-icon-on={r.mode === 'auto'}>
+                  <Icon name={r.mode === 'auto' ? 'bolt' : 'clock'} size={15} />
+                </span>
+                <div class="rt-card-body">
+                  <div class="rt-card-top">
+                    <p class="rt-card-name">{r.title}</p>
+                    <span class="rt-chip" class:rt-chip-on={r.mode === 'auto'}>
+                      {r.mode === 'auto' ? t('routine.mode.auto') : t('routine.mode.approve')}
+                    </span>
+                  </div>
+                  <p class="rt-card-meta num">
+                    {t(r.cadence)} · ≈{formatSize(r.averageBytes)}
+                  </p>
+                </div>
+                <div class="rt-card-actions">
+                  <button
+                    type="button"
+                    class="rt-btn rt-btn-primary"
+                    title={t('routines.runTitle')}
+                    aria-label={t('routines.runAria', [r.title])}
+                    onclick={() => store.runSavedRoutine(r.id)}
+                  >
+                    <Icon name="play" size={10.5} /> {t('routines.runNow')}
+                  </button>
+                  <button
+                    type="button"
+                    class="rt-btn"
+                    title={t('settings.toggleMode')}
+                    aria-label={t('settings.toggleMode')}
+                    onclick={() => store.toggleSavedRoutineMode(r.id)}
+                  >
+                    <Icon name="refresh" size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    class="rt-btn rt-btn-danger"
+                    title={t('settings.delete')}
+                    aria-label={t('settings.delete')}
+                    onclick={() => store.deleteSavedRoutine(r.id)}
+                  >
+                    <Icon name="trash" size={12} />
+                  </button>
+                </div>
+              </article>
+            {:else}
+              <p class="rt-empty">{t('routines.empty2')}</p>
+            {/each}
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -479,7 +585,7 @@
   .segmented {
     position: relative;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     padding: 3px;
     border-radius: 12px;
     background: color-mix(in oklch, var(--color-bg) 55%, transparent);
@@ -527,11 +633,11 @@
   .pager {
     display: flex;
     height: 100%;
-    width: 300%;
+    width: 400%;
     transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .pager-panel {
-    width: calc(100% / 3);
+    width: calc(100% / 4);
     min-width: 0;
     height: 100%;
     overflow: hidden;
@@ -1092,5 +1198,155 @@
     font-size: 9.5px;
     letter-spacing: 0.14em;
     color: color-mix(in oklch, var(--color-ok) 80%, var(--color-sheen));
+  }
+
+  /* ---- routines page ---- */
+  .routine-scroll {
+    height: 100%;
+    overflow-y: auto;
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+  }
+  .rt-block-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .rt-block-title {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+  .rt-count {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-faint);
+  }
+  .rt-card {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    padding: 13px 15px;
+    margin-bottom: 10px;
+    border-radius: 13px;
+    border: 1px solid var(--color-border);
+    background: linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--color-surface) 96%, var(--color-sheen) 1%),
+      color-mix(in oklch, var(--color-surface) 98%, var(--color-shadow) 4%)
+    );
+  }
+  .rt-card-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex: none;
+    border-radius: 10px;
+    color: var(--color-muted);
+    background: var(--color-surface-2);
+  }
+  .rt-card-icon-on {
+    color: var(--color-accent-hi);
+    background: color-mix(in oklch, var(--color-accent) 15%, transparent);
+  }
+  .rt-card-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .rt-card-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .rt-card-name {
+    margin: 0;
+    font-size: 13.5px;
+    font-weight: 630;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rt-card-meta {
+    margin: 0;
+    font-size: 10.5px;
+    color: var(--color-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rt-card-reason {
+    margin: 2px 0 0;
+    font-size: 11px;
+    color: var(--color-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rt-chip {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--color-surface-2);
+    color: var(--color-muted);
+  }
+  .rt-chip-on {
+    background: color-mix(in oklch, var(--color-accent) 16%, transparent);
+    color: var(--color-accent-hi);
+  }
+  .rt-card-actions {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .rt-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 27px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border-strong);
+    background: transparent;
+    color: var(--color-muted);
+    font-size: 11px;
+    font-weight: 560;
+    cursor: default;
+    white-space: nowrap;
+  }
+  .rt-btn:hover {
+    color: var(--color-fg);
+    border-color: var(--color-faint);
+  }
+  .rt-btn-primary {
+    color: var(--color-accent-hi);
+    border-color: color-mix(in oklch, var(--color-accent) 50%, transparent);
+    background: color-mix(in oklch, var(--color-accent) 12%, transparent);
+  }
+  .rt-btn-primary:hover {
+    color: var(--color-accent-hi);
+    border-color: color-mix(in oklch, var(--color-accent) 70%, transparent);
+  }
+  .rt-btn-danger:hover {
+    color: var(--color-danger);
+    border-color: color-mix(in oklch, var(--color-danger) 60%, transparent);
+  }
+  .rt-empty {
+    margin: 6px 0 10px;
+    font-size: 12px;
+    color: var(--color-faint);
   }
 </style>
