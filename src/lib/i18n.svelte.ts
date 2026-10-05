@@ -146,6 +146,8 @@ const zh: Record<string, string> = {
   'toast.aiSaveFailed': 'AI 配置保存失败：{0}',
   'toast.lowSpace': '磁盘空间偏低，建议查看清理建议',
   'toast.confirmationNeeded': '有大批可清理项，需要你确认后执行',
+  'toast.browserMode': '浏览器模式：当前为模拟数据，所有操作都不会影响真实文件',
+  'banner.browserMode': '浏览器模式 · 模拟数据',
 
   'err.noScanYet': '还没有可分析的扫描结果',
   'err.invalidNodeId': '无效的节点 id',
@@ -491,6 +493,8 @@ const en: Record<string, string> = {
   'toast.aiSaveFailed': 'Failed to save AI configuration: {0}',
   'toast.lowSpace': 'Disk space is low; review cleanup suggestions',
   'toast.confirmationNeeded': 'Many cleanable items found; your confirmation is required',
+  'toast.browserMode': 'Browser mode: this is simulated data — nothing touches real files',
+  'banner.browserMode': 'Browser mode · simulated data',
 
   'err.noScanYet': 'No scan results available to analyze yet',
   'err.invalidNodeId': 'Invalid node id',

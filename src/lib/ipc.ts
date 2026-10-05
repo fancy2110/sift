@@ -1,5 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { isTauri } from './runtime';
+import { createEventBus } from './mock/events';
+import { createMockBackend } from './mock/backend';
 import type {
   AiConfig,
   AnalysisSummary,
@@ -12,26 +15,59 @@ import type {
   VolumeInfo
 } from './types';
 
+// ---- transport selection ----------------------------------------------------
+//
+// Every command goes through `call`, every streamed event through `subscribe`.
+// Inside the Tauri webview they use the native bridge; in a plain browser
+// (e.g. opening the Vite URL during `pnpm dev`) they fall back to an
+// in-process mock backend sharing the exact same command/event shapes, so the
+// whole UI stays exercisable without a native build.
+
+let mockBus: ReturnType<typeof createEventBus> | null = null;
+let mockBackend: ReturnType<typeof createMockBackend> | null = null;
+
+function ensureBus(): ReturnType<typeof createEventBus> {
+  mockBus ??= createEventBus();
+  return mockBus;
+}
+
+function ensureMock() {
+  mockBackend ??= createMockBackend(ensureBus());
+  return mockBackend;
+}
+
+function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (isTauri()) return invoke<T>(command, args);
+  return ensureMock().invoke<T>(command, args);
+}
+
+function subscribe<T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> {
+  if (isTauri()) {
+    return listen<T>(event, (e) => cb(e.payload));
+  }
+  return Promise.resolve(ensureBus().listen<T>(event, cb) as unknown as UnlistenFn);
+}
+
 // ---- commands: volumes & scanning ------------------------------------------
 
 export function listVolumes(): Promise<VolumeInfo[]> {
-  return invoke<VolumeInfo[]>('list_volumes');
+  return call<VolumeInfo[]>('list_volumes');
 }
 
 export function startScan(root: string, focus: string): Promise<void> {
-  return invoke('start_scan', { root, focus });
+  return call('start_scan', { root, focus });
 }
 
 export function cancelScan(): Promise<void> {
-  return invoke('cancel_scan');
+  return call('cancel_scan');
 }
 
 export function setScanFocus(focus: string): Promise<void> {
-  return invoke('set_scan_focus', { focus });
+  return call('set_scan_focus', { focus });
 }
 
 export function scanRunning(): Promise<boolean> {
-  return invoke<boolean>('scan_running');
+  return call<boolean>('scan_running');
 }
 
 /**
@@ -40,7 +76,7 @@ export function scanRunning(): Promise<boolean> {
  * explorer opens a folder.
  */
 export function listDirFiles(path: string): Promise<Node[]> {
-  return invoke<Node[]>('list_dir_files', { path });
+  return call<Node[]>('list_dir_files', { path });
 }
 
 /**
@@ -53,7 +89,7 @@ export function resolvePermission(
   granted: boolean,
   grantedPath?: string,
 ): Promise<void> {
-  return invoke('resolve_permission', { id, granted, grantedPath: grantedPath ?? null });
+  return call('resolve_permission', { id, granted, grantedPath: grantedPath ?? null });
 }
 
 // ---- commands: deletion & filesystem awareness -----------------------------
@@ -65,127 +101,127 @@ export interface DeleteResultItem {
 }
 
 export function watchFs(root: string, recursive: boolean): Promise<void> {
-  return invoke('watch_fs', { root, recursive });
+  return call('watch_fs', { root, recursive });
 }
 
 export function unwatchFs(): Promise<void> {
-  return invoke('unwatch_fs');
+  return call('unwatch_fs');
 }
 
 // ---- commands: analysis, persistence & monitoring ---------------------------
 
 export function analyzeCurrent(): Promise<AnalysisSummary> {
-  return invoke<AnalysisSummary>('analyze_current');
+  return call<AnalysisSummary>('analyze_current');
 }
 
 export function listCleanable(): Promise<import('./types').Finding[]> {
-  return invoke('list_cleanable');
+  return call('list_cleanable');
 }
 
 export function setCleanableApproval(id: string, approved: boolean): Promise<boolean> {
-  return invoke('set_cleanable_approval', { id, approved });
+  return call('set_cleanable_approval', { id, approved });
 }
 
 export function approveStructural(): Promise<number> {
-  return invoke<number>('approve_structural');
+  return call<number>('approve_structural');
 }
 
 export function forgetCleanable(id: string): Promise<boolean> {
-  return invoke('forget_cleanable', { id });
+  return call('forget_cleanable', { id });
 }
 
 export function cleanPaths(paths: string[]): Promise<DeleteResultItem[]> {
-  return invoke('clean_paths', { paths });
+  return call('clean_paths', { paths });
 }
 
 export function monitorStatus(): Promise<MonitorStatus> {
-  return invoke<MonitorStatus>('monitor_status');
+  return call<MonitorStatus>('monitor_status');
 }
 
 export function startMonitor(): Promise<void> {
-  return invoke('start_monitor');
+  return call('start_monitor');
 }
 
 export function stopMonitor(): Promise<void> {
-  return invoke('stop_monitor');
+  return call('stop_monitor');
 }
 
 export function setAutoCleanMode(mode: 'off' | 'notify' | 'auto'): Promise<void> {
-  return invoke('set_auto_clean_mode', { mode });
+  return call('set_auto_clean_mode', { mode });
 }
 
 export function setScheduledCleanup(enabled: boolean, hour: number): Promise<void> {
-  return invoke('set_scheduled_cleanup', { enabled, hour });
+  return call('set_scheduled_cleanup', { enabled, hour });
 }
 
 export function markPath(path: string): Promise<import('./types').Finding> {
-  return invoke('mark_path', { path });
+  return call('mark_path', { path });
 }
 
 export function takeStoreWarnings(): Promise<StoreWarning[]> {
-  return invoke<StoreWarning[]>('take_store_warnings');
+  return call<StoreWarning[]>('take_store_warnings');
 }
 
 export function storeLocation(): Promise<string> {
-  return invoke<string>('store_location');
+  return call<string>('store_location');
 }
 
 export function routineSuggestions(): Promise<RoutineSuggestion[]> {
-  return invoke<RoutineSuggestion[]>('routine_suggestions');
+  return call<RoutineSuggestion[]>('routine_suggestions');
 }
 
 // ---- quick places ----------------------------------------------------------
 
 export function listPlaces(): Promise<Place[]> {
-  return invoke<Place[]>('list_places');
+  return call<Place[]>('list_places');
 }
 
 // ---- cleanup history -------------------------------------------------------
 
 export function listHistory(): Promise<import('./types').HistoryEntry[]> {
-  return invoke('list_history');
+  return call('list_history');
 }
 
 // ---- saved routines --------------------------------------------------------
 
 export function listRoutines(): Promise<Routine[]> {
-  return invoke<Routine[]>('list_routines');
+  return call<Routine[]>('list_routines');
 }
 
 export function acceptRoutineSuggestion(name: string, kind: string): Promise<void> {
-  return invoke('accept_routine_suggestion', { name, kind });
+  return call('accept_routine_suggestion', { name, kind });
 }
 
 export function dismissRoutineSuggestion(name: string, kind: string): Promise<void> {
-  return invoke('dismiss_routine_suggestion', { name, kind });
+  return call('dismiss_routine_suggestion', { name, kind });
 }
 
 export function deleteRoutine(id: string): Promise<boolean> {
-  return invoke<boolean>('delete_routine', { id });
+  return call<boolean>('delete_routine', { id });
 }
 
 export function toggleRoutineMode(id: string): Promise<boolean> {
-  return invoke<boolean>('toggle_routine_mode', { id });
+  return call<boolean>('toggle_routine_mode', { id });
 }
 
 export function runRoutine(id: string): Promise<DeleteResultItem[]> {
-  return invoke<DeleteResultItem[]>('run_routine', { id });
+  return call<DeleteResultItem[]>('run_routine', { id });
 }
 
 // ---- interface language ----------------------------------------------------
 
 export function getLanguage(): Promise<'zh' | 'en'> {
-  return invoke<string>('get_language').then((tag) => (tag === 'en' ? 'en' : 'zh'));
+  return call<string>('get_language').then((tag) => (tag === 'en' ? 'en' : 'zh'));
 }
 
 export function setLanguage(language: 'zh' | 'en'): Promise<void> {
-  return invoke('set_language', { language });
+  return call('set_language', { language });
 }
 
 // ---- AI provider configuration ----------------------------------------------
 
 export function getAiConfig(): Promise<AiConfig> {
-  return invoke<AiConfig>('get_ai_config');
+  return call<AiConfig>('get_ai_config');
 }
 
 /**
@@ -196,7 +232,7 @@ export function saveAiConfig(
   config: Omit<AiConfig, 'hasToken' | 'batchSize'>,
   token?: string,
 ): Promise<AiConfig> {
-  return invoke<AiConfig>('save_ai_config', {
+  return call<AiConfig>('save_ai_config', {
     config: {
       enabled: config.enabled,
       provider: config.provider,
@@ -256,21 +292,21 @@ export interface DeletedEvent {
 }
 
 export function onScanBatch(cb: (e: BatchUpdate) => void): Promise<UnlistenFn> {
-  return listen<BatchUpdate>('scan://batch', (e) => cb(e.payload));
+  return subscribe<BatchUpdate>('scan://batch', cb);
 }
 
 export function onScanDone(cb: (e: ScanDoneEvent) => void): Promise<UnlistenFn> {
-  return listen<ScanDoneEvent>('scan://done', (e) => cb(e.payload));
+  return subscribe<ScanDoneEvent>('scan://done', cb);
 }
 
 export function onScanRefreshed(cb: (e: RefreshedEvent) => void): Promise<UnlistenFn> {
-  return listen<RefreshedEvent>('scan://refreshed', (e) => cb(e.payload));
+  return subscribe<RefreshedEvent>('scan://refreshed', cb);
 }
 
 export function onFsDeleted(cb: (e: DeletedEvent) => void): Promise<UnlistenFn> {
-  return listen<DeletedEvent>('fs://deleted', (e) => cb(e.payload));
+  return subscribe<DeletedEvent>('fs://deleted', cb);
 }
 
 export function onMonitorEvent(cb: (e: unknown) => void): Promise<UnlistenFn> {
-  return listen('monitor://event', (e) => cb(e.payload));
+  return subscribe<unknown>('monitor://event', cb);
 }
