@@ -395,6 +395,22 @@ pub(crate) fn perform_cleanup(
             });
             continue;
         }
+        // Re-verify the fingerprint immediately before deletion: the approval
+        // described the object as analysed. A replacement or rewrite since then
+        // is skipped, not deleted.
+        if !sift_monitor::policy::fingerprint_still_matches(
+            &path,
+            item.size,
+            item.mtime_ms,
+            item.is_dir,
+        ) {
+            results.push(crate::cleanup::DeleteResultItem {
+                path: text.clone(),
+                ok: false,
+                error: Some("err.fingerprintChanged".into()),
+            });
+            continue;
+        }
         allowed.push(Allowed {
             path,
             remembered: on_cleanable.is_some(),
@@ -1274,5 +1290,60 @@ mod tests {
         // nothing is transmitted.
         assert!(!services.store.settings().ai.is_usable());
         assert!(!remote_configured_without_consent(&services));
+    }
+
+    #[test]
+    fn perform_cleanup_skips_items_whose_fingerprint_changed() {
+        let services = AppServices::new();
+        let dir = std::env::temp_dir().join(format!("sift-cleanup-fp-{:?}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("stale.bin");
+        std::fs::write(&path, b"hello").unwrap();
+        let original = std::fs::symlink_metadata(&path).unwrap();
+
+        // Register the item in the last report with its ORIGINAL fingerprint.
+        let item = ReportItem {
+            key: sift_core::NodeKey::from_bytes(b"stale"),
+            name: "stale.bin".into(),
+            display_path: "~/tmp/stale.bin".into(),
+            is_dir: false,
+            size: original.len(),
+            mtime_ms: meta_mtime_ms(&original),
+            kind_token: "installer".into(),
+            safety: Safety::Review,
+        };
+        services
+            .last_report
+            .lock()
+            .unwrap()
+            .insert(path.clone(), item);
+
+        // Rewrite after analysis: same path, different object.
+        std::fs::write(&path, b"a much longer replacement body").unwrap();
+
+        let text = path.to_string_lossy().into_owned();
+        let results = perform_cleanup(&services, &[text], false);
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert_eq!(results[0].error.as_deref(), Some("err.fingerprintChanged"));
+        assert!(path.exists(), "the changed file must not be deleted");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn meta_mtime_ms(meta: &std::fs::Metadata) -> i64 {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            meta.mtime() * 1000 + meta.mtime_nsec() / 1_000_000
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = meta;
+            0
+        }
     }
 }
