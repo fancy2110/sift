@@ -2104,7 +2104,8 @@ fn read_job(mut job: DirJob, want_physical: bool, buffer: &mut BulkBuffer) -> Di
     }
 }
 
-/// Sum a subtree without building any tree nodes. Iterative so worker stack
+/// Sum a subtree without building any tree nodes, deduping hardlinks in a
+/// local set the same way the tracked walk does. Iterative so worker stack
 /// usage is bounded regardless of tree depth.
 fn size_only_walk(
     path: &Path,
@@ -2113,6 +2114,7 @@ fn size_only_walk(
 ) -> (ByteSize, u32) {
     let mut total = ByteSize::ZERO;
     let mut files = 0u32;
+    let mut seen_links: HashSet<FileId> = HashSet::new();
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = DirReader::read_reusing(&dir, want_physical, buffer) else {
@@ -2122,6 +2124,13 @@ fn size_only_walk(
             if entry.is_dir && !entry.is_symlink {
                 stack.push(join_path(&dir, &entry.name));
             } else if entry.is_file {
+                if entry.nlink > 1 {
+                    if let Some(id) = entry.file_id() {
+                        if !seen_links.insert(id) {
+                            continue;
+                        }
+                    }
+                }
                 total += entry.size();
                 files += 1;
             }
@@ -2805,6 +2814,50 @@ mod tests {
             "the second name of a hardlinked file must be skipped, got {progress:?}"
         );
         assert_eq!(tree.stats().hardlink_entries, 1, "one inode remembered");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Hardlinked files must be counted once on the size-only walk too. A
+    /// subtree the coordinator does not track is summed by [`size_only_walk`],
+    /// and its total must agree with the deduped total the tracked walk
+    /// produces for the same tree — even when the two names live in different
+    /// directories.
+    #[cfg(unix)]
+    #[test]
+    fn size_only_walk_dedupes_hardlinks_like_the_tracked_walk() {
+        let base = temp_tree("sizeonly-hardlink");
+        // One inode with names in two different directories, plus a plain file.
+        let original = base.join("a/original.bin");
+        std::fs::write(&original, vec![5u8; 4096]).unwrap();
+        std::fs::hard_link(&original, base.join("x/linked.bin")).unwrap();
+        std::fs::write(base.join("a/plain.bin"), vec![6u8; 1024]).unwrap();
+
+        let mut buffer = BulkBuffer::new();
+        let (size, files) = size_only_walk(&base, false, &mut buffer);
+
+        // Fixture files (100 + 200 + 300 + 400) plus 4096 once and 1024.
+        // Were the second name counted too, size would be 10216 and files 7.
+        let expected = 100 + 200 + 300 + 400 + 4096 + 1024;
+        assert_eq!(size.logical, expected);
+        assert_eq!(files, 6);
+
+        // The tracked walk must reach the same answer on the same fixture.
+        let engine = ScanEngine::with_workers(2);
+        let handle = engine
+            .scan(
+                ScanRequest::new(ScanId(10), base.clone()).with_policy(ScanPolicy::thorough()),
+            )
+            .unwrap();
+        let _events = drain(&handle);
+        handle.join();
+        let tree = handle.tree.lock().unwrap();
+        assert_eq!(
+            tree.total().logical,
+            expected,
+            "size-only and tracked totals must use the same hardlink rule"
+        );
+        drop(tree);
 
         let _ = std::fs::remove_dir_all(&base);
     }
