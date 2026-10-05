@@ -8,6 +8,7 @@
 //! Every removal goes through the platform trash, is preceded by a fresh
 //! fingerprint check, and is reported as an event whether it succeeded or not.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -238,6 +239,19 @@ impl Monitor {
         let cancel = Arc::new(AtomicBool::new(false));
         let finished = Arc::new(AtomicBool::new(false));
 
+        // The home boundary must name a real location. Canonicalize once up
+        // front: a home given but unresolvable is treated as missing, since a
+        // boundary we cannot prove is no boundary at all.
+        let home = home.and_then(|path| match std::fs::canonicalize(&path) {
+            Ok(real) => Some(real),
+            Err(_) => {
+                let _ = event_tx.send(MonitorEvent::Warning(
+                    "err.monitorNoHome".to_string(),
+                ));
+                None
+            }
+        });
+
         let thread_cancel = Arc::clone(&cancel);
         let thread_finished = Arc::clone(&finished);
         std::thread::Builder::new()
@@ -292,7 +306,23 @@ fn monitor_loop(
 
         match read_sample(&volume) {
             Some(sample) => {
-                let entries = source.cleanable().entries().to_vec();
+                // Prove the home boundary against the filesystem now: a
+                // remembered path that is a symlink out of the home, or one we
+                // can no longer resolve, is invisible to the policy rather
+                // than merely lexically checked.
+                let entries: Vec<CleanableEntry> = source
+                    .cleanable()
+                    .entries()
+                    .iter()
+                    .filter(|entry| {
+                        !config.home_only
+                            || crate::policy::resolved_inside_home(
+                                &entry.path,
+                                home.as_deref(),
+                            )
+                    })
+                    .cloned()
+                    .collect();
                 let decision = evaluate(
                     &config,
                     &sample,
@@ -437,7 +467,9 @@ pub fn clean_now(
     let mut verified: Vec<&CleanableEntry> = Vec::with_capacity(selected.len());
 
     for entry in selected {
-        if home_only && !crate::policy::inside_home(&entry.path, home) {
+        // Re-prove the boundary immediately before the move: realpath catches
+        // a path that became an outside-pointing symlink after selection.
+        if home_only && !crate::policy::resolved_inside_home(&entry.path, home) {
             outcome.skipped += 1;
             continue;
         }
@@ -455,16 +487,28 @@ pub fn clean_now(
     let paths: Vec<PathBuf> = verified.iter().map(|entry| entry.path.clone()).collect();
     let results = remover.remove(&paths);
 
+    // Index the replies by their path instead of zipping by position: a
+    // `Remover` is a seam and is not required to preserve request order or
+    // length, so a positional zip could credit one entry with another
+    // entry's result.
+    let results_by_path: HashMap<&Path, &sift_platform::trash::TrashResult> = results
+        .iter()
+        .map(|result| (result.path.as_path(), result))
+        .collect();
+
     let mut session_titles: Vec<String> = Vec::new();
-    for (entry, result) in verified.iter().zip(results.iter()) {
-        if result.ok {
-            outcome.removed += 1;
-            outcome.bytes = outcome.bytes.saturating_add(entry.size);
-            outcome.removed_paths.push(entry.path.clone());
-            source.note_removed(entry, now_ms);
-            session_titles.push(entry.name.clone());
-        } else {
-            outcome.failed += 1;
+    for entry in &verified {
+        match results_by_path.get(entry.path.as_path()) {
+            Some(result) if result.ok => {
+                outcome.removed += 1;
+                outcome.bytes = outcome.bytes.saturating_add(entry.size);
+                outcome.removed_paths.push(entry.path.clone());
+                source.note_removed(entry, now_ms);
+                session_titles.push(entry.name.clone());
+            }
+            // An explicit failure, or no reply at all for a requested path,
+            // counts as failed — a missing reply is never an implicit success.
+            _ => outcome.failed += 1,
         }
     }
     if !session_titles.is_empty() {
@@ -492,8 +536,42 @@ mod tests {
     use sift_analyze::{PathFingerprint, Reason, Safety, VerdictSource};
     use sift_core::NodeKey;
     use sift_core::VolumeId;
+    use sift_platform::trash::TrashResult;
     use sift_store::AutoCleanMode;
     use std::sync::Mutex;
+
+    /// Replies in reverse request order and reports the *first* requested
+    /// path as failed; in the reversed reply that failure sits last.
+    struct ReorderedRemover;
+    impl Remover for ReorderedRemover {
+        fn remove(&self, paths: &[PathBuf]) -> Vec<TrashResult> {
+            let Some(first) = paths.first() else {
+                return Vec::new();
+            };
+            let mut results: Vec<TrashResult> = paths
+                .iter()
+                .rev()
+                .map(|path| TrashResult::success(path.clone()))
+                .collect();
+            for result in &mut results {
+                if &result.path == first {
+                    *result = TrashResult::failure(first.clone(), "blocked");
+                }
+            }
+            results
+        }
+    }
+
+    /// Only answers for the first requested path, giving no reply to the rest.
+    struct DroppingRemover;
+    impl Remover for DroppingRemover {
+        fn remove(&self, paths: &[PathBuf]) -> Vec<TrashResult> {
+            paths
+                .first()
+                .map(|path| vec![TrashResult::success(path.clone())])
+                .unwrap_or_default()
+        }
+    }
 
     /// A source that hands out a fixed list and records removals.
     struct FakeSource {
@@ -665,6 +743,91 @@ mod tests {
         assert_eq!(outcome.skipped, 1);
         assert_eq!(outcome.removed, 0);
         assert!(cache.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_cleanup_skips_a_symlink_pointing_out_of_home() {
+        use std::fs;
+        let base =
+            std::env::temp_dir().join(format!("sift-monitor-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let outside = base.join("outside");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let link = home.join("link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let entry = fake_entry("link", link.clone(), 100, true);
+        let source: Arc<dyn CleanupSource> = Arc::new(FakeSource::new(
+            CleanableList::default(),
+            MonitorSettings::default(),
+        ));
+        let outcome = clean_now(std::slice::from_ref(&entry), Some(&home), true, &*source, &SystemTrash, 0);
+
+        assert_eq!(outcome.skipped, 1, "realpath must reveal the escape");
+        assert_eq!(outcome.removed, 0);
+        assert!(outside.exists(), "the target outside home must survive");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cleanup_results_align_by_path_when_the_remover_reorders() {
+        let base =
+            std::env::temp_dir().join(format!("sift-monitor-align-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let first = base.join("first");
+        let second = base.join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+
+        let entries = vec![
+            fake_entry("first", first.clone(), 100, true),
+            fake_entry("second", second.clone(), 250, true),
+        ];
+        let source = Arc::new(FakeSource::new(
+            CleanableList::default(),
+            MonitorSettings::default(),
+        ));
+        let outcome = clean_now(&entries, Some(&base), true, &*source, &ReorderedRemover, 0);
+
+        // The second entry is the one that actually succeeded: its bytes and
+        // its name are credited, never the first entry's.
+        assert_eq!(outcome.removed, 1);
+        assert_eq!(outcome.failed, 1);
+        assert_eq!(outcome.bytes, 250);
+        assert_eq!(outcome.removed_paths, vec![second]);
+        assert_eq!(*source.removed.lock().unwrap(), vec!["second".to_string()]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_missing_remover_reply_is_counted_as_failure() {
+        let base =
+            std::env::temp_dir().join(format!("sift-monitor-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let first = base.join("first");
+        let second = base.join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+
+        let entries = vec![
+            fake_entry("first", first.clone(), 100, true),
+            fake_entry("second", second.clone(), 250, true),
+        ];
+        let source: Arc<dyn CleanupSource> = Arc::new(FakeSource::new(
+            CleanableList::default(),
+            MonitorSettings::default(),
+        ));
+        let outcome = clean_now(&entries, Some(&base), true, &*source, &DroppingRemover, 0);
+
+        assert_eq!(outcome.removed, 1);
+        assert_eq!(outcome.failed, 1, "an unanswered path must fail closed");
+        assert_eq!(outcome.bytes, 100);
+        assert_eq!(outcome.removed_paths, vec![first]);
         let _ = std::fs::remove_dir_all(&base);
     }
 

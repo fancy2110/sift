@@ -318,6 +318,8 @@ export function createMockBackend(bus: EventBus): MockBackend {
     language: 'zh' as 'zh' | 'en',
     scanning: false,
     cancelled: false,
+    /** Monotonic scan generation; 0 before the first start (P0-7). */
+    epoch: 0,
     rootPath: '/',
     scanDirs: [] as MockDir[],
     findings: [] as Finding[],
@@ -404,6 +406,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
   const emitBatch = (dirs: MockDir[], options: { pending: boolean; final: boolean }) => {
     if (state.cancelled) return;
     bus.emit('scan://batch', {
+      epoch: state.epoch,
       discovered: dirs.map((dir) => dirNode(dir, options.pending)),
       sized: dirs.map((dir) => ({
         id: dir.id,
@@ -427,10 +430,12 @@ export function createMockBackend(bus: EventBus): MockBackend {
     });
   };
 
-  const startScan = (root: string) => {
+  const startScan = (root: string): number => {
     clearTimers();
     state.cancelled = false;
     state.scanning = true;
+    state.epoch += 1;
+    const epoch = state.epoch;
     state.rootPath = root;
     state.scanDirs = dirRecords(root, state.deletedPaths);
     const half = Math.ceil(state.scanDirs.length / 2);
@@ -445,11 +450,12 @@ export function createMockBackend(bus: EventBus): MockBackend {
       }, 300),
       setTimeout(() => emitBatch(secondHalf, { pending: false, final: true }), 480),
       setTimeout(() => {
-        if (state.cancelled) return;
+        if (state.cancelled || state.epoch !== epoch) return;
         state.scanning = false;
-        bus.emit('scan://done', { cancelled: false, root });
+        bus.emit('scan://done', { epoch, cancelled: false, root });
       }, 600)
     ];
+    return epoch;
   };
 
   /** Re-derive every finding from the current scan tree. */
@@ -492,18 +498,18 @@ export function createMockBackend(bus: EventBus): MockBackend {
           resolve(VOLUMES as unknown as T);
           break;
         case 'start_scan':
-          startScan(String(args.root ?? '/'));
-          resolve(undefined as T);
+          resolve(startScan(String(args.root ?? '/')) as unknown as T);
           break;
         case 'cancel_scan': {
           if (!state.scanning) {
             resolve(undefined as T);
             break;
           }
+          const epoch = state.epoch;
           clearTimers();
           state.cancelled = true;
           state.scanning = false;
-          bus.emit('scan://done', { cancelled: true, root: state.rootPath });
+          bus.emit('scan://done', { epoch, cancelled: true, root: state.rootPath });
           resolve(undefined as T);
           break;
         }
@@ -511,7 +517,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
           resolve(undefined as T);
           break;
         case 'scan_running':
-          resolve(state.scanning as unknown as T);
+          resolve((state.scanning ? state.epoch : null) as unknown as T);
           break;
         case 'list_dir_files': {
           const path = String(args.path ?? '');

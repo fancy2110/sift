@@ -316,7 +316,35 @@ fn cancel_scan(app: &AppHandle) {
 /// Analyse the last scan (if any) and move every remembered safe item inside the
 /// home directory to the trash. The same guardrails the UI and the scheduler
 /// use apply here, and the outcome is reported as a native notification.
+///
+/// Runs on a dedicated background thread: the menu event callback is the
+/// platform main thread, and this pass both analyzes (tree walks) and removes
+/// (a synchronous Finder Apple Event per item), so doing it inline freezes the
+/// whole UI for seconds.
 fn clean_safe_items(app: &AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static CLEAN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+    if CLEAN_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        // A previous menu click is still running; never overlap two cleanups.
+        return;
+    }
+    let app = app.clone();
+    let started = std::thread::Builder::new()
+        .name("sift-tray-clean".into())
+        .spawn(move || {
+            clean_safe_items_blocking(&app);
+            CLEAN_IN_FLIGHT.store(false, Ordering::SeqCst);
+        });
+    if started.is_err() {
+        CLEAN_IN_FLIGHT.store(false, Ordering::SeqCst);
+    }
+}
+
+/// The analyze → filter → remove body of [`clean_safe_items`], off the main
+/// thread. All outcome reporting happens through native notifications.
+fn clean_safe_items_blocking(app: &AppHandle) {
     let services = app.state::<crate::analyze::AppServices>();
     let manager = app.state::<crate::scanner::ScanManager>();
 

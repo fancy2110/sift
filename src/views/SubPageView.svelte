@@ -1,10 +1,11 @@
 <script lang="ts">
   import Icon from '../lib/components/Icon.svelte';
   import LocationPicker from '../lib/components/LocationPicker.svelte';
+  import TreemapView from '../lib/components/TreemapView.svelte';
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
   import type { Node } from '../lib/types';
-  type SubTab = 'smart' | 'explorer' | 'history';
+  type SubTab = 'smart' | 'explorer' | 'history' | 'map';
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { t } from '../lib/i18n.svelte';
@@ -74,13 +75,14 @@
     };
   }
 
-  const tabIndex = { smart: 0, explorer: 1, history: 2 } as const;
-  const pagerOffset = $derived(tabIndex[store.subTab] * (100 / 3));
+  const tabIndex = { smart: 0, explorer: 1, history: 2, map: 3 } as const;
+  const pagerOffset = $derived(tabIndex[store.subTab] * (100 / 4));
 
   const TABS: [SubTab, string, string][] = [
     ['smart', 'spark', t('sub.tab.smart')],
     ['explorer', 'layers', t('sub.tab.explorer')],
-    ['history', 'clock', t('sub.tab.history')]
+    ['history', 'clock', t('sub.tab.history')],
+    ['map', 'dashboard', t('sub.tab.map')]
   ];
 </script>
 
@@ -115,7 +117,7 @@
     <div class="segmented" role="tablist" aria-label={t('sub.tabsLabel')}>
       <span
         class="segmented-thumb"
-        style="width: calc(100%/3); transform: translateX({tabIndex[store.subTab] * 100}%)"
+        style="width: calc(100%/4); transform: translateX({tabIndex[store.subTab] * 100}%)"
         aria-hidden="true"
       ></span>
       {#each TABS as [tabId, icon, label]}
@@ -135,7 +137,7 @@
   </div>
 
   <div class="sp-body">
-    <div class="pager" style="transform: translateX(-{pagerOffset}%)">
+    <div class="pager" style="width:400%; transform: translateX(-{pagerOffset}%)">
       <!-- SMART -->
       <section class="pager-panel" role="tabpanel">
         <div class="smart-scroll">
@@ -394,6 +396,35 @@
           {/each}
         </div>
       </section>
+
+      <!-- TREEMAP -->
+      <section class="pager-panel" role="tabpanel">
+        <div class="treemap-page">
+          <div class="ex-crumb">
+            <LocationPicker />
+            {#each store.drillPath as seg, i (seg + i)}
+              <Icon name="chevronRight" size={11} style="color: var(--color-faint)" />
+              <button
+                type="button"
+                class="ex-crumb-item"
+                class:ex-crumb-current={i === store.drillPath.length - 1}
+                onclick={() => store.jumpCrumb(i)}
+              >
+                {seg}
+              </button>
+            {/each}
+            {#if store.drillPath.length > 0}
+              <button type="button" class="tm-up" onclick={() => store.goUp()}>
+                <Icon name="chevronUp" size={12} />
+                {t('sub.goUp')}
+              </button>
+            {/if}
+          </div>
+          <div class="tm-stage-wrap">
+            <TreemapView />
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -531,10 +562,37 @@
     transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .pager-panel {
-    width: calc(100% / 3);
+    width: calc(100% / 4);
     min-width: 0;
     height: 100%;
     overflow: hidden;
+  }
+  .treemap-page {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .tm-stage-wrap {
+    flex: 1;
+    min-height: 0;
+    padding: 0 16px 16px;
+  }
+  .tm-up {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding: 3px 9px;
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    background: transparent;
+    color: var(--color-muted);
+    font-size: 11px;
+    cursor: default;
+  }
+  .tm-up:hover {
+    color: var(--color-fg);
+    border-color: var(--color-faint);
   }
   .sp-status {
     display: flex;

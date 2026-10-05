@@ -212,13 +212,56 @@ const LOG_EXTENSIONS: &[&str] = &["log", "crash", "ips", "dmp", "diag"];
 /// Names that are pure noise wherever they appear.
 const NOISE_NAMES: &[&str] = &[".DS_Store", "Thumbs.db", ".localized"];
 
+/// Whether a directory with a trash-like name is an actual trash location,
+/// rather than a user folder that merely happens to be called "Trash".
+///
+/// Accepted locations only:
+/// - macOS user trash: `$HOME/.Trash`;
+/// - XDG user trash: `$XDG_DATA_HOME/Trash` (default `~/.local/share/Trash`);
+/// - volume-root trash: `<mount>/.Trash` (macOS) or `<mount>/.Trash-<uid>` (XDG).
+fn is_known_trash_dir(name: &str, path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+
+    if let Some(home) = dirs::home_dir() {
+        if name == ".Trash" && parent == home {
+            return true;
+        }
+    }
+    if name == "Trash" {
+        if let Some(data_home) = dirs::data_dir() {
+            if parent == data_home {
+                return true;
+            }
+        }
+    }
+
+    if name == ".Trash" || is_xdg_volume_trash(name) {
+        let at_mount_root = sift_platform::volume::list_volumes()
+            .iter()
+            .any(|volume| parent == volume.mount_point);
+        if at_mount_root {
+            return true;
+        }
+    }
+    false
+}
+
+/// Match XDG top-level trash directories such as `.Trash-1000`.
+fn is_xdg_volume_trash(name: &str) -> bool {
+    match name.strip_prefix(".Trash-") {
+        Some(uid) => !uid.is_empty() && uid.bytes().all(|byte| byte.is_ascii_digit()),
+        None => false,
+    }
+}
+
 /// Ask the directory rules about `name`.
 ///
-/// `parent` is used only for the two rules whose meaning depends on where they
-/// sit (`Caches`/`Logs` inside a library directory, `Trash` inside a home).
+/// `path` is used only for the rules whose meaning depends on where they
+/// sit (`Caches`/`Logs` inside a library directory, `Trash` at a known trash
+/// location).
 pub fn for_dir(name: &str, path: &Path) -> Option<RuleHit> {
-    let parent_name = path.parent().and_then(|parent| parent.file_name());
-
     for rule in DIR_RULES {
         if !rule.names.contains(&name) {
             continue;
@@ -233,22 +276,8 @@ pub fn for_dir(name: &str, path: &Path) -> Option<RuleHit> {
                 continue;
             }
         }
-        if matches!(rule.outcome, DirOutcome::Trash) {
-            let looks_like_trash_parent = parent_name
-                .map(|parent| {
-                    parent.to_string_lossy() == "share" || parent.to_string_lossy() == "."
-                })
-                .unwrap_or(false)
-                || path
-                    .components()
-                    .any(|component| component.as_os_str() == "Trash");
-            let in_home = path
-                .parent()
-                .map(|parent| !parent.to_string_lossy().is_empty())
-                .unwrap_or(false);
-            if !(looks_like_trash_parent || in_home) {
-                continue;
-            }
+        if matches!(rule.outcome, DirOutcome::Trash) && !is_known_trash_dir(name, path) {
+            continue;
         }
 
         let (kind, reason_param) = match rule.outcome {
@@ -524,9 +553,29 @@ mod tests {
 
     #[test]
     fn trash_is_safe() {
-        let hit = for_dir(".Trash", Path::new("/Users/me/.Trash")).expect("trash rule");
+        let home = dirs::home_dir().expect("home dir");
+        let hit = for_dir(".Trash", &home.join(".Trash")).expect("trash rule");
         assert_eq!(hit.safety, Safety::Safe);
         assert_eq!(hit.kind, CandidateKind::Trash);
+    }
+
+    #[test]
+    fn trash_known_locations_match() {
+        // Volume-root trash (macOS/XDG).
+        assert!(for_dir(".Trash", Path::new("/.Trash")).is_some());
+        assert!(for_dir(".Trash-1000", Path::new("/.Trash-1000")).is_some());
+        // XDG user trash at the real data home.
+        if let Some(data_home) = dirs::data_dir() {
+            assert!(for_dir("Trash", &data_home.join("Trash")).is_some());
+        }
+    }
+
+    #[test]
+    fn folders_merely_named_trash_are_user_data() {
+        assert!(for_dir("Trash", Path::new("/Users/me/project/assets/Trash")).is_none());
+        assert!(for_dir("Trash", Path::new("/srv/build/Trash")).is_none());
+        assert!(for_dir(".Trash", Path::new("/Users/me/project/.Trash")).is_none());
+        assert!(for_dir(".Trash-1000", Path::new("/tmp/.Trash-1000")).is_none());
     }
 
     #[test]
