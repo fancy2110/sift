@@ -3876,6 +3876,7 @@ dependencies = [
 name = "sift-analyze"
 version = "0.1.0"
 dependencies = [
+ "dirs 6.0.0",
  "reqwest",
  "serde",
  "serde_json",

@@ -167,6 +167,10 @@ fn default_confidence(safety: Safety) -> f32 {
 pub struct CachedAdjudicator<A, C> {
     inner: A,
     cache: C,
+    /// The policy in force *now*. A cached `Safe` is re-tested against it
+    /// before it is granted, so tightening a threshold or withdrawing consent
+    /// takes effect without waiting for the cache entry to expire.
+    guardrails: Guardrails,
     /// Verdicts served from the cache in the last batch, for reporting.
     hits: std::sync::atomic::AtomicUsize,
     misses: std::sync::atomic::AtomicUsize,
@@ -199,9 +203,17 @@ impl<A: Adjudicator, C: VerdictCache> CachedAdjudicator<A, C> {
         Self {
             inner,
             cache,
+            guardrails: Guardrails::default(),
             hits: std::sync::atomic::AtomicUsize::new(0),
             misses: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// Set the policy current runs must satisfy. Defaults to
+    /// [`Guardrails::default`].
+    pub fn with_guardrails(mut self, guardrails: Guardrails) -> Self {
+        self.guardrails = guardrails;
+        self
     }
 
     pub fn inner(&self) -> &A {
@@ -239,11 +251,11 @@ impl<A: Adjudicator, C: VerdictCache> Adjudicator for CachedAdjudicator<A, C> {
                 Some(cached) => {
                     self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     // Mark the provenance so the UI can say "judged earlier"
-                    // without pretending a rule just re-derived it.
-                    verdicts[index] = Some(Verdict {
-                        source: VerdictSource::Cached,
-                        ..cached
-                    });
+                    // without pretending a rule just re-derived it — but first
+                    // re-run the guardrails currently in force: the verdict
+                    // was stored against an older, possibly laxer policy.
+                    verdicts[index] =
+                        Some(guard_cached_verdict(cached, &self.guardrails));
                 }
                 None => {
                     self.misses
@@ -267,6 +279,43 @@ impl<A: Adjudicator, C: VerdictCache> Adjudicator for CachedAdjudicator<A, C> {
             .map(|verdict| verdict.unwrap_or_else(|| Verdict::unknown(now_ms)))
             .collect())
     }
+}
+
+/// Re-test a stored verdict against the guardrails in force now.
+///
+/// A cache entry records that this object was `Safe` under an older policy; it
+/// does not prove it is still eligible. Only the `Safe` level is examined —
+/// guardrails can only ever tighten, so `Review`/`Keep` pass through.
+///
+/// The confidence floor uses the **original** verdict's source (a model
+/// verdict needs the model floor), even though the verdict returned to the
+/// caller is re-stamped with [`VerdictSource::Cached`].
+pub fn guard_cached_verdict(cached: Verdict, guardrails: &Guardrails) -> Verdict {
+    // Floor for the source that *originally* decided, before the Cached
+    // re-stamp: a model verdict keeps the model floor.
+    let floor = guardrails
+        .confidence
+        .minimum_for_source(&cached.source);
+    let was_model = cached.source.is_model();
+    let mut verdict = Verdict {
+        source: VerdictSource::Cached,
+        ..cached
+    };
+
+    if verdict.safety != Safety::Safe {
+        return verdict;
+    }
+    // Current policy may have switched off model Safe / withdrawn consent.
+    if was_model && !guardrails.allow_model_safe {
+        verdict.safety = Safety::Review;
+        verdict.reason = Reason::key(Downgrade::ModelSafeDisabled.reason_key());
+        return verdict;
+    }
+    if verdict.confidence < floor {
+        verdict.safety = Safety::Review;
+        verdict.reason = Reason::key(Downgrade::LowConfidence.reason_key());
+    }
+    verdict
 }
 
 // ---- remote answer handling ------------------------------------------------
@@ -951,6 +1000,115 @@ mod tests {
         assert_eq!(second[0].safety, Safety::Safe);
         assert_eq!(second[0].source, VerdictSource::Cached);
         assert_eq!(adjudicator.stats(), (1, 1));
+    }
+
+    #[test]
+    fn cached_safe_repasses_the_current_guardrails() {
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct MemCache(Mutex<Vec<(PathFingerprint, Verdict)>>);
+        impl VerdictCache for MemCache {
+            fn lookup(&self, fingerprint: &PathFingerprint) -> Option<Verdict> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|(stored, _)| stored.still_describes(fingerprint))
+                    .map(|(_, verdict)| verdict.clone())
+            }
+            fn store(&self, fingerprint: &PathFingerprint, verdict: &Verdict) {
+                self.0.lock().unwrap().push((*fingerprint, verdict.clone()));
+            }
+        }
+
+        // Serve one pre-stored verdict through a cache hit under the given
+        // current guardrails.
+        let serve = |stored: Verdict, guardrails: Guardrails| {
+            let candidate = candidate(CandidateKind::StaleLargeFile, "file.stale_large");
+            let cache = MemCache::default();
+            cache.store(&candidate.fingerprint(), &stored);
+            CachedAdjudicator::new(RuleAdjudicator::new(), cache)
+                .with_guardrails(guardrails)
+                .adjudicate_batch(std::slice::from_ref(&candidate), 0)
+                .unwrap()
+                .pop()
+                .unwrap()
+        };
+
+        let model_safe = Verdict::new(
+            Safety::Safe,
+            0.95,
+            Reason::key("x"),
+            VerdictSource::remote("test"),
+            0,
+            None,
+        );
+        let rule_safe = Verdict::new(
+            Safety::Safe,
+            0.9,
+            Reason::key("x"),
+            VerdictSource::rule("r"),
+            0,
+            None,
+        );
+
+        // Default policy: the old Safe stays usable.
+        let served = serve(model_safe.clone(), Guardrails::default());
+        assert_eq!(served.safety, Safety::Safe);
+        assert_eq!(served.source, VerdictSource::Cached);
+
+        // The master switch / withdrawn consent downgrades the model Safe.
+        let switched_off = Guardrails {
+            allow_model_safe: false,
+            ..Guardrails::default()
+        };
+        let served = serve(model_safe.clone(), switched_off);
+        assert_eq!(served.safety, Safety::Review);
+        // A rule Safe is unaffected by the model switch.
+        assert_eq!(
+            serve(rule_safe.clone(), switched_off).safety,
+            Safety::Safe
+        );
+
+        // A raised model floor: 0.95 < 0.99 no longer qualifies...
+        let stricter = Guardrails {
+            confidence: ConfidencePolicy {
+                remote: 0.99,
+                ..ConfidencePolicy::default()
+            },
+            ..Guardrails::default()
+        };
+        assert_eq!(serve(model_safe.clone(), stricter).safety, Safety::Review);
+        // ...but a verdict exactly at the floor still does.
+        let at_floor = Verdict::new(
+            Safety::Safe,
+            0.99,
+            Reason::key("x"),
+            VerdictSource::remote("test"),
+            0,
+            None,
+        );
+        assert_eq!(serve(at_floor, stricter).safety, Safety::Safe);
+
+        // Raising the rule floor retires old rule Safe too.
+        let strict_rules = Guardrails {
+            confidence: ConfidencePolicy {
+                rule: 0.95,
+                ..ConfidencePolicy::default()
+            },
+            ..Guardrails::default()
+        };
+        assert_eq!(
+            serve(rule_safe, strict_rules).safety,
+            Safety::Review,
+            "a tightened policy must retire the old Safe"
+        );
+
+        // A downgraded verdict cannot be automatically removable under the
+        // policy that downgraded it.
+        assert!(!serve(model_safe, switched_off)
+            .is_automatically_removable(&ConfidencePolicy::default()));
     }
 
     #[test]
