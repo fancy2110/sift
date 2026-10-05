@@ -17,12 +17,63 @@
 //! before it can influence anything, so a malformed or adversarial answer can
 //! only ever produce `Review`.
 
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::adjudicate::{apply_remote_verdicts, parse_raw_verdicts, AdjudicateError, Guardrails};
 use crate::candidate::Candidate;
 use crate::reason::Verdict;
 use crate::route::RemoteAdjudicator;
+
+/// Live flags polled while a rate-limited request is backing off.
+///
+/// The default back-off after a rate limit can run several hours (up to
+/// [`MAX_RETRY_ATTEMPTS`] sleeps). Without these flags nothing could interrupt
+/// that sleep: cancelling the run or withdrawing AI consent in settings would
+/// not take effect until the retries were exhausted. Clone the handle and flip
+/// it from another thread.
+#[derive(Clone)]
+pub struct RetrySignals {
+    cancel: Arc<AtomicBool>,
+    consent: Arc<AtomicBool>,
+}
+
+impl Default for RetrySignals {
+    /// A standalone set with consent granted, for callers that never flip
+    /// either flag.
+    fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl RetrySignals {
+    /// Start with a specific consent state.
+    pub fn new(consent: bool) -> Self {
+        Self {
+            cancel: Arc::new(AtomicBool::new(false)),
+            consent: Arc::new(AtomicBool::new(consent)),
+        }
+    }
+
+    /// Ask the waiting loop to give up.
+    pub fn cancel(&self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Withdraw the consent the wait was granted under.
+    pub fn withdraw_consent(&self) {
+        self.consent.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn consent_granted(&self) -> bool {
+        self.consent.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
 
 /// Connection and consent settings for a remote adjudicator.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +141,20 @@ impl LlmConfig {
             && !self.model.trim().is_empty()
             && !self.api_key.trim().is_empty()
     }
+}
+
+/// Rate-limit retries before giving up. With the half-hour default back-off,
+/// nine attempts span roughly four hours.
+const MAX_RETRY_ATTEMPTS: usize = 9;
+
+/// How a rate-limit wait ended.
+enum WaitOutcome {
+    /// The full back-off elapsed; the caller may retry.
+    Elapsed,
+    /// The cancel flag was flipped during the wait.
+    Cancelled,
+    /// Consent was withdrawn during the wait.
+    ConsentWithdrawn,
 }
 
 /// One candidate as the model sees it.
@@ -171,6 +236,7 @@ regenerated after deletion (e.g. which app must rebuild, which data is unrecover
 pub struct OpenAiCompatibleAdjudicator {
     config: LlmConfig,
     client: reqwest::blocking::Client,
+    signals: RetrySignals,
 }
 
 impl OpenAiCompatibleAdjudicator {
@@ -192,7 +258,24 @@ impl OpenAiCompatibleAdjudicator {
             .timeout(config.timeout)
             .build()
             .map_err(|err| AdjudicateError::Transport(err.to_string()))?;
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            signals: RetrySignals::default(),
+        })
+    }
+
+    /// Attach externally visible cancel/consent flags polled during the
+    /// rate-limit back-off. Without this the client uses an internal set that
+    /// nothing else can flip.
+    pub fn with_retry_signals(mut self, signals: RetrySignals) -> Self {
+        self.signals = signals;
+        self
+    }
+
+    /// A handle to this client's live retry flags.
+    pub fn retry_signals(&self) -> RetrySignals {
+        self.signals.clone()
     }
 
     pub fn config(&self) -> &LlmConfig {
@@ -211,16 +294,24 @@ impl OpenAiCompatibleAdjudicator {
         guardrails: &Guardrails,
         now_ms: i64,
     ) -> Result<Vec<Verdict>, AdjudicateError> {
-        // Rate limits are not a failed analysis: wait and retry. Default
-        // back-off is half an hour; a sane `Retry-After` header wins.
-        const MAX_ATTEMPTS: usize = 9; // ~4 h before giving up.
+        // Rate limits are not a failed analysis: wait and retry.
         let mut attempt = 1usize;
         loop {
             match self.request_batch_once(batch, guardrails, now_ms) {
                 Ok(verdicts) => return Ok(verdicts),
-                Err(Retry::RateLimited(wait_ms)) if attempt < MAX_ATTEMPTS => {
+                Err(Retry::RateLimited(wait_ms)) if attempt < MAX_RETRY_ATTEMPTS => {
                     attempt += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+                    // The wait can be cut short by cancellation or by consent
+                    // withdrawal; a retry never proceeds on stale permission.
+                    match self.wait_for_retry(wait_ms) {
+                        WaitOutcome::Elapsed => {}
+                        WaitOutcome::Cancelled => return Err(AdjudicateError::Cancelled),
+                        WaitOutcome::ConsentWithdrawn => {
+                            return Err(AdjudicateError::NotConfigured(
+                                "remote consent withdrawn during retry".to_string(),
+                            ))
+                        }
+                    }
                 }
                 Err(Retry::RateLimited(_)) => {
                     return Err(AdjudicateError::Transport(
@@ -231,6 +322,28 @@ impl OpenAiCompatibleAdjudicator {
                     return Err(AdjudicateError::Transport(message))
                 }
             }
+        }
+    }
+
+    /// Sleep up to `wait_ms` in short slices, polling the live cancel/consent
+    /// flags so interruption latency is bounded by one slice.
+    fn wait_for_retry(&self, wait_ms: u64) -> WaitOutcome {
+        /// Poll this often; cancellation is observed within this long.
+        const POLL_SLICE: Duration = Duration::from_millis(200);
+        let mut remaining = wait_ms;
+        loop {
+            if self.signals.cancelled() {
+                return WaitOutcome::Cancelled;
+            }
+            if !self.signals.consent_granted() {
+                return WaitOutcome::ConsentWithdrawn;
+            }
+            if remaining == 0 {
+                return WaitOutcome::Elapsed;
+            }
+            let step = remaining.min(POLL_SLICE.as_millis() as u64);
+            std::thread::sleep(Duration::from_millis(step));
+            remaining -= step;
         }
     }
 
@@ -508,5 +621,55 @@ mod tests {
         assert_eq!(verdicts[0].safety, Safety::Review);
         assert!(verdicts[0].source.is_model());
         assert_eq!(verdicts[0].source, VerdictSource::remote("remote"));
+    }
+
+    fn new_test_client() -> OpenAiCompatibleAdjudicator {
+        let config =
+            LlmConfig::new("ark", "https://example.test/v1/chat", "m", "key").with_consent();
+        OpenAiCompatibleAdjudicator::new(config).unwrap()
+    }
+
+    #[test]
+    fn retry_wait_returns_elapsed_for_an_uninterrupted_backoff() {
+        let adjudicator = new_test_client();
+        assert!(matches!(
+            adjudicator.wait_for_retry(10),
+            WaitOutcome::Elapsed
+        ));
+    }
+
+    #[test]
+    fn retry_wait_is_interruptible_and_rechecks_consent() {
+        // A minute-long back-off must end within milliseconds when the cancel
+        // flag flips, rather than sleeping the full wait.
+        let adjudicator = new_test_client();
+        let signals = adjudicator.retry_signals();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            signals.cancel();
+        });
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            adjudicator.wait_for_retry(60_000),
+            WaitOutcome::Cancelled
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "cancel must cut the wait short"
+        );
+        handle.join().unwrap();
+
+        // Withdrawing consent while asleep ends it with the consent outcome.
+        let adjudicator = new_test_client();
+        let signals = adjudicator.retry_signals();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            signals.withdraw_consent();
+        });
+        assert!(matches!(
+            adjudicator.wait_for_retry(60_000),
+            WaitOutcome::ConsentWithdrawn
+        ));
+        handle.join().unwrap();
     }
 }

@@ -56,4 +56,4 @@ pub use simulate::SimulatedAdjudicator;
 pub use rules::{RuleHit, RuleThresholds};
 
 #[cfg(feature = "remote-ai")]
-pub use remote::{LlmConfig, OpenAiCompatibleAdjudicator};
+pub use remote::{LlmConfig, OpenAiCompatibleAdjudicator, RetrySignals};
