@@ -43,7 +43,10 @@ pub use candidate::{redact_path, Candidate, CandidateKind, Evidence, Nomination}
 pub use cleanup::{
     display_command, plan_for, CleanupMethod, CleanupPlan, CommandStep,
 };
-pub use habits::{Decision, DecisionLog, DecisionOutcome, RoutineSuggestion, SuggestionReason};
+pub use habits::{
+    Decision, DecisionLog, DecisionOutcome, HabitAdjudicator, HabitPolicy, LEARNED_CONFIDENCE,
+    RoutineSuggestion, SuggestionReason,
+};
 pub use reason::{
     clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource,
 };

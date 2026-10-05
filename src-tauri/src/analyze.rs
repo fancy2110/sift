@@ -846,10 +846,14 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
                 .with_language(ai.language.clone())
                 .with_batch_size(ai.batch_size);
                 if let Ok(remote) = sift_analyze::OpenAiCompatibleAdjudicator::new(config) {
-                    return Box::new(sift_analyze::RoutingAdjudicator::with_remote(
-                        RuleAdjudicator::new(),
-                        remote,
-                        sift_analyze::Guardrails::default(),
+                    return Box::new(sift_analyze::HabitAdjudicator::new(
+                        sift_analyze::RoutingAdjudicator::with_remote(
+                            RuleAdjudicator::new(),
+                            remote,
+                            sift_analyze::Guardrails::default(),
+                        ),
+                        services.store.decisions(),
+                        sift_analyze::HabitPolicy::default(),
                     ));
                 }
             }
@@ -859,10 +863,14 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
     // No usable real provider (no token configured): run the same pipeline
     // against the offline simulated adjudicator, so model-adjudicable families
     // still receive an AI-style judgment and impact without network access.
-    Box::new(sift_analyze::RoutingAdjudicator::with_remote(
-        RuleAdjudicator::new(),
-        sift_analyze::SimulatedAdjudicator::new(),
-        sift_analyze::Guardrails::default(),
+    Box::new(sift_analyze::HabitAdjudicator::new(
+        sift_analyze::RoutingAdjudicator::with_remote(
+            RuleAdjudicator::new(),
+            sift_analyze::SimulatedAdjudicator::new(),
+            sift_analyze::Guardrails::default(),
+        ),
+        services.store.decisions(),
+        sift_analyze::HabitPolicy::default(),
     ))
 }
 

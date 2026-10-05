@@ -100,6 +100,8 @@ const zh: Record<string, string> = {
   'reason.tempFile': '系统自动生成的临时文件，删除无影响。',
   'reason.userMarked': '你手动加入的项目，将移入回收站，可恢复。',
   'reason.unjudged': '暂未得出可靠结论，需要你人工判断。',
+  'reason.habituallyKept': '你多次明确保留过该项目，将不再建议清理。',
+  'reason.habituallyRemoved': '你已多次清理过该项目，现视为可安全清理。',
 
   'cleanup.method.nativeCommand': '使用工具链专有命令',
   'cleanup.method.trashItem': '移入回收站（可恢复）',
@@ -445,6 +447,8 @@ const en: Record<string, string> = {
   'reason.tempFile': 'Temporary file created by the system; deleting it is harmless.',
   'reason.userMarked': 'Item you added manually; moved to Trash and recoverable.',
   'reason.unjudged': 'No reliable conclusion yet; this needs your judgment.',
+  'reason.habituallyKept': 'You have chosen to keep this several times; it will no longer be suggested for cleanup.',
+  'reason.habituallyRemoved': 'You have cleaned this several times; it is now considered safe to remove.',
 
   'cleanup.method.nativeCommand': 'Toolchain-native command',
   'cleanup.method.trashItem': 'Move to Trash (recoverable)',
