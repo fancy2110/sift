@@ -276,7 +276,25 @@ fn toggle_window(app: &AppHandle) {
 }
 
 /// Start a scan of the last-scanned root, falling back to the system volume.
+///
+/// Runs on a dedicated background thread: the menu event callback is the
+/// platform main thread, and starting a scan refreshes every disk and runs
+/// blocking journal I/O (a resume restores hundreds of thousands of nodes), so
+/// an inline start freezes the whole UI, the same reason `clean_safe_items`
+/// spawns its own thread.
 fn trigger_scan(app: &AppHandle) {
+    let app = app.clone();
+    let started = std::thread::Builder::new()
+        .name("sift-tray-scan".into())
+        .spawn(move || {
+            trigger_scan_blocking(&app);
+        });
+    if let Err(err) = started {
+        eprintln!("tray scan thread failed: {err}");
+    }
+}
+
+fn trigger_scan_blocking(app: &AppHandle) {
     let manager = app.state::<crate::scanner::ScanManager>();
     if manager.is_running() {
         return;
@@ -294,7 +312,7 @@ fn trigger_scan(app: &AppHandle) {
         return;
     };
     let root_text = root.to_string_lossy().to_string();
-    if crate::scanner::start_scan(app.clone(), manager, root_text.clone(), root_text).is_ok() {
+    if crate::scanner::start_scan_with(app, &manager, root_text.clone(), root_text).is_ok() {
         spawn_menu_refresh(app);
     }
 }

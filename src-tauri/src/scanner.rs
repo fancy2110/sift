@@ -131,6 +131,11 @@ pub struct ScanManager {
     last_root: Mutex<Option<PathBuf>>,
     sequence: Mutex<u64>,
     journal: Mutex<Option<Arc<SqliteScanJournal>>>,
+    /// Serializes start attempts. Starts used to be serialized accidentally by
+    /// running on the main thread; now that they run on blocking-task threads,
+    /// two concurrent starts (a UI click racing a tray-menu click) could
+    /// otherwise both pass the `is_running` check and replace each other.
+    start_gate: Mutex<()>,
 }
 
 impl ScanManager {
@@ -228,14 +233,29 @@ impl ScanManager {
 /// Start (or restart) a scan. Returns as soon as the engine is running; results
 /// arrive as events. The returned value is the scan's epoch id, which tags
 /// every event the scan emits.
+///
+/// Async and off-loaded to a blocking-task thread on purpose. The start path
+/// refreshes every disk (`free_space`, which can block on a hung network
+/// mount) and then prunes and loads the SQLite journal, adopting every
+/// restored node into the tree — a resume can carry hundreds of thousands of
+/// nodes (see the `NodesAdopted` handling in `pump_events`). Tauri runs a
+/// synchronous command on the platform main thread, so starting inline froze
+/// the whole app while that work ran.
 #[tauri::command]
-pub fn start_scan(
+pub async fn start_scan(
     app: AppHandle,
-    manager: State<'_, ScanManager>,
     root: String,
     focus: String,
 ) -> Result<u64, String> {
-    start_scan_with(&app, &manager, root, focus)
+    tauri::async_runtime::spawn_blocking(move || {
+        // Resolve state inside the task: the injected `State` guard borrows from
+        // the command and cannot move into a 'static closure, while an owned
+        // AppHandle can.
+        let manager = app.state::<ScanManager>();
+        start_scan_with(&app, &manager, root, focus)
+    })
+    .await
+    .unwrap_or_else(|err| Err(format!("scan start interrupted: {err}")))
 }
 
 /// Start a scan against a concrete manager, callable from non-command code.
@@ -246,6 +266,10 @@ pub fn start_scan_with(
     root: String,
     focus: String,
 ) -> Result<u64, String> {
+    // Hold the gate only while installing the scan; it drops at function end,
+    // before the pump thread runs.
+    let _gate = manager.start_gate.lock().unwrap();
+
     if manager.is_running() {
         return Err("scan already running".into());
     }
