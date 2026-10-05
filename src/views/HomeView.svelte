@@ -54,13 +54,6 @@
     Math.min(1, (Math.min(centerW, centerH) - 8) / desiredW)
   );
 
-  // With few requests the list flows at natural height (no scroll box); once
-  // it would get tall, switch to a fixed vh scroll area. vh is definite, which
-  // avoids the indefinite-flex sizing that made the area collapse/overflow.
-  const PERM_SCROLL_AFTER = 3;
-  let permScrollMode = $derived(
-    store.permissionRequests.length > PERM_SCROLL_AFTER);
-
   // Once a review-triggered scan finishes and produces findings, enter smart.
   $effect(() => {
     if (reviewRequested && !store.scanning && store.hasFindings) {
@@ -252,50 +245,6 @@
    </div>
   </div>
 
-  <!-- permission requests: a flex sibling of the stage so its fixed-height
-       scroller can never slide underneath the entry cards. -->
-  {#if store.permissionRequests.length}
-    {@const sorted = [...store.permissionRequests].sort(
-      (a, b) => Number(b.tcc) - Number(a.tcc))}
-    <div class="perm-list" class:scroll-mode={permScrollMode}>
-      <div class="perm-head">
-        <span>{t('permission.heading', [sorted.length])}</span>
-        <button
-          type="button"
-          class="perm-skipall"
-          onclick={() => store.skipAllPermissions()}
-        >
-          {t('permission.skipAll')}
-        </button>
-      </div>
-      <div class="perm-scroll">
-      {#each sorted as req (req.id)}
-        <div class="perm-card" class:posix={!req.tcc} in:fly={{ y: 14, duration: 380, easing: cubicOut }}>
-          <p class="perm-title">
-            <span class="perm-tag" class:tag-posix={!req.tcc}>
-              {req.tcc ? t('permission.tccTag') : t('permission.adminTag')}
-            </span>
-            {req.name}
-          </p>
-          <p class="perm-msg">
-            {req.tcc ? t('permission.message', [req.name]) : t('permission.adminNeeded')}
-          </p>
-          <div class="perm-actions">
-            {#if req.tcc}
-              <button type="button" class="perm-btn primary" onclick={() => store.grantPermission(req)}>
-                {t('permission.grant')}
-              </button>
-            {/if}
-            <button type="button" class="perm-btn" onclick={() => store.skipPermission(req)}>
-              {t('permission.skip')}
-            </button>
-          </div>
-        </div>
-      {/each}
-      </div>
-    </div>
-  {/if}
-
   <!-- entry cards -->
   <div class="hub-cards">
     <button class="hub-card" onclick={() => store.go('dashboard')} in:fly={{ y: 26, duration: 520, delay: 420, easing: cubicOut }}>
@@ -397,9 +346,8 @@
 
   .hub-center {
     position: relative;
-    /* Zero basis: the stage takes only the leftover after the permission
-       panel (a flex sibling) and the entry cards claim their definite
-       heights, so the ring shrinks predictably when many requests park. */
+    /* Permission requests render in a floating drawer (PermissionDrawer),
+       so the stage always owns the full center column. */
     flex: 1 1 0;
     min-height: 0;
     width: 100%;
@@ -752,141 +700,4 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .perm-list {
-    /* Direct flex child of .hub: never shrink; the ring stage (flex:1 with
-       min-height:0) absorbs the shortage through fitScale. */
-    flex: 0 0 auto;
-    width: 100%;
-    max-width: 820px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin: 18px 0 6px;
-  }
-  /* A few requests: the wrapper just lays the cards out naturally. */
-  .perm-scroll {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 2px 6px 2px 0;
-  }
-  /* Many requests: fixed vh (always definite) scroll area, so the list can
-     neither collapse nor overflow over the entry cards. */
-  .perm-list.scroll-mode .perm-scroll {
-    flex: none;
-    height: 38vh;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    scrollbar-width: thin;
-    scrollbar-color:
-      color-mix(in oklch, var(--color-border-strong) 80%, transparent)
-      transparent;
-  }
-  .perm-list.scroll-mode .perm-scroll::-webkit-scrollbar {
-    width: 8px;
-  }
-  .perm-list.scroll-mode .perm-scroll::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .perm-list.scroll-mode .perm-scroll::-webkit-scrollbar-thumb {
-    border-radius: 8px;
-    background: color-mix(in oklch, var(--color-border-strong) 70%, transparent);
-  }
-  .perm-list.scroll-mode .perm-scroll::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklch, var(--color-faint) 60%, transparent);
-  }
-  .perm-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.12em;
-    color: var(--color-faint);
-  }
-  .perm-skipall {
-    padding: 4px 10px;
-    border-radius: 8px;
-    border: 1px solid color-mix(in oklch, var(--color-border-strong) 60%, transparent);
-    background: transparent;
-    color: var(--color-faint);
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    cursor: default;
-    transition: background 0.15s ease, color 0.15s ease;
-  }
-  .perm-skipall:hover {
-    background: color-mix(in oklch, var(--color-surface-3, var(--color-surface-2)) 70%, transparent);
-    color: var(--color-fg);
-  }
-  .perm-card {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px 16px;
-    border-radius: 14px;
-    border: 1px solid color-mix(in oklch, var(--color-border-strong) 55%, transparent);
-    background: color-mix(in oklch, var(--color-surface) 92%, var(--color-shadow) 6%);
-    box-shadow: 0 16px 36px -24px var(--color-shadow);
-  }
-  .perm-card.posix {
-    border-color: color-mix(in oklch, var(--color-amber, #c8852c) 38%, transparent);
-  }
-  .perm-title {
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--color-fg);
-  }
-  .perm-tag {
-    flex-shrink: 0;
-    padding: 2px 8px;
-    border-radius: 7px;
-    font-size: 9.5px;
-    letter-spacing: 0.12em;
-    color: var(--color-violet);
-    background: color-mix(in oklch, var(--color-violet) 14%, transparent);
-  }
-  .perm-tag.tag-posix {
-    color: var(--color-amber, #c8852c);
-    background: color-mix(in oklch, var(--color-amber, #c8852c) 14%, transparent);
-  }
-  .perm-msg {
-    margin: 0;
-    font-size: 12.5px;
-    color: var(--color-faint);
-  }
-  .perm-actions {
-    display: flex;
-    gap: 8px;
-    align-self: flex-end;
-  }
-  .perm-btn {
-    padding: 7px 14px;
-    border-radius: 10px;
-    border: 1px solid color-mix(in oklch, var(--color-border-strong) 60%, transparent);
-    background: transparent;
-    color: var(--color-fg);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: default;
-    transition: background 0.15s ease, border-color 0.15s ease;
-  }
-  .perm-btn:hover {
-    background: color-mix(in oklch, var(--color-surface-3, var(--color-surface-2)) 70%, transparent);
-  }
-  .perm-btn.primary {
-    border-color: transparent;
-    background: var(--color-violet);
-    color: #fff;
-  }
-  .perm-btn.primary:hover {
-    background: color-mix(in oklch, var(--color-violet) 88%, #fff 6%);
-  }
 </style>

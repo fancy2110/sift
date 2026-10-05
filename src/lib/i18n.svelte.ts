@@ -240,6 +240,8 @@ const zh: Record<string, string> = {
   'permission.adminTag': '系统保护',
   'permission.adminNeeded': '该目录受系统权限保护，需要管理员授权，Sift 无法直接访问',
   'permission.heading': '未授权目录 · {0}',
+  'permission.drawerTab': '需要授权',
+  'permission.collapse': '收起侧边栏',
   // Directory status badges
   'status.estimated': '估算',
   'status.denied': '拒绝访问',
@@ -577,6 +579,8 @@ const en: Record<string, string> = {
   'permission.adminTag': 'System',
   'permission.adminNeeded': 'This directory is protected by system permissions and needs an administrator. Sift cannot access it directly.',
   'permission.heading': 'Restricted directories · {0}',
+  'permission.drawerTab': 'Access needed',
+  'permission.collapse': 'Collapse sidebar',
   // Directory status badges
   'status.estimated': 'estimated',
   'status.denied': 'access denied',
