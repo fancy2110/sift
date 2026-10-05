@@ -37,6 +37,7 @@ import {
   type PermissionRequest,
   type ProgressInfo
 } from './ipc';
+import { prunedSizeDeltas } from './tree-prune';
 import type {
   AiConfig,
   Finding,
@@ -771,6 +772,19 @@ class AppStore {
         list.push(id);
         detach.set(node.parentId, list);
       }
+    }
+
+    // Recompute surviving ancestor totals (R4.4): each removed component's
+    // last known subtree size is subtracted up the surviving parent chain, so
+    // the explorer stops showing bytes that are already gone.
+    const sizeDeltas = prunedSizeDeltas(
+      remove,
+      (id) => this.nodeRecords.get(id)?.parentId ?? null,
+      (id) => this.nodeRecords.get(id)?.size
+    );
+    for (const [id, delta] of sizeDeltas) {
+      const node = this.nodeRecords.get(id);
+      if (node) node.size = Math.max(0, node.size - delta);
     }
 
     for (const id of remove) {
