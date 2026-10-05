@@ -252,22 +252,78 @@ pub fn parent_is_writable(path: &Path) -> bool {
     let Ok(meta) = fs::metadata(parent) else {
         return false;
     };
-    let mode = meta.mode();
-    let owner_matches = meta.uid() == effective_uid();
-    if owner_matches {
+    unix_mode_is_writable_for(meta.mode(), meta.uid(), meta.gid())
+}
+
+/// Whether the given Unix mode grants *this process* write permission, given
+/// the entry's owning uid/gid.
+///
+/// The check follows the kernel's owner → group → other order. Crucially the
+/// group step tests membership against **every supplementary group**
+/// (`getgroups`), not only the effective gid: e.g. `/Applications` is owned
+/// by `root:admin` with group-write on, and a normal user belongs to `admin`
+/// via a supplementary group, so it must read as writable even though the
+/// process's primary group is something else.
+///
+/// Shared by every write probe in the workspace (core and platform) so the
+/// answer stays identical whether bits came from metadata, a bulk-read entry,
+/// or an fstat-ed descriptor.
+#[cfg(unix)]
+pub fn unix_mode_is_writable_for(mode: u32, uid: u32, gid: u32) -> bool {
+    if uid == identity::effective_uid() {
         mode & 0o200 != 0
+    } else if identity::in_effective_group(gid) {
+        mode & 0o020 != 0
     } else {
         mode & 0o002 != 0
     }
 }
 
 #[cfg(unix)]
-fn effective_uid() -> u32 {
-    // Declared here rather than pulling in `libc` for one call.
+mod identity {
+    use std::sync::OnceLock;
+
     extern "C" {
         fn geteuid() -> u32;
+        fn getgroups(size: i32, list: *mut u32) -> i32;
     }
-    unsafe { geteuid() }
+
+    pub fn effective_uid() -> u32 {
+        unsafe { geteuid() }
+    }
+
+    /// Whether `gid` is among the process's effective group set.
+    pub fn in_effective_group(gid: u32) -> bool {
+        effective_groups().contains(&gid)
+    }
+
+    /// Test-only view of the cached group set.
+    #[cfg(test)]
+    pub fn test_groups() -> &'static [u32] {
+        effective_groups()
+    }
+
+    /// The process's own groups never change; fetch them once.
+    fn effective_groups() -> &'static [u32] {
+        GROUPS.get_or_init(|| {
+            unsafe {
+                // size 0 returns the group count without writing the list.
+                let count = getgroups(0, std::ptr::null_mut());
+                if count <= 0 {
+                    return Vec::new();
+                }
+                let mut list = vec![0u32; count as usize];
+                let filled = getgroups(count, list.as_mut_ptr());
+                if filled <= 0 {
+                    return Vec::new();
+                }
+                list.truncate(filled as usize);
+                list
+            }
+        })
+    }
+
+    static GROUPS: OnceLock<Vec<u32>> = OnceLock::new();
 }
 
 /// Whether a *directory itself* permits deleting its children, judged from the
@@ -279,12 +335,7 @@ fn effective_uid() -> u32 {
 #[cfg(unix)]
 pub fn dir_is_writable(meta: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
-    let mode = meta.mode();
-    if meta.uid() == effective_uid() {
-        mode & 0o200 != 0
-    } else {
-        mode & 0o002 != 0
-    }
+    unix_mode_is_writable_for(meta.mode(), meta.uid(), meta.gid())
 }
 
 /// Windows ACLs are not expressible through Unix mode bits; reaching the
@@ -452,5 +503,42 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_bit_decides_when_we_own_the_entry() {
+        let euid = identity::effective_uid();
+        assert!(unix_mode_is_writable_for(0o700, euid, 0));
+        assert!(unix_mode_is_writable_for(0o200, euid, 0));
+        // Without the owner write bit the group/other bits are ignored,
+        // exactly as the kernel does.
+        assert!(!unix_mode_is_writable_for(0o077, euid, 0));
+        assert!(!unix_mode_is_writable_for(0o022, euid, 0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn group_write_uses_every_supplementary_group() {
+        let euid = identity::effective_uid();
+        let other_uid = euid.wrapping_add(1);
+        let groups = identity::test_groups();
+        // getgroups always includes at least the effective group.
+        let member = *groups.first().expect("getgroups returned no groups");
+
+        // The /Applications case: owned by someone else (root), group is a
+        // group we belong to via a supplementary entry, mode 0775.
+        assert!(unix_mode_is_writable_for(0o775, other_uid, member));
+        // Membership alone is not enough — the group write bit must be set.
+        assert!(!unix_mode_is_writable_for(0o755, other_uid, member));
+        assert!(!unix_mode_is_writable_for(0o705, other_uid, member));
+
+        // A gid outside our group set never unlocks the group bit...
+        let outsider = (0u32..).find(|g| !groups.contains(g)).unwrap();
+        assert!(!unix_mode_is_writable_for(0o775, other_uid, outsider));
+        // ...but the owner→group→other fallthrough still reaches `other`.
+        assert!(unix_mode_is_writable_for(0o777, other_uid, outsider));
+        assert!(unix_mode_is_writable_for(0o002, other_uid, outsider));
+        assert!(!unix_mode_is_writable_for(0o005, other_uid, outsider));
     }
 }
