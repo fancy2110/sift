@@ -35,7 +35,9 @@ import {
   type BatchUpdate,
   type DeleteResultItem,
   type PermissionRequest,
-  type ProgressInfo
+  type ProgressInfo,
+  type RefreshedEvent,
+  type ScanDoneEvent
 } from './ipc';
 import type {
   AiConfig,
@@ -136,6 +138,13 @@ class AppStore {
   private toastSeq = 0;
   private started = false;
   private analysedScan = false;
+  /**
+   * Epoch id of the scan whose events may touch the current tree. Zero while a
+   * new scan is starting, so late events from the previous scan are dropped.
+   */
+  private scanEpoch = 0;
+  /** Resolvers waiting for a specific scan's done event during a scope switch. */
+  private scanStopWaiters = new Map<number, () => void>();
 
   // ---- scope lookups ----
 
@@ -288,16 +297,21 @@ class AppStore {
 
     await Promise.all([
       onScanBatch((batch) => this.handleBatch(batch)),
-      onScanDone((event) => this.handleScanDone(event.cancelled)),
-      onScanRefreshed(() => this.handleRefreshed()),
+      onScanDone((event) => this.handleScanDone(event)),
+      onScanRefreshed((event) => this.handleRefreshed(event)),
       onFsDeleted((event) => this.pruneIds(new Set([event.id]))),
       onMonitorEvent((event) => this.handleMonitorEvent(event))
     ]);
 
     // A reload (or a webview reattach) can happen while a scan is still
     // running on the backend; batches keep streaming either way, so reflect
-    // the live scan instead of rendering the idle home screen.
-    if (await scanRunning()) this.scanning = true;
+    // the live scan instead of rendering the idle home screen. Adopting the
+    // backend's epoch keeps those batches from being rejected as stale.
+    const activeEpoch = await scanRunning();
+    if (activeEpoch !== null) {
+      this.scanning = true;
+      this.scanEpoch = activeEpoch;
+    }
 
     for (const warning of await takeStoreWarnings()) {
       this.toast(renderStoreWarning(warning));
@@ -330,20 +344,56 @@ class AppStore {
 
   private async startScope(id: string) {
     if (id === this.scopeId && this.rootId && !this.scanning) return;
+
+    // Stop the current scan before switching: the backend rejects a second
+    // concurrent start with "scan already running", and late batches from the
+    // old scan could otherwise repopulate the reset tree (the first
+    // parentId===null entry wins the root slot).
+    if (this.scanning) await this.cancelForSwitch();
+
     this.scopeId = id;
 
     const root = this.scopePath;
     if (!root) return;
 
+    // resetScanState clears scanEpoch to 0; no real scan carries epoch 0, so
+    // every straggler event from the previous scan is rejected until the new
+    // scan reports its id below.
     this.resetScanState();
+    let epoch: number;
     try {
-      await startScan(root, root);
+      epoch = await startScan(root, root);
     } catch (error) {
       this.scanning = false;
       this.toast(t('toast.scanStartFailed', [String(error)]));
       return;
     }
+    this.scanEpoch = epoch;
     this.watchCurrentDir();
+  }
+
+  /**
+   * Cancel the running scan as part of a scope switch and wait for its
+   * `scan://done` event, so the backend's running flag has cleared before the
+   * new start is attempted. A timeout bounds the wait in case the done event
+   * is missed.
+   */
+  private async cancelForSwitch(): Promise<void> {
+    const oldEpoch = this.scanEpoch;
+    const stopped = new Promise<void>((resolve) => {
+      this.scanStopWaiters.set(oldEpoch, resolve);
+    });
+    try {
+      await cancelScan();
+    } catch {
+      // If the cancel itself fails, try the start anyway and surface its
+      // error rather than blocking the switch.
+    }
+    await Promise.race([
+      stopped,
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+    this.scanStopWaiters.delete(oldEpoch);
   }
 
   /** Cancel the running scan from the UI. */
@@ -379,6 +429,7 @@ class AppStore {
     };
     this.permissionRequests = [];
     this.analysedScan = false;
+    this.scanEpoch = 0;
     this.treeVersion += 1;
   }
 
@@ -484,6 +535,9 @@ class AppStore {
   }
 
   private handleBatch(batch: BatchUpdate) {
+    // Late batch from a cancelled/replaced scan: the new tree must not see it.
+    if (batch.epoch !== this.scanEpoch) return;
+
     for (const incoming of batch.discovered) {
       // The pump only forwards directory entries; keep the guard anyway.
       if (!incoming.isDir) continue;
@@ -634,9 +688,19 @@ class AppStore {
     }
   }
 
-  private async handleScanDone(cancelled: boolean) {
+  private async handleScanDone(event: ScanDoneEvent) {
+    // This scan was cancelled to make room for a scope switch; release the
+    // switch wait without touching the (about-to-be-reset) view state.
+    const waiter = this.scanStopWaiters.get(event.epoch);
+    if (waiter) {
+      waiter();
+      return;
+    }
+    // Done event of an older scan that is no longer displayed.
+    if (event.epoch !== this.scanEpoch) return;
+
     this.scanning = false;
-    if (cancelled) return;
+    if (event.cancelled) return;
     if (this.analysedScan) return;
     this.analysedScan = true;
     await this.runAnalysis();
@@ -647,7 +711,9 @@ class AppStore {
    * already patched the records; re-render the open folder and re-run analysis
    * so smart-view conclusions reflect the newly visible bytes.
    */
-  private async handleRefreshed() {
+  private async handleRefreshed(event: RefreshedEvent) {
+    // Refresh from an older scan that is no longer displayed.
+    if (event.epoch !== this.scanEpoch) return;
     this.rebuildCurrentEntries();
     await this.runAnalysis();
   }
