@@ -34,6 +34,7 @@ pub use monitor::{
     Remover, SystemTrash,
 };
 pub use policy::{
-    evaluate, inside_home, paths_of, still_matches, AlertLevel, ConfirmationReason, DiskSample,
+    evaluate, inside_home, paths_of, resolved_inside_home, still_matches, AlertLevel,
+    ConfirmationReason, DiskSample,
     MonitorAction, MonitorConfig, MonitorDecision,
 };

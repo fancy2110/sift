@@ -16,7 +16,7 @@
 //! 4. Nothing is selected twice inside the cooldown window.
 //! 5. `NotifyOnly` (and `Off`) never select anything at all.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sift_analyze::ConfidencePolicy;
@@ -317,13 +317,66 @@ pub fn evaluate(
 
 /// Whether `path` sits inside `home`.
 ///
-/// A missing home means "cannot prove it is inside", which refuses the entry:
-/// the safe direction for an unattended deletion.
+/// Both sides are lexically normalized (collapsing `.`/`..`) before the prefix
+/// test, so a path like `<home>/../elsewhere` cannot smuggle an outside entry
+/// past the boundary. A missing home means "cannot prove it is inside", which
+/// refuses the entry: the safe direction for an unattended deletion.
+///
+/// Note this stays purely lexical — it cannot see through symlinks. Callers
+/// that need to prove where a path actually points use
+/// [`resolved_inside_home`] instead.
 pub fn inside_home(path: &Path, home: Option<&Path>) -> bool {
     let Some(home) = home else {
         return false;
     };
-    path.starts_with(home)
+    lexical_normalize(path).starts_with(lexical_normalize(home))
+}
+
+/// Filesystem-proven variant of [`inside_home`].
+///
+/// Both paths are canonicalized (`realpath`) first, so a symlink that points
+/// at something outside the home cannot keep an entry inside the boundary by
+/// looking home-shaped lexically. If either side cannot be resolved — the path
+/// vanished, a component is not searchable — the answer is `false`: "cannot
+/// prove it is inside" always refuses an unattended deletion.
+pub fn resolved_inside_home(path: &Path, home: Option<&Path>) -> bool {
+    let Some(home) = home else {
+        return false;
+    };
+    let Ok(real_home) = std::fs::canonicalize(home) else {
+        return false;
+    };
+    let Ok(real_path) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    real_path.starts_with(real_home)
+}
+
+/// Collapse `.`/`..` components without touching the filesystem.
+///
+/// A `..` that would escape past the path's own root cannot be resolved and is
+/// left in place; such a path then only matches a home sharing the same
+/// unresolvable prefix, which a real home never does.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let can_pop = matches!(
+                    out.components().next_back(),
+                    Some(Component::Normal(_))
+                );
+                if can_pop {
+                    out.pop();
+                } else {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Compare a remembered entry against the filesystem *now*.
@@ -392,15 +445,21 @@ pub(crate) fn modified_ms(meta: &std::fs::Metadata) -> i64 {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        meta.last_write_time()
-            .map(|time| ((time as i128 - 116_444_736_000_000_000) / 10_000) as i64)
-            .unwrap_or(0)
+        filetime_to_unix_ms(meta.last_write_time())
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = meta;
         0
     }
+}
+
+/// Convert a Windows FILETIME (100 ns ticks since 1601-01-01 UTC) to Unix
+/// epoch milliseconds. Lives outside `#[cfg(windows)]` so the arithmetic can
+/// be unit-tested on any platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn filetime_to_unix_ms(filetime: u64) -> i64 {
+    ((filetime as i128 - 116_444_736_000_000_000) / 10_000) as i64
 }
 
 /// A path kept for tests and callers that need a plain `PathBuf` list.
@@ -914,6 +973,57 @@ mod tests {
     }
 
     #[test]
+    fn inside_home_normalizes_dot_dot_lexically() {
+        let home = Path::new("/Users/me");
+        // A wander out and back in still resolves inside.
+        assert!(inside_home(
+            Path::new("/Users/me/project/../project/file"),
+            Some(home)
+        ));
+        // The bypass the review found: `<home>/../<outside>` is not inside.
+        assert!(!inside_home(
+            Path::new("/Users/me/../etc/passwd"),
+            Some(home)
+        ));
+        assert!(!inside_home(Path::new("/Users/me/../../outside"), Some(home)));
+        // `.` components are noise.
+        assert!(inside_home(Path::new("/Users/me/./a"), Some(home)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolved_inside_home_catches_an_outward_symlink() {
+        use std::fs;
+        let base =
+            std::env::temp_dir().join(format!("sift-home-real-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let outside = base.join("outside");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        // Looks home-shaped, points out of the home.
+        std::os::unix::fs::symlink(&outside, home.join("link")).unwrap();
+
+        // The lexical check cannot see through the symlink...
+        assert!(inside_home(&home.join("link"), Some(&home)));
+        // ...the proven check refuses it.
+        assert!(!resolved_inside_home(&home.join("link"), Some(&home)));
+
+        // An entry genuinely inside passes; an unresolvable home refuses all.
+        fs::write(home.join("real.txt"), b"x").unwrap();
+        assert!(resolved_inside_home(&home.join("real.txt"), Some(&home)));
+        assert!(!resolved_inside_home(
+            &home.join("real.txt"),
+            Some(&base.join("missing"))
+        ));
+        assert!(!resolved_inside_home(&home.join("real.txt"), None));
+        // A path that no longer exists cannot be proven.
+        assert!(!resolved_inside_home(&home.join("gone"), Some(&home)));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn config_from_settings_carries_the_thresholds() {
         let settings = MonitorSettings {
             warn_free_ratio: 0.2,
@@ -972,5 +1082,18 @@ mod tests {
         // Missing path never matches.
         assert!(!fingerprint_still_matches(&file, 0, 0, false));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn filetime_epoch_anchor_is_unix_epoch() {
+        // FILETIME of 1970-01-01 00:00 UTC must map to 0 Unix ms.
+        assert_eq!(filetime_to_unix_ms(116_444_736_000_000_000), 0);
+    }
+
+    #[test]
+    fn filetime_known_date_converts_seconds_and_fraction() {
+        // 2020-01-01 00:00 UTC = Unix 1577836800 s.
+        let filetime = 116_444_736_000_000_000 + 1_577_836_800 * 10_000_000;
+        assert_eq!(filetime_to_unix_ms(filetime), 1_577_836_800_000);
     }
 }
