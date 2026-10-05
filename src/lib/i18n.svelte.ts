@@ -143,6 +143,7 @@ const zh: Record<string, string> = {
   'toast.autoOn': '自动整理已开启，仅清理你确认过的安全项',
   'toast.autoOff': '自动整理已关闭，仅保留提醒',
   'toast.settingsFailed': '设置失败：{0}',
+  'toast.aiSaveFailed': 'AI 配置保存失败：{0}',
   'toast.lowSpace': '磁盘空间偏低，建议查看清理建议',
   'toast.confirmationNeeded': '有大批可清理项，需要你确认后执行',
 
@@ -156,6 +157,8 @@ const zh: Record<string, string> = {
   'err.monitorNoHome': '无法确定用户主目录，自动清理已停用，仅做提醒',
   'err.monitorUnreadable': '无法读取磁盘剩余空间',
   'err.unknownLanguage': '未知的语言：{0}',
+  'err.aiEndpointRequired': '请填写接口地址与模型名称',
+  'err.aiTokenRequired': '请先填写 API token',
 
   'store.resetWithBackup': '{0}无法读取（{1}），已重置；原文件备份于 {2}',
   'store.reset': '{0}无法读取（{1}），已重置',
@@ -208,6 +211,7 @@ const zh: Record<string, string> = {
   'home.engineActive': '引擎运行中',
   'home.settings': '系统设置',
   'home.scanning': '正在扫描',
+  'home.awaitingAuth': '部分目录未授权',
   'home.total': '可整理总量',
   'home.itemsUnit': '项',
   'home.stateScanning': '正在检查磁盘…',
@@ -223,6 +227,28 @@ const zh: Record<string, string> = {
   'home.card.explorerSub': '手动目录清理与下钻',
   'home.card.history': '清理历史',
   'home.card.historySub': '回顾已完成的优化',
+
+  // Restricted-directory cards. Scanning never waits on these: the directory
+  // is settled at zero and can be authorized after the scan finishes.
+  'permission.title': '需要访问权限',
+  'permission.message': 'Sift 暂时无法访问“{0}”。扫描不会因此中断;授权后将自动重新统计该目录。',
+  'permission.grant': '授权访问',
+  'permission.skip': '保持跳过',
+  'permission.mismatch': '选择的文件夹不是请求的目录或其上级文件夹，请重新选择',
+  'permission.skipAll': '全部跳过',
+  'permission.tccTag': '隐私保护',
+  'permission.adminTag': '系统保护',
+  'permission.adminNeeded': '该目录受系统权限保护，需要管理员授权，Sift 无法直接访问',
+  'permission.heading': '未授权目录 · {0}',
+  'permission.drawerTab': '需要授权',
+  'permission.collapse': '收起侧边栏',
+  'permission.groupGrantable': '需要授权 · {0}',
+  'permission.groupSystem': '系统保护 · {0}',
+  'permission.systemFoot': '这些目录受 macOS 系统保护，应用无法获取访问权限，仅作展示，不会阻塞扫描。',
+  // Directory status badges
+  'status.estimated': '估算',
+  'status.denied': '拒绝访问',
+  'status.awaiting': '未授权',
 
   'dash.title': '仪表盘',
   'dash.sub': '磁盘健康、AI 分析与例行任务的总览',
@@ -291,13 +317,34 @@ const zh: Record<string, string> = {
   'settings.language': '界面语言',
   'settings.languageDesc': '在中文与 English 之间切换',
   'settings.automation': '自动化',
-  'settings.dailyTitle': '每日自动整理',
-  'settings.dailyDesc': '每天凌晨自动运行引擎，清理安全项',
+  'settings.dailyTitle': '空间不足时自动清理',
+  'settings.dailyDesc': '磁盘空间紧张时，自动清理已确认的安全项目',
+  'settings.scheduledTitle': '每日定时清理',
+  'settings.scheduledDesc': '每天在指定时间运行引擎，自动清理安全项目',
+  'settings.scheduledTime': '执行时间',
   'settings.routines': '例行任务',
   'settings.toggleMode': '切换自动 / 确认',
   'settings.runNow': '立即启动',
   'settings.delete': '删除',
-  'settings.save': '保存更改'
+  'settings.save': '保存更改',
+  'settings.ai': '智能梳理',
+  'settings.aiEnableTitle': '启用 AI 智能梳理',
+  'settings.aiEnableDesc': '由大模型判断依赖内容的项目能否删除',
+  'settings.aiPreset': '快捷预设',
+  'settings.aiPresetArk': '火山方舟',
+  'settings.aiPresetOpenai': 'OpenAI',
+  'settings.aiEndpoint': '接口地址',
+  'settings.aiEndpointPh': 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+  'settings.aiModel': '模型',
+  'settings.aiModelPh': '模型或接入点 ID，如 ep-2024xxxx',
+  'settings.aiToken': 'API Token',
+  'settings.aiTokenPh': '粘贴 API token，仅保存在本机钥匙串',
+  'settings.aiTokenSaved': '已保存 token',
+  'settings.aiTokenNone': '尚未保存 token',
+  'settings.aiTokenClear': '清除已保存的 token',
+  'settings.aiConsent':
+    '开启即表示同意将文件的脱敏信息（相对路径、类型、大小、时间，不含文件内容与绝对路径）发送至该服务。',
+  'settings.aiSaved': 'AI 配置已保存'
 };
 
 const en: Record<string, string> = {
@@ -441,6 +488,7 @@ const en: Record<string, string> = {
   'toast.autoOn': 'Auto-clean enabled; only your confirmed safe items are cleaned',
   'toast.autoOff': 'Auto-clean disabled; only reminders remain',
   'toast.settingsFailed': 'Failed to update settings: {0}',
+  'toast.aiSaveFailed': 'Failed to save AI configuration: {0}',
   'toast.lowSpace': 'Disk space is low; review cleanup suggestions',
   'toast.confirmationNeeded': 'Many cleanable items found; your confirmation is required',
 
@@ -454,6 +502,8 @@ const en: Record<string, string> = {
   'err.monitorNoHome': 'Cannot determine the home directory; auto-clean is disabled, reminders only',
   'err.monitorUnreadable': 'Cannot read free disk space',
   'err.unknownLanguage': 'Unknown language: {0}',
+  'err.aiEndpointRequired': 'Endpoint URL and model are required',
+  'err.aiTokenRequired': 'Please enter an API token first',
 
   'store.resetWithBackup': '{0} could not be read ({1}) and was reset; the original is backed up at {2}',
   'store.reset': '{0} could not be read ({1}) and was reset',
@@ -506,6 +556,7 @@ const en: Record<string, string> = {
   'home.engineActive': 'ENGINE ACTIVE',
   'home.settings': 'Settings',
   'home.scanning': 'SCANNING',
+  'home.awaitingAuth': 'SOME DIRS RESTRICTED',
   'home.total': 'RECLAIMABLE',
   'home.itemsUnit': 'items',
   'home.stateScanning': 'Checking the disk…',
@@ -521,6 +572,28 @@ const en: Record<string, string> = {
   'home.card.explorerSub': 'Manual folder cleanup & drill-down',
   'home.card.history': 'Cleanup History',
   'home.card.historySub': 'Review finished cleanups',
+
+  // Restricted-directory cards. Scanning never waits on these: the directory
+  // is settled at zero and can be authorized after the scan finishes.
+  'permission.title': 'Access required',
+  'permission.message': 'Sift cannot access “{0}” right now. The scan continues without it; authorize access and it is re-measured automatically.',
+  'permission.grant': 'Grant Access',
+  'permission.skip': 'Keep skipped',
+  'permission.mismatch': 'The selected folder is neither the requested directory nor an ancestor of it. Please try again.',
+  'permission.skipAll': 'Skip all',
+  'permission.tccTag': 'Privacy',
+  'permission.adminTag': 'System',
+  'permission.adminNeeded': 'This directory is protected by system permissions and needs an administrator. Sift cannot access it directly.',
+  'permission.heading': 'Restricted directories · {0}',
+  'permission.drawerTab': 'Access needed',
+  'permission.collapse': 'Collapse sidebar',
+  'permission.groupGrantable': 'Authorization needed · {0}',
+  'permission.groupSystem': 'System-protected · {0}',
+  'permission.systemFoot': 'These directories are protected by macOS and cannot be accessed from the app. Listed for information only; they do not block the scan.',
+  // Directory status badges
+  'status.estimated': 'estimated',
+  'status.denied': 'access denied',
+  'status.awaiting': 'restricted',
 
   'dash.title': 'Dashboard',
   'dash.sub': 'Disk health, AI analysis and routines at a glance',
@@ -589,13 +662,34 @@ const en: Record<string, string> = {
   'settings.language': 'Language',
   'settings.languageDesc': 'Switch between 中文 and English',
   'settings.automation': 'Automation',
-  'settings.dailyTitle': 'Daily cleanup',
-  'settings.dailyDesc': 'Run the engine every morning and clean safe items',
+  'settings.dailyTitle': 'Auto-clean when space is low',
+  'settings.dailyDesc': 'Automatically clean approved safe items when disk space runs low',
+  'settings.scheduledTitle': 'Scheduled daily cleanup',
+  'settings.scheduledDesc': 'Run the engine daily at the chosen time and clean safe items',
+  'settings.scheduledTime': 'Run at',
   'settings.routines': 'Routines',
   'settings.toggleMode': 'Toggle auto / approve',
   'settings.runNow': 'Run now',
   'settings.delete': 'Delete',
-  'settings.save': 'Save'
+  'settings.save': 'Save',
+  'settings.ai': 'AI cleanup',
+  'settings.aiEnableTitle': 'Enable AI cleanup',
+  'settings.aiEnableDesc': 'Let a language model judge content-dependent items',
+  'settings.aiPreset': 'Quick presets',
+  'settings.aiPresetArk': 'Volcano Ark',
+  'settings.aiPresetOpenai': 'OpenAI',
+  'settings.aiEndpoint': 'Endpoint URL',
+  'settings.aiEndpointPh': 'https://api.openai.com/v1/chat/completions',
+  'settings.aiModel': 'Model',
+  'settings.aiModelPh': 'Model or endpoint id, e.g. ep-2024xxxx',
+  'settings.aiToken': 'API token',
+  'settings.aiTokenPh': 'Paste an API token; stored only in your Keychain',
+  'settings.aiTokenSaved': 'Token saved',
+  'settings.aiTokenNone': 'No token saved',
+  'settings.aiTokenClear': 'Clear the saved token',
+  'settings.aiConsent':
+    'Enabling this agrees to send redacted metadata (relative path, type, size, age — never file contents or absolute paths) to the service.',
+  'settings.aiSaved': 'AI configuration saved'
 };
 
 type ParamValue = string | number;

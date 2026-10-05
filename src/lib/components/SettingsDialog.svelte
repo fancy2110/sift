@@ -19,6 +19,70 @@
   function toggleLanguage() {
     setLocale(i18n.current === 'zh' ? 'en' : 'zh');
   }
+
+  // ---- AI provider draft ----
+
+  let draft = $state({
+    enabled: false,
+    provider: '',
+    endpoint: '',
+    model: '',
+    token: '',
+  });
+  let clearToken = $state(false);
+  let saving = $state(false);
+  let loaded = false;
+
+  // The config arrives from the backend after the sheet opens; sync once.
+  $effect(() => {
+    const ai = store.aiConfig;
+    if (ai && !loaded) {
+      draft.enabled = ai.enabled;
+      draft.provider = ai.provider;
+      draft.endpoint = ai.endpoint;
+      draft.model = ai.model;
+      draft.token = '';
+      clearToken = false;
+      loaded = true;
+    }
+  });
+
+  const presets = [
+    {
+      label: 'settings.aiPresetArk',
+      provider: 'ark',
+      endpoint: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+    },
+    {
+      label: 'settings.aiPresetOpenai',
+      provider: 'openai',
+      endpoint: 'https://api.openai.com/v1/chat/completions',
+    },
+  ];
+
+  function applyPreset(provider: string, endpoint: string) {
+    draft.provider = provider;
+    draft.endpoint = endpoint;
+  }
+
+  async function save() {
+    if (saving) return;
+    saving = true;
+    // undefined keeps the stored secret; '' clears it; a value replaces it.
+    const token = clearToken ? '' : draft.token !== '' ? draft.token : undefined;
+    const ok = await store.saveAiSettings(
+      {
+        enabled: draft.enabled,
+        provider: draft.provider,
+        endpoint: draft.endpoint,
+        model: draft.model,
+        language: i18n.current,
+      },
+      token,
+    );
+    saving = false;
+    if (ok) store.settingsOpen = false;
+  }
 </script>
 
 {#if store.settingsOpen}
@@ -66,6 +130,90 @@
         </button>
       </div>
 
+      <p class="set-section-label" style="margin-top: 22px">{t('settings.ai')}</p>
+
+      <div class="set-card">
+        <div class="set-card-info">
+          <p class="set-card-title">{t('settings.aiEnableTitle')}</p>
+          <p class="set-card-desc">{t('settings.aiEnableDesc')}</p>
+        </div>
+        <button
+          type="button"
+          class="switch"
+          class:switch-on={draft.enabled}
+          role="switch"
+          aria-label={t('settings.aiEnableTitle')}
+          aria-checked={draft.enabled}
+          onclick={() => (draft.enabled = !draft.enabled)}
+        >
+          <span class="switch-knob"></span>
+        </button>
+      </div>
+
+      <div class="ai-form" class:ai-form-off={!draft.enabled}>
+        <p class="ai-label">{t('settings.aiPreset')}</p>
+        <div class="ai-presets">
+          {#each presets as preset (preset.provider)}
+            <button
+              type="button"
+              class="ai-preset"
+              class:preset-on={draft.provider === preset.provider
+                && draft.endpoint === preset.endpoint}
+              aria-pressed={draft.provider === preset.provider
+                && draft.endpoint === preset.endpoint}
+              onclick={() => applyPreset(preset.provider, preset.endpoint)}
+            >
+              {t(preset.label)}
+            </button>
+          {/each}
+        </div>
+
+        <p class="ai-label">{t('settings.aiEndpoint')}</p>
+        <input
+          type="text"
+          class="ai-input"
+          placeholder={t('settings.aiEndpointPh')}
+          bind:value={draft.endpoint}
+          spellcheck="false"
+          autocomplete="off"
+        />
+
+        <p class="ai-label">{t('settings.aiModel')}</p>
+        <input
+          type="text"
+          class="ai-input"
+          placeholder={t('settings.aiModelPh')}
+          bind:value={draft.model}
+          spellcheck="false"
+          autocomplete="off"
+        />
+
+        <p class="ai-label">
+          {t('settings.aiToken')}
+          <span class="ai-token-state" class:ai-token-ok={store.aiConfig?.hasToken && !clearToken}>
+            {store.aiConfig?.hasToken && !clearToken
+              ? t('settings.aiTokenSaved')
+              : t('settings.aiTokenNone')}
+          </span>
+        </p>
+        <input
+          type="password"
+          class="ai-input"
+          placeholder={t('settings.aiTokenPh')}
+          bind:value={draft.token}
+          spellcheck="false"
+          autocomplete="off"
+        />
+        {#if store.aiConfig?.hasToken}
+          <label class="ai-clear">
+            <input type="checkbox" bind:checked={clearToken} />
+            {t('settings.aiTokenClear')}
+          </label>
+        {/if}
+
+        <p class="ai-consent">{t('settings.aiConsent')}</p>
+      </div>
+
       <p class="set-section-label" style="margin-top: 22px">{t('settings.automation')}</p>
 
       <div class="set-card">
@@ -84,6 +232,38 @@
         >
           <span class="switch-knob"></span>
         </button>
+      </div>
+
+      <div class="set-card">
+        <div class="set-card-info">
+          <p class="set-card-title">{t('settings.scheduledTitle')}</p>
+          <p class="set-card-desc">{t('settings.scheduledDesc')}</p>
+        </div>
+        <div class="sched-controls">
+          <select
+            class="sched-time"
+            aria-label={t('settings.scheduledTime')}
+            value={String(store.scheduledHour)}
+            disabled={!store.scheduledOn}
+            onchange={(e) =>
+              store.saveScheduled(store.scheduledOn, Number(e.currentTarget.value))}
+          >
+            {#each Array.from({ length: 24 }, (_, h) => h) as h}
+              <option value={h}>{String(h).padStart(2, '0')}:00</option>
+            {/each}
+          </select>
+          <button
+            type="button"
+            class="switch"
+            class:switch-on={store.scheduledOn}
+            role="switch"
+            aria-label={t('settings.scheduledTitle')}
+            aria-checked={store.scheduledOn}
+            onclick={() => store.saveScheduled(!store.scheduledOn, store.scheduledHour)}
+          >
+            <span class="switch-knob"></span>
+          </button>
+        </div>
       </div>
 
       <p class="set-section-label" style="margin-top: 22px">{t('settings.routines')}</p>
@@ -132,8 +312,8 @@
     </div>
 
     <footer class="set-foot">
-      <button type="button" class="set-save" onclick={() => (store.settingsOpen = false)}>
-        {t('settings.save')}
+      <button type="button" class="set-save" disabled={saving} onclick={save}>
+        {saving ? '…' : t('settings.save')}
       </button>
     </footer>
   </div>
@@ -157,7 +337,7 @@
     top: 50%;
     transform: translate(-50%, -50%);
     width: min(560px, calc(100vw - 40px));
-    max-height: min(640px, calc(100vh - 60px));
+    max-height: min(720px, calc(100vh - 48px));
     display: flex;
     flex-direction: column;
     border-radius: 18px;
@@ -190,7 +370,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 22px;
+    padding: 0 22px 8px;
   }
   .set-section-label {
     margin: 0 0 14px;
@@ -259,6 +439,35 @@
     outline: none;
     box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-violet);
   }
+  .sched-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+  }
+  .sched-time {
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 9px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    outline: none;
+  }
+  .sched-time:not(:disabled) {
+    cursor: pointer;
+  }
+  .sched-time:disabled {
+    opacity: 0.5;
+  }
+  .sched-time:focus-visible {
+    border-color: var(--color-violet);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
+  }
+
   .set-rt-list {
     list-style: none;
     margin: 0;
@@ -314,6 +523,90 @@
     font-size: 12px;
     color: var(--color-faint);
   }
+  .ai-form {
+    margin-top: 12px;
+    padding: 12px 14px 2px;
+    border-radius: 14px;
+    border: 1px solid var(--color-border);
+    background: color-mix(in oklch, var(--color-surface-2) 40%, transparent);
+    transition: opacity 0.2s ease;
+  }
+  .ai-form-off {
+    opacity: 0.45;
+  }
+  .ai-label {
+    margin: 0 0 7px;
+    font-size: 11px;
+    font-weight: 620;
+    color: var(--color-faint);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .ai-presets {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 11px;
+  }
+  .ai-preset {
+    padding: 6px 12px;
+    border-radius: 9px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: default;
+  }
+  .ai-preset:hover {
+    color: var(--color-fg);
+    border-color: var(--color-border-strong);
+  }
+  .ai-preset.preset-on {
+    color: var(--color-violet);
+    border-color: color-mix(in oklch, var(--color-violet) 55%, transparent);
+    background: color-mix(in oklch, var(--color-violet) 12%, var(--color-surface));
+  }
+  .ai-input {
+    width: 100%;
+    height: 32px;
+    margin-bottom: 11px;
+    padding: 0 12px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    outline: none;
+  }
+  .ai-input:focus {
+    border-color: var(--color-violet);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
+  }
+  .ai-token-state {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--color-faint);
+  }
+  .ai-token-ok {
+    color: var(--color-ok);
+  }
+  .ai-clear {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: -4px 0 12px;
+    font-size: 11px;
+    color: var(--color-faint);
+    cursor: default;
+  }
+  .ai-consent {
+    margin: 0 0 10px;
+    font-size: 10.5px;
+    line-height: 1.6;
+    color: var(--color-faint);
+  }
   .set-foot {
     flex: none;
     padding: 14px 24px 20px;
@@ -328,5 +621,8 @@
     font-size: 13px;
     font-weight: 620;
     cursor: default;
+  }
+  .set-save:disabled {
+    opacity: 0.6;
   }
 </style>

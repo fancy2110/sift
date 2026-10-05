@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Sift 需要访问“桌面”文件夹以统计其中的文件大小。/ Sift needs access to your Desktop folder to calculate file sizes.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Sift 需要访问“文稿”文件夹以统计其中的文件大小。/ Sift needs access to your Documents folder to calculate file sizes.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Sift 需要访问“下载”文件夹以统计其中的文件大小。/ Sift needs access to your Downloads folder to calculate file sizes.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Sift 需要访问外接卷宗以统计其中的文件大小。/ Sift needs access to removable volumes to calculate file sizes.</string>
+</dict>
+</plist>

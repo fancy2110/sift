@@ -33,7 +33,12 @@ fn run(app: AppHandle) {
 
         let services = app.state::<AppServices>();
         let settings = services.store.settings();
-        if !settings.monitor.scheduled_cleanup_enabled {
+        // The schedule must obey the automatic-cleanup switch: with
+        // AutoCleanMode off or notify-only it may scan and report, but it
+        // never deletes. (Defense in depth; run_daily re-checks below.)
+        if !settings.monitor.scheduled_cleanup_enabled
+            || !settings.monitor.auto_mode.may_delete()
+        {
             continue;
         }
 
@@ -95,7 +100,15 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
         .map(|entry| entry.path.to_string_lossy().into_owned())
         .collect();
 
-    if !paths.is_empty() {
+    // Re-check at act time: the user may have flipped the switch while the
+    // hour-long scan was running.
+    let still_allowed = services
+        .store
+        .settings()
+        .monitor
+        .auto_mode
+        .may_delete();
+    if !paths.is_empty() && still_allowed {
         crate::analyze::perform_cleanup(&services, &paths, true);
     }
     Ok(())

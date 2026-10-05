@@ -1,5 +1,6 @@
 <script lang="ts">
   import Toasts from './lib/components/Toasts.svelte';
+  import PermissionDrawer from './lib/components/PermissionDrawer.svelte';
   import HomeView from './views/HomeView.svelte';
   import DashboardView from './views/DashboardView.svelte';
   import SubPageView from './views/SubPageView.svelte';
@@ -31,3 +32,6 @@
 </div>
 
 <Toasts />
+{#if store.view === 'home'}
+  <PermissionDrawer />
+{/if}

@@ -1,5 +1,8 @@
 export type Risk = 'safe' | 'review' | 'keep';
 
+/** Measurement state of a directory node. */
+export type NodeStatus = 'ok' | 'estimated' | 'denied' | 'awaiting';
+
 /** A live filesystem node streamed in by the backend scanner. */
 export interface Node {
   id: string;
@@ -12,10 +15,10 @@ export interface Node {
   deletable: boolean;
   /** Directory whose subtree scan hasn't finished. */
   pending: boolean;
+  status: NodeStatus;
   ext?: string;
 
   // ---- client-assembled fields ----
-  children?: Node[];
   /** AI finding id this node belongs to. */
   insightId?: string;
   risk?: Risk;
@@ -53,6 +56,18 @@ export interface AnalysisSummary {
   sourceCounts: Record<string, number>;
   usedRemote: boolean;
   remoteNeedsConsent: boolean;
+}
+
+/** AI provider configuration from the backend (never includes the token). */
+export interface AiConfig {
+  enabled: boolean;
+  provider: string;
+  endpoint: string;
+  model: string;
+  language: string;
+  batchSize: number;
+  /** Whether a token is stored in the Keychain / environment. */
+  hasToken: boolean;
 }
 
 export interface RoutineSuggestion {
@@ -106,6 +121,8 @@ export interface MonitorStatus {
   lastLevel: string;
   lastAvailableBytes: number;
   lastTotalBytes: number;
+  scheduledCleanupEnabled: boolean;
+  scheduledHour: number;
 }
 
 export interface VolumeInfo {

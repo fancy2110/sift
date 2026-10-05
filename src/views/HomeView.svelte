@@ -72,6 +72,34 @@
     const preferred = store.volumes.find((v) => !v.isRemovable) ?? store.volumes[0];
     if (preferred) await store.selectDisk(preferred.id);
   }
+
+  // r = 92 → circumference of the progress arc.
+  const RING_C = 2 * Math.PI * 92;
+  // Byte-coverage percent is available once the volume capacity is known.
+  let hasPercent = $derived(store.progress.totalBytes > 0);
+  let arcLen = $derived(
+    hasPercent
+      ? Math.max(2, (RING_C * store.progress.percent) / 100)
+      : 260
+  );
+
+  // Elapsed-time counter inside the ring: starts with the scan and ticks until
+  // it ends (including while parked on a permission request).
+  let scanStartedAt = $state(0);
+  let scanNow = $state(0);
+  $effect(() => {
+    if (!store.scanning) return;
+    scanStartedAt = performance.now();
+    scanNow = scanStartedAt;
+    const timer = setInterval(() => (scanNow = performance.now()), 250);
+    return () => clearInterval(timer);
+  });
+  let elapsedLabel = $derived.by(() => {
+    const secs = Math.max(0, Math.floor((scanNow - scanStartedAt) / 1000));
+    const mins = Math.floor(secs / 60);
+    const rest = (secs % 60).toString().padStart(2, '0');
+    return `${mins}:${rest}`;
+  });
 </script>
 
 <div class="hub">
@@ -88,7 +116,7 @@
       class="hub-settings-btn"
       aria-label={t('home.settings')}
       title={t('home.settings')}
-      onclick={() => (store.settingsOpen = true)}
+      onclick={() => store.openSettings()}
     >
       <Icon name="settings" size={14} />
     </button>
@@ -109,14 +137,18 @@
       aria-hidden="true"
     >
       {#if store.scanning}
-        <svg class="prog-ring spin-slow" viewBox="0 0 200 200">
+        <svg
+          class="prog-ring"
+          class:spin-slow={!hasPercent}
+          viewBox="0 0 200 200"
+        >
           <circle class="prog-track" cx="100" cy="100" r="92" />
           <circle
             class="prog-arc"
             cx="100"
             cy="100"
             r="92"
-            stroke-dasharray="260 318"
+            stroke-dasharray={`${arcLen} ${RING_C}`}
             transform="rotate(-90 100 100)"
           />
         </svg>
@@ -164,25 +196,42 @@
       bind:this={stackEl}
     >
     <p class="hub-eyebrow" in:fade={{ duration: 480, delay: 120 }}>
-      {store.scanning ? t('home.scanning') : t('home.total')}
+      {store.scanning
+        ? (store.progress.awaiting > 0
+            ? t('home.awaitingAuth')
+            : t('home.scanning'))
+        : t('home.total')}
     </p>
     {#if store.scanning}
-      <h1 class="hub-total num">
-        {store.scannedFiles.toLocaleString()}<span class="hub-pct">{t('home.itemsUnit')}</span>
-      </h1>
+      {#if hasPercent}
+        <h1 class="hub-total num">
+          {Math.round(store.progress.percent)}<span class="hub-pct">%</span>
+        </h1>
+      {:else}
+        <h1 class="hub-total num">
+          {store.scannedFiles.toLocaleString()}<span class="hub-pct">{t('home.itemsUnit')}</span>
+        </h1>
+      {/if}
     {:else}
       {@const main = formatSizeParts(store.totalReclaimable)}
       <h1 class="hub-total num" in:fly={{ y: 16, duration: 620, delay: 180, easing: cubicOut }}>
         {main.value}<span class="hub-unit">{main.unit}</span>
       </h1>
     {/if}
-    <p
-      class="hub-state"
-      class:state-scanning={store.scanning}
-    >
-      <span class="state-dot"></span>
-      {store.scanning ? t('home.stateScanning') : t('home.stateReady')}
-    </p>
+    {#if store.scanning}
+      {@const p = store.progress}
+      {@const bytes = formatSizeParts(p.bytes)}
+      <p class="hub-state hub-scan-stats state-scanning">
+        <span class="state-dot"></span>
+        {p.files.toLocaleString()} {t('home.itemsUnit')} · {p.dirs.toLocaleString()} · {bytes.value}{bytes.unit}
+      </p>
+      <p class="hub-scan-time num">{elapsedLabel}</p>
+    {:else}
+      <p class="hub-state">
+        <span class="state-dot"></span>
+        {t('home.stateReady')}
+      </p>
+    {/if}
 
     <button
       class="hub-cta"
@@ -297,7 +346,10 @@
 
   .hub-center {
     position: relative;
-    flex: 1;
+    /* Permission requests render in a floating drawer (PermissionDrawer),
+       so the stage always owns the full center column. */
+    flex: 1 1 0;
+    min-height: 0;
     width: 100%;
     display: flex;
     flex-direction: column;
@@ -631,4 +683,21 @@
     font-size: 12px;
     color: var(--color-muted);
   }
+
+  .hub-scan-stats {
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .hub-scan-time {
+    margin: 0 0 36px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--color-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
 </style>

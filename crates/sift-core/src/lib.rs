@@ -27,8 +27,8 @@ pub use deletable::{classify, classify_with_permissions, Deletable};
 pub use id::{FileId, NodeKey, VolumeId};
 pub use interner::{NameInterner, NameRef};
 pub use scan::{
-    DirectoryEntry, DirectorySummary, Progress, ScanEvent, ScanId, ScanOutcome, ScanPolicy,
-    ScanRequest, Volume,
+    DirCloseStatus, DirectoryEntry, DirectorySummary, Progress, ScanEvent, ScanId, ScanOutcome,
+    ScanPolicy, ScanRequest, Volume,
 };
 pub use size::{format_bytes, ByteSize};
 pub use tree::{NodeKind, NodeView, ScanTree, TreeConfig, TreeStats, NONE};

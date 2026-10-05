@@ -1,10 +1,14 @@
+import { open } from '@tauri-apps/plugin-dialog';
 import {
   analyzeCurrent,
   cancelScan,
   cleanPaths,
+  getAiConfig,
+  saveAiConfig,
   deleteRoutine,
   dismissRoutineSuggestion,
   listHistory,
+  listDirFiles,
   listPlaces,
   listRoutines,
   listVolumes,
@@ -14,9 +18,13 @@ import {
   onMonitorEvent,
   onScanBatch,
   onScanDone,
+  onScanRefreshed,
+  resolvePermission,
   routineSuggestions,
   runRoutine,
+  scanRunning,
   setAutoCleanMode,
+  setScheduledCleanup,
   setScanFocus,
   startMonitor,
   startScan,
@@ -25,9 +33,12 @@ import {
   watchFs,
   acceptRoutineSuggestion,
   type BatchUpdate,
-  type DeleteResultItem
+  type DeleteResultItem,
+  type PermissionRequest,
+  type ProgressInfo
 } from './ipc';
 import type {
+  AiConfig,
   Finding,
   HistoryEntry,
   MonitorStatus as MonitorStatusInfo,
@@ -55,6 +66,8 @@ class AppStore {
   view = $state<'home' | 'dashboard' | 'sub'>('home');
   subTab = $state<'smart' | 'explorer' | 'history'>('smart');
   settingsOpen = $state(false);
+  /** AI provider configuration behind the settings sheet. */
+  aiConfig = $state<AiConfig | null>(null);
 
   // ---- scan scopes ----
   volumes = $state<VolumeInfo[]>([]);
@@ -62,18 +75,50 @@ class AppStore {
   scopeKind = $state<'disk' | 'place'>('disk');
   scopeId = $state<string | null>(null);
 
-  /** All discovered nodes keyed by stable id (per active scan). */
-  nodes = $state<Map<string, Node>>(new Map());
-  rootId = $state<string | null>(null);
+  /**
+   * Directory records of the active scan in plain, non-reactive maps. A whole
+   * volume holds well over a million directories; wrapping every record in a
+   * deep $state proxy costs gigabytes. Only the open folder's entries are
+   * exposed reactively (`listEntries`); other records are looked up on demand.
+   */
+  nodeRecords = new Map<string, Node>();
+  /** Directory id -> ids of its directory children (plain index). */
+  childIds = new Map<string, string[]>();
+  /** Path -> id, so external events (auto-clean finished) resolve in O(1). */
+  pathToId = new Map<string, string>();
+  rootId: string | null = null;
+  // Reactive: the explorer crumbs are derived from this id. A plain field
+  // would leave drillPath/breadcrumbs stale after a drill because Svelte's
+  // fine-grained updates only re-run expressions that read some $state.
   currentNodeId = $state<string | null>(null);
+  /** File entries of the open folder (fetched live; merged into listEntries). */
+  currentFiles: Node[] = [];
+  /** Reactive slice: entries of the open folder, folders first then size. */
+  listEntries = $state<Node[]>([]);
 
   scanning = $state(false);
   scannedFiles = $state(0);
   scannedDirs = $state(0);
 
+  /** Live counters behind the home progress ring. */
+  progress = $state<ProgressInfo>({
+    files: 0,
+    dirs: 0,
+    bytes: 0,
+    totalBytes: 0,
+    percent: 0,
+    rateBytesPerSec: 0,
+    awaiting: 0,
+    trackedNodes: 0
+  });
+  /** Directories parked pending a macOS authorization decision. */
+  permissionRequests = $state<PermissionRequest[]>([]);
+
   toasts = $state<Toast[]>([]);
   autoOn = $state(false);
   monitorRunning = $state(false);
+  scheduledOn = $state(false);
+  scheduledHour = $state(4);
 
   /** Analyzed candidates from the backend. */
   findings = $state<Finding[]>([]);
@@ -117,7 +162,9 @@ class AppStore {
   }
 
   get currentNode(): Node | null {
-    return this.currentNodeId ? (this.nodes.get(this.currentNodeId) ?? null) : null;
+    return this.currentNodeId
+      ? (this.nodeRecords.get(this.currentNodeId) ?? null)
+      : null;
   }
 
   get breadcrumbs(): Node[] {
@@ -127,7 +174,9 @@ class AppStore {
     while (cur && !guard.has(cur.id)) {
       guard.add(cur.id);
       chain.unshift(cur);
-      cur = cur.parentId ? (this.nodes.get(cur.parentId) ?? null) : null;
+      cur = cur.parentId
+        ? (this.nodeRecords.get(cur.parentId) ?? null)
+        : null;
     }
     return chain;
   }
@@ -137,14 +186,37 @@ class AppStore {
     return this.breadcrumbs.slice(1).map((n) => n.name);
   }
 
-  /** Children of the current folder, folders first then size order. */
-  get listEntries(): Node[] {
-    return [...(this.currentNode?.children ?? [])]
-      .filter((c) => c.size > 0 || c.pending)
+  /**
+   * Rebuild the reactive slice for the open folder from the plain records and
+   * the live-fetched files. Runs after each batch, so per-folder work is
+   * bounded by the open folder's entry count instead of tree size.
+   */
+  private rebuildCurrentEntries() {
+    if (!this.currentNodeId) {
+      this.listEntries = [];
+      return;
+    }
+    const dirs: Node[] = [];
+    for (const id of this.childIds.get(this.currentNodeId) ?? []) {
+      const node = this.nodeRecords.get(id);
+      if (node) dirs.push(node);
+    }
+    this.listEntries = [...dirs, ...this.currentFiles]
+      .filter(
+        (c) =>
+          c.size > 0 ||
+          c.isDir ||
+          c.pending ||
+          c.status === 'denied' ||
+          c.status === 'awaiting'
+      )
       .sort((a, b) => {
         if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
         return b.size - a.size;
-      });
+      })
+      // Snapshot copies: published entries stay stable between rebuilds even
+      // though the backing records keep mutating as the scan proceeds.
+      .map((node) => ({ ...node }));
   }
 
   // ---- candidate getters ----
@@ -217,9 +289,15 @@ class AppStore {
     await Promise.all([
       onScanBatch((batch) => this.handleBatch(batch)),
       onScanDone((event) => this.handleScanDone(event.cancelled)),
+      onScanRefreshed(() => this.handleRefreshed()),
       onFsDeleted((event) => this.pruneIds(new Set([event.id]))),
       onMonitorEvent((event) => this.handleMonitorEvent(event))
     ]);
+
+    // A reload (or a webview reattach) can happen while a scan is still
+    // running on the backend; batches keep streaming either way, so reflect
+    // the live scan instead of rendering the idle home screen.
+    if (await scanRunning()) this.scanning = true;
 
     for (const warning of await takeStoreWarnings()) {
       this.toast(renderStoreWarning(warning));
@@ -277,14 +355,29 @@ class AppStore {
   }
 
   private resetScanState() {
-    this.nodes = new Map();
+    this.nodeRecords = new Map();
+    this.childIds = new Map();
+    this.pathToId = new Map();
     this.findings = [];
     this.rootId = null;
     this.currentNodeId = null;
+    this.currentFiles = [];
+    this.listEntries = [];
     this.selectedIds = new Set();
     this.scanning = true;
     this.scannedFiles = 0;
     this.scannedDirs = 0;
+    this.progress = {
+      files: 0,
+      dirs: 0,
+      bytes: 0,
+      totalBytes: 0,
+      percent: 0,
+      rateBytesPerSec: 0,
+      awaiting: 0,
+      trackedNodes: 0
+    };
+    this.permissionRequests = [];
     this.analysedScan = false;
     this.treeVersion += 1;
   }
@@ -311,19 +404,30 @@ class AppStore {
   // ---- explorer drill ----
 
   drillInto(name: string) {
-    const target = this.currentNode?.children?.find((c) => c.name === name);
-    if (!target || !target.isDir) return;
-    this.currentNodeId = target.id;
-    setScanFocus(target.path);
+    const target = this.currentNode
+      ? (this.childIds.get(this.currentNode.id) ?? []).find(
+          (id) => this.nodeRecords.get(id)?.name === name
+        )
+      : undefined;
+    const targetNode = target ? this.nodeRecords.get(target) : null;
+    if (!targetNode || !targetNode.isDir) return;
+    this.currentNodeId = targetNode.id;
+    this.currentFiles = [];
+    this.rebuildCurrentEntries();
+    setScanFocus(targetNode.path);
     this.watchCurrentDir();
+    this.refreshCurrentFiles();
   }
 
   jumpCrumb(index: number) {
     const target = this.breadcrumbs[index + 1];
     if (target) {
       this.currentNodeId = target.id;
+      this.currentFiles = [];
+      this.rebuildCurrentEntries();
       setScanFocus(target.path);
       this.watchCurrentDir();
+      this.refreshCurrentFiles();
     }
   }
 
@@ -352,10 +456,14 @@ class AppStore {
         break;
       case 'cleanupFinished': {
         const removed = new Set<string>();
-        for (const path of data.paths ?? []) {
-          const id = [...this.nodes.values()].find((node) => node.path === path)?.id;
+        const removedPaths = new Set(data.paths ?? []);
+        for (const path of removedPaths) {
+          const id = this.pathToId.get(path);
           if (id) removed.add(id);
         }
+        this.currentFiles = this.currentFiles.filter(
+          (file) => !removedPaths.has(file.path)
+        );
         if (removed.size > 0) {
           this.pruneIds(removed);
           this.findings = this.findings.filter((finding) => !removed.has(finding.id));
@@ -377,43 +485,148 @@ class AppStore {
 
   private handleBatch(batch: BatchUpdate) {
     for (const incoming of batch.discovered) {
+      // The pump only forwards directory entries; keep the guard anyway.
+      if (!incoming.isDir) continue;
       const first = !this.rootId;
       const node: Node = { ...incoming, ext: extOf(incoming.name) };
-      this.nodes.set(node.id, node);
+      this.nodeRecords.set(node.id, node);
+      this.pathToId.set(node.path, node.id);
       if (node.parentId) {
-        const parent = this.nodes.get(node.parentId);
-        if (parent) {
-          parent.children ??= [];
-          if (!parent.children.some((c) => c.id === node.id)) parent.children.push(node);
-        }
+        const list = this.childIds.get(node.parentId);
+        if (list) {
+          if (!list.includes(node.id)) list.push(node.id);
+        } else this.childIds.set(node.parentId, [node.id]);
       }
       if (first && node.parentId === null) {
         this.rootId = node.id;
         this.currentNodeId = node.id;
+        // The scan root is the explorer's initial folder.
+        this.rebuildCurrentEntries();
+        this.refreshCurrentFiles();
       }
     }
 
     for (const sized of batch.sized) {
-      const node = this.nodes.get(sized.id);
+      const node = this.nodeRecords.get(sized.id);
       if (node) {
-        node.size = sized.size;
+        // `null` size marks a status-only update; keep the last known size.
+        if (sized.size !== null) node.size = sized.size;
         node.pending = sized.pending;
+        node.status = sized.status;
       }
     }
 
+    if (batch.permissions.length) {
+      const known = new Set(this.permissionRequests.map((req) => req.id));
+      this.permissionRequests = [
+        ...this.permissionRequests,
+        ...batch.permissions.filter((req) => !known.has(req.id))
+      ];
+    }
+
     if (batch.progress) {
+      this.progress = batch.progress;
       this.scannedFiles = batch.progress.files;
       this.scannedDirs = batch.progress.dirs;
     }
 
-    this.nodes = new Map(this.nodes);
+    this.rebuildCurrentEntries();
     this.annotateNodes();
   }
 
-  /** Reflect backend findings onto their nodes (insightId + risk). */
+  /** Fetch the current folder's file entries live from the backend. */
+  private async refreshCurrentFiles() {
+    const node = this.currentNode;
+    if (!node) return;
+    let entries: Node[];
+    try {
+      entries = await listDirFiles(node.path);
+    } catch {
+      return;
+    }
+    // A navigation may have happened before the reply landed.
+    if (this.currentNodeId !== node.id) return;
+    this.currentFiles = entries.filter((entry) => !entry.isDir);
+    this.rebuildCurrentEntries();
+  }
+
+  private removePermissionRequest(id: string) {
+    this.permissionRequests = this.permissionRequests.filter((req) => req.id !== id);
+  }
+
+  /**
+   * Grant flow: the user picks the parked directory (or an ancestor such as
+   * ~/Library, whose TCC grant covers every parked folder below it) in an
+   * NSOpenPanel; selecting it itself grants the persistent TCC authorization.
+   * The panel opens pointed at the requested path, then the engine re-walks.
+   */
+  async grantPermission(req: PermissionRequest) {
+    let selected: string | string[] | null;
+    try {
+      selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: req.path,
+      });
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
+      return;
+    }
+    // Panel cancelled: stay parked.
+    if (!selected) return;
+    const picked = Array.isArray(selected) ? selected[0] : selected;
+    if (!picked) return;
+
+    if (!pathIsWithin(req.path, picked)) {
+      this.toast(t('permission.mismatch'));
+      return;
+    }
+
+    // One decision carrying the selected folder; the engine re-walks every
+    // parked directory the grant covers. Cards under it disappear locally.
+    try {
+      await resolvePermission(req.id, true, picked);
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
+      return;
+    }
+    const covered = this.permissionRequests.filter((other) =>
+      pathIsWithin(other.path, picked));
+    for (const other of covered) {
+      this.removePermissionRequest(other.id);
+    }
+  }
+
+  /** Explicitly mark the unresolved directory denied. */
+  async skipPermission(req: PermissionRequest) {
+    try {
+      await resolvePermission(req.id, false);
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
+      return;
+    }
+    this.removePermissionRequest(req.id);
+  }
+
+  /** Deny every grantable (TCC) directory in one action. Read-only system
+   *  entries are not actionable and stay listed. */
+  async skipAllPermissions() {
+    const targets = this.permissionRequests.filter((req) => req.tcc);
+    for (const req of targets) {
+      try {
+        await resolvePermission(req.id, false);
+        this.removePermissionRequest(req.id);
+      } catch (error) {
+        this.toast(t('toast.settingsFailed', [String(error)]));
+        return;
+      }
+    }
+  }
+
+  /** Reflect backend findings onto their records (insightId + risk). */
   private annotateNodes() {
     for (const finding of this.findings) {
-      const node = this.nodes.get(finding.id);
+      const node = this.nodeRecords.get(finding.id);
       if (node && node.insightId !== finding.id) {
         node.insightId = finding.id;
         node.risk = finding.safety;
@@ -426,6 +639,16 @@ class AppStore {
     if (cancelled) return;
     if (this.analysedScan) return;
     this.analysedScan = true;
+    await this.runAnalysis();
+  }
+
+  /**
+   * A post-completion authorization finished its refresh walk. Sized batches
+   * already patched the records; re-render the open folder and re-run analysis
+   * so smart-view conclusions reflect the newly visible bytes.
+   */
+  private async handleRefreshed() {
+    this.rebuildCurrentEntries();
     await this.runAnalysis();
   }
 
@@ -444,6 +667,35 @@ class AppStore {
       this.selectedIds = next;
     } catch (error) {
       this.toast(t('toast.analyzeFailed', [String(error)]));
+    }
+  }
+
+  /** Open the settings sheet and load the persisted AI configuration. */
+  async openSettings() {
+    this.settingsOpen = true;
+    try {
+      this.aiConfig = await getAiConfig();
+    } catch {
+      this.aiConfig = null;
+    }
+  }
+
+  /**
+   * Persist the AI settings sheet. `token`: omitted keeps the stored secret,
+   * '' clears it, a value replaces it. Returns whether the save succeeded so
+   * the sheet can stay open for correction.
+   */
+  async saveAiSettings(
+    config: Omit<AiConfig, 'hasToken' | 'batchSize'>,
+    token?: string,
+  ): Promise<boolean> {
+    try {
+      this.aiConfig = await saveAiConfig(config, token);
+      this.toast(t('settings.aiSaved'));
+      return true;
+    } catch (error) {
+      this.toast(t('toast.aiSaveFailed', [tr(String(error))]));
+      return false;
     }
   }
 
@@ -501,49 +753,57 @@ class AppStore {
     if (roots.size === 0) return;
     const remove = new Set(roots);
 
-    const byParent = new Map<string, string[]>();
-    for (const node of this.nodes.values()) {
-      if (node.parentId) {
-        const list = byParent.get(node.parentId) ?? [];
-        list.push(node.id);
-        byParent.set(node.parentId, list);
-      }
-    }
+    // Walk the plain child index to collect every descendant.
     const queue = [...roots];
     while (queue.length > 0) {
       const id = queue.pop()!;
-      for (const child of byParent.get(id) ?? []) {
+      for (const child of this.childIds.get(id) ?? []) {
         if (remove.add(child)) queue.push(child);
       }
     }
 
+    // Detach removed roots from parents that survive, before deleting records.
+    const detach = new Map<string, string[]>();
     for (const id of remove) {
-      const node = this.nodes.get(id);
+      const node = this.nodeRecords.get(id);
       if (node?.parentId && !remove.has(node.parentId)) {
-        const parent = this.nodes.get(node.parentId);
-        if (parent?.children) {
-          parent.children = parent.children.filter((c) => c.id !== id);
-        }
+        const list = detach.get(node.parentId) ?? [];
+        list.push(id);
+        detach.set(node.parentId, list);
       }
     }
 
-    const next = new Map<string, Node>();
-    for (const [key, node] of this.nodes) {
-      if (!remove.has(key)) next.set(key, node);
+    for (const id of remove) {
+      const node = this.nodeRecords.get(id);
+      if (node) this.pathToId.delete(node.path);
+      this.nodeRecords.delete(id);
+      this.childIds.delete(id);
     }
-    this.nodes = next;
+    for (const [parentId, removedChildren] of detach) {
+      const list = this.childIds.get(parentId);
+      if (list) {
+        this.childIds.set(
+          parentId,
+          list.filter((id) => !removedChildren.includes(id))
+        );
+      }
+    }
+
+    this.currentFiles = this.currentFiles.filter((file) => !remove.has(file.id));
 
     if (this.currentNodeId && remove.has(this.currentNodeId)) {
-      let pid = this.nodes.get(this.currentNodeId)?.parentId ?? null;
-      while (pid && !this.nodes.has(pid)) {
-        pid = this.nodes.get(pid)?.parentId ?? null;
+      let pid = this.nodeRecords.get(this.currentNodeId)?.parentId ?? null;
+      while (pid && !this.nodeRecords.has(pid)) {
+        pid = this.nodeRecords.get(pid)?.parentId ?? null;
       }
       this.currentNodeId = pid;
       if (pid) {
-        const node = this.nodes.get(pid);
+        const node = this.nodeRecords.get(pid);
         if (node) setScanFocus(node.path);
       }
     }
+
+    this.rebuildCurrentEntries();
   }
 
   // ---- selection ----
@@ -676,8 +936,20 @@ class AppStore {
       const status: MonitorStatusInfo = await monitorStatus();
       this.autoOn = status.autoMode === 'auto';
       this.monitorRunning = status.running;
+      this.scheduledOn = status.scheduledCleanupEnabled;
+      this.scheduledHour = status.scheduledHour;
     } catch {
       // Status is best-effort.
+    }
+  }
+
+  async saveScheduled(enabled: boolean, hour: number) {
+    try {
+      await setScheduledCleanup(enabled, hour);
+      this.scheduledOn = enabled;
+      this.scheduledHour = hour;
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -708,6 +980,17 @@ function extOf(name: string): string {
 
 function formatSize(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function stripTrailingSlash(path: string): string {
+  return path.length > 1 ? path.replace(/\/+$/, '') : path;
+}
+
+/** Whether `path` is `ancestor` itself or a directory nested inside it. */
+function pathIsWithin(path: string, ancestor: string): boolean {
+  const a = stripTrailingSlash(ancestor);
+  const p = stripTrailingSlash(path);
+  return p === a || p.startsWith(`${a}/`);
 }
 
 export const store = new AppStore();

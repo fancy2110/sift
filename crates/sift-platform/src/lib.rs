@@ -20,7 +20,7 @@ pub mod volume;
 pub mod walk;
 pub mod watch;
 
-pub use dir::{DirReader, RawEntry, ReaderKind};
+pub use dir::{DirReader, RawEntry, ReadErrorKind, ReaderKind};
 pub use trash::{trash_paths, TrashResult};
 pub use volume::{device_id, is_same_volume, list_volumes, system_volume};
 pub use walk::walk_dirs;

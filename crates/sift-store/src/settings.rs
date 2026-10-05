@@ -55,6 +55,9 @@ pub struct MonitorSettings {
     /// as they are discovered. Off by default: convenience must be asked for.
     pub auto_approve_structural: bool,
     /// Run the engine daily and clean remembered safe items unattended.
+    /// Only honoured while `auto_mode` permits deletion: a schedule that
+    /// deleted files while the "automatic cleanup" switch was off would be
+    /// exactly the surprise this setting must never cause.
     #[serde(default = "default_scheduled_cleanup")]
     pub scheduled_cleanup_enabled: bool,
     /// Local hour the daily cleanup runs at.
@@ -65,7 +68,7 @@ pub struct MonitorSettings {
 }
 
 fn default_scheduled_cleanup() -> bool {
-    true
+    false
 }
 
 fn default_scheduled_hour() -> u32 {
@@ -85,7 +88,7 @@ impl Default for MonitorSettings {
             max_auto_clean_bytes: 20 * 1024 * 1024 * 1024,
             home_only: true,
             auto_approve_structural: false,
-            scheduled_cleanup_enabled: true,
+            scheduled_cleanup_enabled: false,
             scheduled_hour: 4,
             notify_cooldown_secs: 1800,
         }
@@ -266,6 +269,7 @@ mod tests {
         let settings = Settings::default();
         assert!(!settings.monitor.auto_mode.may_delete());
         assert!(!settings.monitor.auto_approve_structural);
+        assert!(!settings.monitor.scheduled_cleanup_enabled);
         assert!(settings.monitor.home_only);
         assert!(!settings.ai.enabled);
         assert!(!settings.ai.consent_granted);

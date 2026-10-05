@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
+  AiConfig,
   AnalysisSummary,
   MonitorStatus,
   Node,
@@ -31,6 +32,28 @@ export function setScanFocus(focus: string): Promise<void> {
 
 export function scanRunning(): Promise<boolean> {
   return invoke<boolean>('scan_running');
+}
+
+/**
+ * Live snapshot of a folder's immediate entries. The front end keeps only
+ * directories from the scan; file entries are fetched on demand when the
+ * explorer opens a folder.
+ */
+export function listDirFiles(path: string): Promise<Node[]> {
+  return invoke<Node[]>('list_dir_files', { path });
+}
+
+/**
+ * Resolve a directory parked pending macOS authorization.
+ * `granted` re-walks it; `false` closes it as denied/unknown. When the user
+ * selected an ancestor folder in the panel, pass it as `grantedPath`.
+ */
+export function resolvePermission(
+  id: string,
+  granted: boolean,
+  grantedPath?: string,
+): Promise<void> {
+  return invoke('resolve_permission', { id, granted, grantedPath: grantedPath ?? null });
 }
 
 // ---- commands: deletion & filesystem awareness -----------------------------
@@ -89,6 +112,10 @@ export function stopMonitor(): Promise<void> {
 
 export function setAutoCleanMode(mode: 'off' | 'notify' | 'auto'): Promise<void> {
   return invoke('set_auto_clean_mode', { mode });
+}
+
+export function setScheduledCleanup(enabled: boolean, hour: number): Promise<void> {
+  return invoke('set_scheduled_cleanup', { enabled, hour });
 }
 
 export function markPath(path: string): Promise<import('./types').Finding> {
@@ -155,17 +182,72 @@ export function setLanguage(language: 'zh' | 'en'): Promise<void> {
   return invoke('set_language', { language });
 }
 
+// ---- AI provider configuration ----------------------------------------------
+
+export function getAiConfig(): Promise<AiConfig> {
+  return invoke<AiConfig>('get_ai_config');
+}
+
+/**
+ * Persist the AI provider settings. `token` semantics:
+ * `undefined` keeps the stored secret, `''` clears it, a value replaces it.
+ */
+export function saveAiConfig(
+  config: Omit<AiConfig, 'hasToken' | 'batchSize'>,
+  token?: string,
+): Promise<AiConfig> {
+  return invoke<AiConfig>('save_ai_config', {
+    config: {
+      enabled: config.enabled,
+      provider: config.provider,
+      endpoint: config.endpoint,
+      model: config.model,
+      language: config.language,
+      token: token === undefined ? null : token
+    }
+  });
+}
+
 // ---- streamed events --------------------------------------------------------
+
+export interface ProgressInfo {
+  files: number;
+  dirs: number;
+  bytes: number;
+  totalBytes: number;
+  percent: number;
+  rateBytesPerSec: number;
+  awaiting: number;
+  trackedNodes: number;
+}
+
+export interface PermissionRequest {
+  id: string;
+  path: string;
+  name: string;
+  /** true — TCC denial, grantable via the panel; false — needs an admin. */
+  tcc: boolean;
+}
 
 export interface BatchUpdate {
   discovered: Node[];
-  sized: { id: string; size: number; pending: boolean }[];
-  progress?: { files: number; dirs: number; trackedNodes: number };
+  sized: {
+    id: string;
+    size: number | null;
+    pending: boolean;
+    status: Node['status'];
+  }[];
+  permissions: PermissionRequest[];
+  progress?: ProgressInfo;
 }
 
 export interface ScanDoneEvent {
   cancelled: boolean;
   root: string;
+}
+
+export interface RefreshedEvent {
+  path: string;
 }
 
 export interface DeletedEvent {
@@ -179,6 +261,10 @@ export function onScanBatch(cb: (e: BatchUpdate) => void): Promise<UnlistenFn> {
 
 export function onScanDone(cb: (e: ScanDoneEvent) => void): Promise<UnlistenFn> {
   return listen<ScanDoneEvent>('scan://done', (e) => cb(e.payload));
+}
+
+export function onScanRefreshed(cb: (e: RefreshedEvent) => void): Promise<UnlistenFn> {
+  return listen<RefreshedEvent>('scan://refreshed', (e) => cb(e.payload));
 }
 
 export function onFsDeleted(cb: (e: DeletedEvent) => void): Promise<UnlistenFn> {
