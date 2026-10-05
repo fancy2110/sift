@@ -65,6 +65,7 @@ pub fn run() {
             analyze::start_monitor,
             analyze::stop_monitor,
             analyze::set_auto_clean_mode,
+            analyze::set_scheduled_cleanup,
             analyze::mark_path,
             analyze::take_store_warnings,
             analyze::store_location,

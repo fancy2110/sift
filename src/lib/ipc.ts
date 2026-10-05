@@ -114,6 +114,10 @@ export function setAutoCleanMode(mode: 'off' | 'notify' | 'auto'): Promise<void>
   return invoke('set_auto_clean_mode', { mode });
 }
 
+export function setScheduledCleanup(enabled: boolean, hour: number): Promise<void> {
+  return invoke('set_scheduled_cleanup', { enabled, hour });
+}
+
 export function markPath(path: string): Promise<import('./types').Finding> {
   return invoke('mark_path', { path });
 }

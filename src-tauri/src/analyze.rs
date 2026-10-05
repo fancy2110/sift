@@ -176,6 +176,8 @@ pub struct MonitorStatusDto {
     pub last_level: String,
     pub last_available_bytes: u64,
     pub last_total_bytes: u64,
+    pub scheduled_cleanup_enabled: bool,
+    pub scheduled_hour: u32,
 }
 
 // ---- commands --------------------------------------------------------------
@@ -481,7 +483,26 @@ pub fn monitor_status(
         last_level: "unknown".to_string(),
         last_available_bytes: available,
         last_total_bytes: total,
+        scheduled_cleanup_enabled: settings.monitor.scheduled_cleanup_enabled,
+        scheduled_hour: settings.monitor.scheduled_hour,
     }
+}
+
+/// Configure the daily unattended cleanup: whether it runs and at which hour.
+#[tauri::command]
+pub fn set_scheduled_cleanup(
+    services: State<'_, AppServices>,
+    enabled: bool,
+    hour: u32,
+) -> Result<(), String> {
+    if hour > 23 {
+        return Err("err.invalidHour".to_string());
+    }
+    services.store.update_settings(|settings| {
+        settings.monitor.scheduled_cleanup_enabled = enabled;
+        settings.monitor.scheduled_hour = hour;
+    });
+    Ok(())
 }
 
 /// Start watching free space for the volume of the last scan.

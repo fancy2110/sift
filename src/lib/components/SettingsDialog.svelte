@@ -157,6 +157,10 @@
             <button
               type="button"
               class="ai-preset"
+              class:preset-on={draft.provider === preset.provider
+                && draft.endpoint === preset.endpoint}
+              aria-pressed={draft.provider === preset.provider
+                && draft.endpoint === preset.endpoint}
               onclick={() => applyPreset(preset.provider, preset.endpoint)}
             >
               {t(preset.label)}
@@ -228,6 +232,38 @@
         >
           <span class="switch-knob"></span>
         </button>
+      </div>
+
+      <div class="set-card">
+        <div class="set-card-info">
+          <p class="set-card-title">{t('settings.scheduledTitle')}</p>
+          <p class="set-card-desc">{t('settings.scheduledDesc')}</p>
+        </div>
+        <div class="sched-controls">
+          <select
+            class="sched-time"
+            aria-label={t('settings.scheduledTime')}
+            value={String(store.scheduledHour)}
+            disabled={!store.scheduledOn}
+            onchange={(e) =>
+              store.saveScheduled(store.scheduledOn, Number(e.currentTarget.value))}
+          >
+            {#each Array.from({ length: 24 }, (_, h) => h) as h}
+              <option value={h}>{String(h).padStart(2, '0')}:00</option>
+            {/each}
+          </select>
+          <button
+            type="button"
+            class="switch"
+            class:switch-on={store.scheduledOn}
+            role="switch"
+            aria-label={t('settings.scheduledTitle')}
+            aria-checked={store.scheduledOn}
+            onclick={() => store.saveScheduled(!store.scheduledOn, store.scheduledHour)}
+          >
+            <span class="switch-knob"></span>
+          </button>
+        </div>
       </div>
 
       <p class="set-section-label" style="margin-top: 22px">{t('settings.routines')}</p>
@@ -403,6 +439,35 @@
     outline: none;
     box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-violet);
   }
+  .sched-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+  }
+  .sched-time {
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 9px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    outline: none;
+  }
+  .sched-time:not(:disabled) {
+    cursor: pointer;
+  }
+  .sched-time:disabled {
+    opacity: 0.5;
+  }
+  .sched-time:focus-visible {
+    border-color: var(--color-violet);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
+  }
+
   .set-rt-list {
     list-style: none;
     margin: 0;
@@ -496,6 +561,11 @@
   .ai-preset:hover {
     color: var(--color-fg);
     border-color: var(--color-border-strong);
+  }
+  .ai-preset.preset-on {
+    color: var(--color-violet);
+    border-color: color-mix(in oklch, var(--color-violet) 55%, transparent);
+    background: color-mix(in oklch, var(--color-violet) 12%, var(--color-surface));
   }
   .ai-input {
     width: 100%;

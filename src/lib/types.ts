@@ -121,6 +121,8 @@ export interface MonitorStatus {
   lastLevel: string;
   lastAvailableBytes: number;
   lastTotalBytes: number;
+  scheduledCleanupEnabled: boolean;
+  scheduledHour: number;
 }
 
 export interface VolumeInfo {

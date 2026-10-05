@@ -24,6 +24,7 @@ import {
   runRoutine,
   scanRunning,
   setAutoCleanMode,
+  setScheduledCleanup,
   setScanFocus,
   startMonitor,
   startScan,
@@ -116,6 +117,8 @@ class AppStore {
   toasts = $state<Toast[]>([]);
   autoOn = $state(false);
   monitorRunning = $state(false);
+  scheduledOn = $state(false);
+  scheduledHour = $state(4);
 
   /** Analyzed candidates from the backend. */
   findings = $state<Finding[]>([]);
@@ -929,8 +932,20 @@ class AppStore {
       const status: MonitorStatusInfo = await monitorStatus();
       this.autoOn = status.autoMode === 'auto';
       this.monitorRunning = status.running;
+      this.scheduledOn = status.scheduledCleanupEnabled;
+      this.scheduledHour = status.scheduledHour;
     } catch {
       // Status is best-effort.
+    }
+  }
+
+  async saveScheduled(enabled: boolean, hour: number) {
+    try {
+      await setScheduledCleanup(enabled, hour);
+      this.scheduledOn = enabled;
+      this.scheduledHour = hour;
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
     }
   }
 

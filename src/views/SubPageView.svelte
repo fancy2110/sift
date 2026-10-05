@@ -778,15 +778,17 @@
     color: var(--color-faint);
   }
   .ex-col-size {
-    width: 62px;
+    width: 104px;
+    flex: none;
     text-align: right;
   }
   .ex-col-note {
-    flex: 1;
+    flex: 1 1 0;
     min-width: 0;
   }
   .ex-col-action {
-    width: 60px;
+    width: 68px;
+    flex: none;
     text-align: right;
   }
   .ex-rows {
@@ -811,8 +813,10 @@
     justify-content: center;
   }
   .ex-name {
-    width: 150px;
-    flex: none;
+    /* Shrink the name (it ellipsizes) before the fixed size/action columns
+       can overlap. */
+    flex: 0 1 150px;
+    min-width: 56px;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -831,7 +835,9 @@
     color: var(--color-fg);
   }
   .ex-size {
-    width: 92px;
+    /* Room for a status badge + the size on one line, so neither spills into
+       the action button. */
+    width: 104px;
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -860,7 +866,7 @@
     background: color-mix(in oklch, var(--color-violet) 13%, transparent);
   }
   .ex-action {
-    width: 60px;
+    width: 68px;
     flex: none;
     display: flex;
     justify-content: flex-end;
