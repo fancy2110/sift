@@ -592,6 +592,8 @@ mod tests {
             path.display(),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
     #[cfg(unix)]
     #[test]
     fn owner_bit_decides_when_we_own_the_entry() {
