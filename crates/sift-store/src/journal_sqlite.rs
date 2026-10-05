@@ -6,13 +6,29 @@
 //! committed data. WAL keeps writer and reader from contending.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{channel, sync_channel, Sender, SyncSender};
+use std::sync::{Arc, Mutex};
 
 use sift_scan::{ClosedDir, DiscoveredDir, RestoredDir, RestoredScan, ScanJournal};
 
+/// Maximum queued writer messages. Beyond this the producer blocks: memory is
+/// bounded and back-pressure reaches the coordinator instead of an unbounded
+/// queue growing while a slow disk is fsyncing.
+const CHANNEL_CAPACITY: usize = 512;
+
 /// A durable, SQLite-backed scan journal. Cheap to clone (state is shared).
 pub struct SqliteScanJournal {
-    cmd: Sender<WriterMsg>,
+    cmd: SyncSender<WriterMsg>,
+    stats: Arc<WriterStats>,
+}
+
+/// Write-failure state shared with the background writer. Failures are never
+/// silent: each one is logged, counted, and the last message is retained.
+#[derive(Default)]
+struct WriterStats {
+    failed_writes: AtomicU64,
+    last_error: Mutex<Option<String>>,
 }
 
 enum WriterMsg {
@@ -43,46 +59,85 @@ impl SqliteScanJournal {
 
     fn with_conn(mut conn: rusqlite::Connection) -> rusqlite::Result<Self> {
         init_schema(&mut conn)?;
-        let (cmd, rx) = channel::<WriterMsg>();
+        let (cmd, rx) = sync_channel::<WriterMsg>(CHANNEL_CAPACITY);
+        let stats = Arc::<WriterStats>::default();
+        let writer_stats = Arc::clone(&stats);
         std::thread::Builder::new()
             .name("sift-journal".into())
             .spawn(move || {
                 while let Ok(msg) = rx.recv() {
                     match msg {
                         WriterMsg::Begin(root) => {
-                            let _ = apply_begin(&conn, &root);
+                            if let Err(err) = apply_begin(&conn, &root) {
+                                record_write_error(&writer_stats, "begin", err);
+                            }
                         }
                         WriterMsg::Discovered { root, dirs } => {
-                            let _ = apply_discovered(&conn, &root, dirs);
+                            if let Err(err) = apply_discovered(&conn, &root, dirs) {
+                                record_write_error(&writer_stats, "discovered", err);
+                            }
                         }
                         WriterMsg::Closed { root, updates } => {
-                            let _ = apply_closed(&conn, &root, updates);
+                            if let Err(err) = apply_closed(&conn, &root, updates) {
+                                record_write_error(&writer_stats, "closed", err);
+                            }
                         }
                         WriterMsg::Load { root, reply } => {
                             let scan = load_scan(&conn, &root).unwrap_or_default();
                             let _ = reply.send(scan);
                         }
                         WriterMsg::PruneOpen(root) => {
-                            let _ = conn.execute(
+                            if let Err(err) = conn.execute(
                                 "DELETE FROM dirs WHERE root=?1 AND closed=0",
                                 rusqlite::params![root],
-                            );
+                            ) {
+                                record_write_error(&writer_stats, "prune_open", err);
+                            }
                         }
                         WriterMsg::Complete(root) => {
-                            let _ = apply_complete(&conn, &root);
+                            if let Err(err) = apply_complete(&conn, &root) {
+                                record_write_error(&writer_stats, "complete", err);
+                            }
                         }
                         WriterMsg::Shutdown => break,
                     }
                 }
             })
             .expect("spawn journal writer");
-        Ok(Self { cmd })
+        Ok(Self { cmd, stats })
+    }
+
+    /// Number of background write failures since opening. A non-zero count
+    /// means some resume data is missing and the disk may be failing.
+    pub fn failed_write_count(&self) -> u64 {
+        self.stats.failed_writes.load(Ordering::SeqCst)
+    }
+
+    /// The most recent background write error message, if any.
+    pub fn last_write_error(&self) -> Option<String> {
+        self.stats
+            .last_error
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+}
+
+/// Log and record one background write failure.
+fn record_write_error(stats: &WriterStats, stage: &str, err: rusqlite::Error) {
+    eprintln!("sift journal: write failed during {stage}: {err}");
+    stats.failed_writes.fetch_add(1, Ordering::SeqCst);
+    if let Ok(mut last) = stats.last_error.lock() {
+        *last = Some(err.to_string());
     }
 }
 
 impl Drop for SqliteScanJournal {
     fn drop(&mut self) {
-        let _ = self.cmd.send(WriterMsg::Shutdown);
+        // Best effort and never blocking: when the queue is full the sender is
+        // dropped right after this, and the writer exits on disconnect once it
+        // drains the queued messages.
+        let _ = self.cmd.try_send(WriterMsg::Shutdown);
     }
 }
 
@@ -341,5 +396,47 @@ mod tests {
         journal.discovered("/root", vec![dir("A", "R", "a", "/root/a", 1)]);
         journal.complete("/root");
         assert!(journal.load("/root").is_empty());
+    }
+
+    /// A write failure in the background writer must be observable: logged,
+    /// counted exactly once, and its message retained.
+    #[test]
+    fn write_failures_are_counted_and_retained() {
+        let scratch = std::env::temp_dir().join(format!(
+            "sift-journal-err-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let db = scratch.join("journal.db");
+        let journal = SqliteScanJournal::open(&db).unwrap();
+
+        // A second connection removes the table the writer inserts into.
+        let saboteur = rusqlite::Connection::open(&db).unwrap();
+        saboteur.execute_batch("DROP TABLE dirs").unwrap();
+
+        // The scans-row insert succeeds; the dirs insert fails: one error.
+        journal.begin(&dir("R", "", "root", "/root", 0));
+
+        let mut observed = false;
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if journal.failed_write_count() > 0 {
+                observed = true;
+                break;
+            }
+        }
+        assert!(observed, "the failed write must be counted");
+        assert_eq!(journal.failed_write_count(), 1);
+        assert!(
+            journal.last_write_error().is_some(),
+            "the error message must be retained"
+        );
+
+        drop(saboteur);
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }
