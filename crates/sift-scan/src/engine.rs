@@ -429,7 +429,7 @@ impl ScanEngine {
                         break;
                     }
                     let busy_start = Instant::now();
-                    let result = read_job(job, want_physical, &mut buffer);
+                    let result = read_job(job, want_physical, &cancel, &mut buffer);
                     let busy = busy_start.elapsed().as_nanos() as u64;
                     WORKER_BUSY_NS.fetch_add(busy, AtomicOrdering::Relaxed);
                     if result_tx.send(result).is_err() {
@@ -2041,7 +2041,12 @@ enum DirResult {
     Predicted { index: u32 },
 }
 
-fn read_job(mut job: DirJob, want_physical: bool, buffer: &mut BulkBuffer) -> DirResult {
+fn read_job(
+    mut job: DirJob,
+    want_physical: bool,
+    cancel: &AtomicBool,
+    buffer: &mut BulkBuffer,
+) -> DirResult {
     match &mut job {
         DirJob::Tracked {
             index,
@@ -2081,7 +2086,7 @@ fn read_job(mut job: DirJob, want_physical: bool, buffer: &mut BulkBuffer) -> Di
         DirJob::SizeOnly { parent, path } => {
             let parent = *parent;
             let path = std::mem::take(path);
-            let (size, files) = size_only_walk(&path, want_physical, buffer);
+            let (size, files) = size_only_walk(&path, want_physical, cancel, buffer);
             DirResult::Sized {
                 parent,
                 size,
@@ -2093,19 +2098,32 @@ fn read_job(mut job: DirJob, want_physical: bool, buffer: &mut BulkBuffer) -> Di
 
 /// Sum a subtree without building any tree nodes. Iterative so worker stack
 /// usage is bounded regardless of tree depth.
+///
+/// Cancellation: a size-only subtree can hold one worker for a long time, so
+/// the cancel flag is polled before each directory and periodically inside a
+/// large flat one. On cancel the partial totals are returned; the coordinator
+/// discards results after it observes cancellation.
 fn size_only_walk(
     path: &Path,
     want_physical: bool,
+    cancel: &AtomicBool,
     buffer: &mut BulkBuffer,
 ) -> (ByteSize, u32) {
     let mut total = ByteSize::ZERO;
     let mut files = 0u32;
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if cancel.load(AtomicOrdering::SeqCst) {
+            break;
+        }
         let Ok(entries) = DirReader::read_reusing(&dir, want_physical, buffer) else {
             continue;
         };
-        for entry in entries {
+        for (seen, entry) in entries.iter().enumerate() {
+            if seen % CANCEL_CHECK_EVERY == 0 && cancel.load(AtomicOrdering::SeqCst) {
+                // Partial totals are dropped by a cancelled coordinator.
+                return (total, files);
+            }
             if entry.is_dir && !entry.is_symlink {
                 stack.push(join_path(&dir, &entry.name));
             } else if entry.is_file {
@@ -2116,6 +2134,9 @@ fn size_only_walk(
     }
     (total, files)
 }
+
+/// Poll cancellation once per this many entries while summing a flat directory.
+const CANCEL_CHECK_EVERY: usize = 4096;
 
 // ---- path helpers ----------------------------------------------------------
 
@@ -2676,6 +2697,66 @@ mod tests {
             _ => None,
         });
         assert_eq!(outcome, Some(ScanOutcome::Cancelled));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A cancel already set before the walk starts must return at once, with
+    /// no directories read.
+    #[test]
+    fn size_only_walk_returns_immediately_when_precancelled() {
+        let base = temp_tree("precancel");
+        let cancel = AtomicBool::new(true);
+        let mut buffer = BulkBuffer::new();
+        let (size, files) = size_only_walk(&base, false, &cancel, &mut buffer);
+        assert_eq!(size, ByteSize::ZERO);
+        assert_eq!(files, 0);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Cancel must land in the middle of a long walk, and the returned totals
+    /// must be a strict subset of the uncancelled totals.
+    #[test]
+    fn size_only_walk_stops_mid_tree_when_cancelled() {
+        let tag = "walkcancel";
+        let base =
+            std::env::temp_dir().join(format!("sift-scan-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // Many leaf directories: hundreds of readdir calls give the cancel
+        // flip a wide window to land mid-walk.
+        const DIRS: u32 = 500;
+        const PER_DIR: u32 = 40;
+        for i in 0..DIRS {
+            let dir = base.join(format!("d{i}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            for j in 0..PER_DIR {
+                std::fs::write(dir.join(format!("f{j}")), b"x").unwrap();
+            }
+        }
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_c = Arc::clone(&cancel);
+        let root = base.clone();
+        let walker = std::thread::spawn(move || {
+            let mut buffer = BulkBuffer::new();
+            size_only_walk(&root, false, &cancel_c, &mut buffer)
+        });
+        std::thread::sleep(Duration::from_millis(5));
+        cancel.store(true, AtomicOrdering::SeqCst);
+        let (partial, partial_files) = walker.join().unwrap();
+
+        // The same tree uncancelled gives the true totals.
+        let idle = AtomicBool::new(false);
+        let mut buffer = BulkBuffer::new();
+        let (full, full_files) = size_only_walk(&base, false, &idle, &mut buffer);
+        assert_eq!(full_files, DIRS * PER_DIR);
+        assert!(
+            partial_files < full_files,
+            "the walk must have stopped early: {partial_files}/{full_files}"
+        );
+        assert_eq!(partial.logical, u64::from(partial_files), "each file is 1 byte");
+        assert!(partial.logical < full.logical);
 
         let _ = std::fs::remove_dir_all(&base);
     }
