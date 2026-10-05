@@ -39,7 +39,7 @@ import {
   type RefreshedEvent,
   type ScanDoneEvent
 } from './ipc';
-import { findSurvivingAncestor } from './tree-prune';
+import { findSurvivingAncestor, prunedSizeDeltas } from './tree-prune';
 import type {
   AiConfig,
   Finding,
@@ -838,6 +838,22 @@ class AppStore {
         list.push(id);
         detach.set(node.parentId, list);
       }
+    }
+
+    // All parent-chain lookups below must run while the node records still
+    // exist; they are deleted later in this function.
+
+    // Recompute surviving ancestor totals (R4.4): each removed component's
+    // last known subtree size is subtracted up the surviving parent chain, so
+    // the explorer stops showing bytes that are already gone.
+    const sizeDeltas = prunedSizeDeltas(
+      remove,
+      (id) => this.nodeRecords.get(id)?.parentId ?? null,
+      (id) => this.nodeRecords.get(id)?.size
+    );
+    for (const [id, delta] of sizeDeltas) {
+      const node = this.nodeRecords.get(id);
+      if (node) node.size = Math.max(0, node.size - delta);
     }
 
     // Resolve the post-prune view target BEFORE records are deleted: afterwards
