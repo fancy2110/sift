@@ -515,10 +515,18 @@ impl ScanTree {
     }
 
     /// Finish a directory: mark it settled and roll its total into its parent.
+    ///
+    /// Closing an already settled directory is a no-op. A duplicate event or a
+    /// retried call must not roll the same totals into the parent a second
+    /// time; [`ScanTree::reopen_dir`] flips the directory back to pending when
+    /// a genuine re-read is intended.
     pub fn close_dir(&mut self, index: u32) {
         let Some(node) = self.nodes.get(index as usize) else {
             return;
         };
+        if !node.pending() {
+            return;
+        }
         let parent = node.parent;
         let total = node.size;
         let files = node.file_count;
@@ -1298,6 +1306,33 @@ mod tests {
         let before = tree.total().logical;
         tree.close_dir(a);
         assert_eq!(tree.total().logical, before);
+    }
+
+    #[test]
+    fn closing_a_nonempty_directory_twice_does_not_double_count() {
+        let mut tree = tree();
+        let root = tree.root();
+        let a = tree
+            .open_dir(root, key("/a"), b"a", 0, true, false)
+            .unwrap();
+        let b = tree
+            .open_dir(a, key("/a/b"), b"b", 0, true, false)
+            .unwrap();
+        tree.record_file(a, ByteSize::logical_only(3 << 20), None);
+        tree.record_file(b, ByteSize::logical_only(7 << 20), None);
+
+        tree.close_dir(b);
+        // A duplicate close on the child feeds its subtree into `a` once.
+        tree.close_dir(b);
+        tree.close_dir(a);
+        assert_eq!(tree.total().logical, 10 << 20);
+        assert_eq!(tree.node(root).unwrap().file_count, 2);
+        // The duplicate close on the non-empty parent must add neither size
+        // nor file count to the root again.
+        tree.close_dir(a);
+        assert_eq!(tree.total().logical, 10 << 20);
+        assert_eq!(tree.node(root).unwrap().file_count, 2);
+        assert!(!tree.is_pending(a));
     }
 
     #[test]
