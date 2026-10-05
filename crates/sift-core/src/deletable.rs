@@ -147,6 +147,8 @@ pub enum Deletable {
     ParentNotWritable,
     /// Refused because the entry is a bundle the product will not dissolve.
     Bundle,
+    /// Refused because the entry carries an immutable flag (`uchg`/`schg`).
+    ImmutableFlag,
 }
 
 impl Deletable {
@@ -163,6 +165,7 @@ impl Deletable {
             Deletable::UnresolvedPath => Some("delete.refused.unresolvedPath"),
             Deletable::ParentNotWritable => Some("delete.refused.parentNotWritable"),
             Deletable::Bundle => Some("delete.refused.bundle"),
+            Deletable::ImmutableFlag => Some("delete.refused.immutableFlag"),
         }
     }
 }
@@ -235,9 +238,41 @@ pub fn classify_with_permissions(path: &Path) -> Deletable {
     if !policy.is_yes() {
         return policy;
     }
+    // `unlink`/`rename` on an immutable entry fails with EPERM no matter what
+    // the parent directory allows, so this is checked first and carries the
+    // more actionable reason (clear the flag, then retry).
+    #[cfg(target_os = "macos")]
+    if entry_is_immutable(path) {
+        return Deletable::ImmutableFlag;
+    }
     match parent_is_writable(path) {
         true => Deletable::Yes,
         false => Deletable::ParentNotWritable,
+    }
+}
+
+/// Whether the entry itself carries a user- or system-level immutable flag.
+///
+/// On macOS `UF_IMMUTABLE` (`uchg`) or `SF_IMMUTABLE` (`schg`) blocks exactly
+/// the operations a move-to-trash needs: the entry can be neither renamed nor
+/// unlinked while the flag is set, even from a writable parent directory.
+/// Symlinks are probed without following them — the flag that matters lives on
+/// the link's own inode, not on its target.
+#[cfg(target_os = "macos")]
+fn entry_is_immutable(path: &Path) -> bool {
+    // `st_flags` lives in the Darwin-specific extension on this toolchain.
+    use std::os::darwin::fs::MetadataExt;
+
+    /// User-set immutable flag (`chflags uchg`).
+    const UF_IMMUTABLE: u32 = 0x0000_0002;
+    /// System-set immutable flag (`chflags schg`).
+    const SF_IMMUTABLE: u32 = 0x0002_0000;
+
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta.st_flags() & (UF_IMMUTABLE | SF_IMMUTABLE) != 0,
+        // Unreadable entries stay on the existing path: the parent probe or the
+        // per-item deletion error reports them; never silently allow one here.
+        Err(_) => false,
     }
 }
 
@@ -252,22 +287,78 @@ pub fn parent_is_writable(path: &Path) -> bool {
     let Ok(meta) = fs::metadata(parent) else {
         return false;
     };
-    let mode = meta.mode();
-    let owner_matches = meta.uid() == effective_uid();
-    if owner_matches {
+    unix_mode_is_writable_for(meta.mode(), meta.uid(), meta.gid())
+}
+
+/// Whether the given Unix mode grants *this process* write permission, given
+/// the entry's owning uid/gid.
+///
+/// The check follows the kernel's owner → group → other order. Crucially the
+/// group step tests membership against **every supplementary group**
+/// (`getgroups`), not only the effective gid: e.g. `/Applications` is owned
+/// by `root:admin` with group-write on, and a normal user belongs to `admin`
+/// via a supplementary group, so it must read as writable even though the
+/// process's primary group is something else.
+///
+/// Shared by every write probe in the workspace (core and platform) so the
+/// answer stays identical whether bits came from metadata, a bulk-read entry,
+/// or an fstat-ed descriptor.
+#[cfg(unix)]
+pub fn unix_mode_is_writable_for(mode: u32, uid: u32, gid: u32) -> bool {
+    if uid == identity::effective_uid() {
         mode & 0o200 != 0
+    } else if identity::in_effective_group(gid) {
+        mode & 0o020 != 0
     } else {
         mode & 0o002 != 0
     }
 }
 
 #[cfg(unix)]
-fn effective_uid() -> u32 {
-    // Declared here rather than pulling in `libc` for one call.
+mod identity {
+    use std::sync::OnceLock;
+
     extern "C" {
         fn geteuid() -> u32;
+        fn getgroups(size: i32, list: *mut u32) -> i32;
     }
-    unsafe { geteuid() }
+
+    pub fn effective_uid() -> u32 {
+        unsafe { geteuid() }
+    }
+
+    /// Whether `gid` is among the process's effective group set.
+    pub fn in_effective_group(gid: u32) -> bool {
+        effective_groups().contains(&gid)
+    }
+
+    /// Test-only view of the cached group set.
+    #[cfg(test)]
+    pub fn test_groups() -> &'static [u32] {
+        effective_groups()
+    }
+
+    /// The process's own groups never change; fetch them once.
+    fn effective_groups() -> &'static [u32] {
+        GROUPS.get_or_init(|| {
+            unsafe {
+                // size 0 returns the group count without writing the list.
+                let count = getgroups(0, std::ptr::null_mut());
+                if count <= 0 {
+                    return Vec::new();
+                }
+                let mut list = vec![0u32; count as usize];
+                let filled = getgroups(count, list.as_mut_ptr());
+                if filled <= 0 {
+                    return Vec::new();
+                }
+                list.truncate(filled as usize);
+                list
+            }
+        })
+    }
+
+    static GROUPS: OnceLock<Vec<u32>> = OnceLock::new();
 }
 
 /// Whether a *directory itself* permits deleting its children, judged from the
@@ -279,12 +370,7 @@ fn effective_uid() -> u32 {
 #[cfg(unix)]
 pub fn dir_is_writable(meta: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
-    let mode = meta.mode();
-    if meta.uid() == effective_uid() {
-        mode & 0o200 != 0
-    } else {
-        mode & 0o002 != 0
-    }
+    unix_mode_is_writable_for(meta.mode(), meta.uid(), meta.gid())
 }
 
 /// Windows ACLs are not expressible through Unix mode bits; reaching the
@@ -421,6 +507,7 @@ mod tests {
             Deletable::UnresolvedPath,
             Deletable::ParentNotWritable,
             Deletable::Bundle,
+            Deletable::ImmutableFlag,
         ] {
             let key = verdict.refusal_key().expect("refusal needs a key");
             assert!(key.starts_with("delete.refused."), "{key}");
@@ -452,5 +539,95 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `uchg` on the entry itself blocks rename/unlink even though the parent
+    /// directory is writable; the classifier must say so for both files and
+    /// directories.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn immutable_entries_are_refused_despite_a_writable_parent() {
+        use std::fs;
+        let dir: PathBuf =
+            std::env::temp_dir().join(format!("sift-immutable-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let file = dir.join("locked.txt");
+        fs::write(&file, b"x").unwrap();
+        let subdir = dir.join("locked-dir");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("inside.txt"), b"y").unwrap();
+
+        for target in [&file, &subdir] {
+            assert_eq!(classify_with_permissions(target), Deletable::Yes);
+            chflags(target, "uchg");
+            // The kernel refuses the rename a trash move would need.
+            let renamed = target.with_extension("moved");
+            assert!(fs::rename(target, &renamed).is_err());
+            assert_eq!(
+                classify_with_permissions(target),
+                Deletable::ImmutableFlag,
+                "{} should be immutable",
+                target.display()
+            );
+            chflags(target, "nouchg");
+            assert_eq!(classify_with_permissions(target), Deletable::Yes);
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Set or clear a file flag through the system `chflags` tool.
+    #[cfg(target_os = "macos")]
+    fn chflags(path: &std::path::Path, flag: &str) {
+        let output = std::process::Command::new("chflags")
+            .arg(flag)
+            .arg(path)
+            .output()
+            .expect("run chflags");
+        assert!(
+            output.status.success(),
+            "chflags {flag} {} failed: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_bit_decides_when_we_own_the_entry() {
+        let euid = identity::effective_uid();
+        assert!(unix_mode_is_writable_for(0o700, euid, 0));
+        assert!(unix_mode_is_writable_for(0o200, euid, 0));
+        // Without the owner write bit the group/other bits are ignored,
+        // exactly as the kernel does.
+        assert!(!unix_mode_is_writable_for(0o077, euid, 0));
+        assert!(!unix_mode_is_writable_for(0o022, euid, 0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn group_write_uses_every_supplementary_group() {
+        let euid = identity::effective_uid();
+        let other_uid = euid.wrapping_add(1);
+        let groups = identity::test_groups();
+        // getgroups always includes at least the effective group.
+        let member = *groups.first().expect("getgroups returned no groups");
+
+        // The /Applications case: owned by someone else (root), group is a
+        // group we belong to via a supplementary entry, mode 0775.
+        assert!(unix_mode_is_writable_for(0o775, other_uid, member));
+        // Membership alone is not enough — the group write bit must be set.
+        assert!(!unix_mode_is_writable_for(0o755, other_uid, member));
+        assert!(!unix_mode_is_writable_for(0o705, other_uid, member));
+
+        // A gid outside our group set never unlocks the group bit...
+        let outsider = (0u32..).find(|g| !groups.contains(g)).unwrap();
+        assert!(!unix_mode_is_writable_for(0o775, other_uid, outsider));
+        // ...but the owner→group→other fallthrough still reaches `other`.
+        assert!(unix_mode_is_writable_for(0o777, other_uid, outsider));
+        assert!(unix_mode_is_writable_for(0o002, other_uid, outsider));
+        assert!(!unix_mode_is_writable_for(0o005, other_uid, outsider));
     }
 }

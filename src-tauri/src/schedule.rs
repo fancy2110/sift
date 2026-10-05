@@ -3,14 +3,17 @@
 //! A small background thread that wakes a few times a minute and, when the
 //! local clock reaches the configured hour (default 04:00), runs the same
 //! real pipeline the user triggers manually: scan the system volume, analyse
-//! it, then send the remembered safe items inside the home directory to the
-//! trash. Nothing outside home is removed and only safe conclusions qualify,
-//! so the safety guardrails are identical to an interactive cleanup.
+//! it, then send the remembered, individually approved safe items inside the
+//! home directory to the trash. Nothing outside home is removed and only Safe
+//! entries the user has approved for automatic cleanup qualify, so the safety
+//! guardrails are identical to an interactive cleanup.
 
+use std::path::Path;
 use std::time::Duration;
 
 use chrono::{Datelike, Timelike};
 use sift_analyze::Safety;
+use sift_store::CleanableEntry;
 use tauri::{AppHandle, Manager};
 
 use crate::analyze::AppServices;
@@ -86,19 +89,7 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
     crate::analyze::analyze_current_with(&services, &manager)?;
 
     let home = dirs::home_dir();
-    let paths: Vec<String> = services
-        .store
-        .cleanable()
-        .entries()
-        .iter()
-        .filter(|entry| entry.safety == Safety::Safe)
-        .filter(|entry| {
-            home.as_deref()
-                .map(|home| entry.path.starts_with(home))
-                .unwrap_or(false)
-        })
-        .map(|entry| entry.path.to_string_lossy().into_owned())
-        .collect();
+    let paths = select_approved_paths(services.store.cleanable().entries(), home.as_deref());
 
     // Re-check at act time: the user may have flipped the switch while the
     // hour-long scan was running.
@@ -112,4 +103,71 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
         crate::analyze::perform_cleanup(&services, &paths, true);
     }
     Ok(())
+}
+
+/// Select remembered entries for unattended scheduled cleanup: `Safe`,
+/// individually approved for automatic cleanup, and inside `home`. A missing
+/// home proves nothing, so nothing is selected.
+pub(crate) fn select_approved_paths(
+    entries: &[CleanableEntry],
+    home: Option<&Path>,
+) -> Vec<String> {
+    let Some(home) = home else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter(|entry| entry.safety == Safety::Safe && entry.approved_for_auto)
+        .filter(|entry| entry.path.starts_with(home))
+        .map(|entry| entry.path.to_string_lossy().into_owned())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use sift_analyze::{PathFingerprint, Reason, VerdictSource};
+    use sift_core::NodeKey;
+
+    fn entry(name: &str, path: &str, safety: Safety, approved: bool) -> CleanableEntry {
+        CleanableEntry {
+            fingerprint: PathFingerprint::new(NodeKey::from_bytes(name.as_bytes()), 1, 0, true),
+            path: PathBuf::from(path),
+            display_path: path.to_string(),
+            name: name.to_string(),
+            kind_token: "rebuildableCache".into(),
+            size: 1,
+            safety,
+            confidence: 0.9,
+            reason: Reason::key("reason.rebuildableCache"),
+            source: VerdictSource::rule("dir.node_modules"),
+            first_seen_ms: 0,
+            last_seen_ms: 0,
+            times_seen: 1,
+            approved_for_auto: approved,
+            cleanup_command: None,
+            cleanup_method: "trashItem".into(),
+            impact: Reason::key("reason.rebuildableCache"),
+        }
+    }
+
+    #[test]
+    fn only_safe_approved_entries_inside_home_are_selected() {
+        let home = Path::new("/Users/me");
+        let entries = vec![
+            entry("a", "/Users/me/project/a", Safety::Safe, true),
+            entry("b", "/Users/me/project/b", Safety::Safe, false),
+            entry("c", "/Users/me/project/c", Safety::Review, true),
+            entry("d", "/srv/d", Safety::Safe, true),
+        ];
+        let paths = select_approved_paths(&entries, Some(home));
+        assert_eq!(paths, vec!["/Users/me/project/a".to_string()]);
+    }
+
+    #[test]
+    fn missing_home_selects_nothing() {
+        let entries = vec![entry("a", "/Users/me/a", Safety::Safe, true)];
+        assert!(select_approved_paths(&entries, None).is_empty());
+    }
 }

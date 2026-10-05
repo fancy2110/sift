@@ -378,14 +378,9 @@ impl RawEntry {
         if self.mode == 0 {
             return false;
         }
-        let write_bit = if self.uid != u32::MAX && self.uid == unsafe { libc::geteuid() } {
-            0o200
-        } else if self.gid != u32::MAX && self.gid == unsafe { libc::getegid() } {
-            0o020
-        } else {
-            0o002
-        };
-        self.mode & write_bit != 0
+        // Group membership must cover every supplementary group, not just the
+        // effective gid; the shared probe owns that decision.
+        sift_core::deletable::unix_mode_is_writable_for(self.mode, self.uid, self.gid)
     }
 }
 
@@ -938,14 +933,7 @@ fn writable_of_path(path: &Path) -> bool {
     let Ok(meta) = fs::metadata(path) else {
         return false;
     };
-    let write_bit = if meta.uid() == unsafe { libc::geteuid() } {
-        0o200
-    } else if meta.gid() == unsafe { libc::getegid() } {
-        0o020
-    } else {
-        0o002
-    };
-    meta.mode() & write_bit != 0
+    sift_core::deletable::unix_mode_is_writable_for(meta.mode(), meta.uid(), meta.gid())
 }
 
 /// Same test as [`writable_of_fd`] for a raw descriptor that is already open
@@ -957,14 +945,12 @@ fn writable_of_raw_fd(fd: std::os::unix::io::RawFd) -> bool {
         return false;
     }
     let stat = unsafe { stat.assume_init() };
-    let write_bit = if stat.st_uid == unsafe { libc::geteuid() } {
-        0o200
-    } else if stat.st_gid == unsafe { libc::getegid() } {
-        0o020
-    } else {
-        0o002
-    };
-    stat.st_mode & write_bit != 0
+    // macOS declares st_mode as u16; the probe speaks u32 mode bits.
+    sift_core::deletable::unix_mode_is_writable_for(
+        stat.st_mode as u32,
+        stat.st_uid,
+        stat.st_gid,
+    )
 }
 
 // ---- per-platform metadata extraction (portable path) ----------------------
