@@ -147,6 +147,8 @@ pub enum Deletable {
     ParentNotWritable,
     /// Refused because the entry is a bundle the product will not dissolve.
     Bundle,
+    /// Refused because the entry carries an immutable flag (`uchg`/`schg`).
+    ImmutableFlag,
 }
 
 impl Deletable {
@@ -163,6 +165,7 @@ impl Deletable {
             Deletable::UnresolvedPath => Some("delete.refused.unresolvedPath"),
             Deletable::ParentNotWritable => Some("delete.refused.parentNotWritable"),
             Deletable::Bundle => Some("delete.refused.bundle"),
+            Deletable::ImmutableFlag => Some("delete.refused.immutableFlag"),
         }
     }
 }
@@ -235,9 +238,41 @@ pub fn classify_with_permissions(path: &Path) -> Deletable {
     if !policy.is_yes() {
         return policy;
     }
+    // `unlink`/`rename` on an immutable entry fails with EPERM no matter what
+    // the parent directory allows, so this is checked first and carries the
+    // more actionable reason (clear the flag, then retry).
+    #[cfg(target_os = "macos")]
+    if entry_is_immutable(path) {
+        return Deletable::ImmutableFlag;
+    }
     match parent_is_writable(path) {
         true => Deletable::Yes,
         false => Deletable::ParentNotWritable,
+    }
+}
+
+/// Whether the entry itself carries a user- or system-level immutable flag.
+///
+/// On macOS `UF_IMMUTABLE` (`uchg`) or `SF_IMMUTABLE` (`schg`) blocks exactly
+/// the operations a move-to-trash needs: the entry can be neither renamed nor
+/// unlinked while the flag is set, even from a writable parent directory.
+/// Symlinks are probed without following them — the flag that matters lives on
+/// the link's own inode, not on its target.
+#[cfg(target_os = "macos")]
+fn entry_is_immutable(path: &Path) -> bool {
+    // `st_flags` lives in the Darwin-specific extension on this toolchain.
+    use std::os::darwin::fs::MetadataExt;
+
+    /// User-set immutable flag (`chflags uchg`).
+    const UF_IMMUTABLE: u32 = 0x0000_0002;
+    /// System-set immutable flag (`chflags schg`).
+    const SF_IMMUTABLE: u32 = 0x0002_0000;
+
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta.st_flags() & (UF_IMMUTABLE | SF_IMMUTABLE) != 0,
+        // Unreadable entries stay on the existing path: the parent probe or the
+        // per-item deletion error reports them; never silently allow one here.
+        Err(_) => false,
     }
 }
 
@@ -421,6 +456,7 @@ mod tests {
             Deletable::UnresolvedPath,
             Deletable::ParentNotWritable,
             Deletable::Bundle,
+            Deletable::ImmutableFlag,
         ] {
             let key = verdict.refusal_key().expect("refusal needs a key");
             assert!(key.starts_with("delete.refused."), "{key}");
@@ -452,5 +488,58 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `uchg` on the entry itself blocks rename/unlink even though the parent
+    /// directory is writable; the classifier must say so for both files and
+    /// directories.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn immutable_entries_are_refused_despite_a_writable_parent() {
+        use std::fs;
+        let dir: PathBuf =
+            std::env::temp_dir().join(format!("sift-immutable-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let file = dir.join("locked.txt");
+        fs::write(&file, b"x").unwrap();
+        let subdir = dir.join("locked-dir");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("inside.txt"), b"y").unwrap();
+
+        for target in [&file, &subdir] {
+            assert_eq!(classify_with_permissions(target), Deletable::Yes);
+            chflags(target, "uchg");
+            // The kernel refuses the rename a trash move would need.
+            let renamed = target.with_extension("moved");
+            assert!(fs::rename(target, &renamed).is_err());
+            assert_eq!(
+                classify_with_permissions(target),
+                Deletable::ImmutableFlag,
+                "{} should be immutable",
+                target.display()
+            );
+            chflags(target, "nouchg");
+            assert_eq!(classify_with_permissions(target), Deletable::Yes);
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Set or clear a file flag through the system `chflags` tool.
+    #[cfg(target_os = "macos")]
+    fn chflags(path: &std::path::Path, flag: &str) {
+        let output = std::process::Command::new("chflags")
+            .arg(flag)
+            .arg(path)
+            .output()
+            .expect("run chflags");
+        assert!(
+            output.status.success(),
+            "chflags {flag} {} failed: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
