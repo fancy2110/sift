@@ -32,4 +32,6 @@
 </div>
 
 <Toasts />
-<PermissionDrawer />
+{#if store.view === 'home'}
+  <PermissionDrawer />
+{/if}

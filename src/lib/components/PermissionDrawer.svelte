@@ -1,3 +1,8 @@
+<script module lang="ts">
+  // Persists across remounts (the drawer exists only on the home view).
+  let userCollapsed = false;
+</script>
+
 <script lang="ts">
   import { store } from '../store.svelte';
   import { t } from '../i18n.svelte';
@@ -14,7 +19,6 @@
   // the user collapses it manually, later arrivals leave it collapsed (the tab
   // badge still updates). Reset when the queue drains.
   let open = $state(false);
-  let userCollapsed = $state(false);
   let prevCount = 0;
   $effect(() => {
     const n = store.permissionRequests.length;
