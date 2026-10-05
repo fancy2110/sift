@@ -330,12 +330,47 @@ pub fn forget_cleanable(services: State<'_, AppServices>, id: String) -> Result<
 }
 
 /// Send paths to the trash and record the decisions.
+///
+/// Async and off-loaded to a blocking-task thread on purpose: the macOS remover
+/// talks to Finder over a synchronous Apple Event that can take seconds (a
+/// network volume, a Finder copy dialog), and running that on the async runtime
+/// or the main thread freezes the UI. Per-item results are unchanged.
 #[tauri::command]
-pub fn clean_paths(
+pub async fn clean_paths(
     services: State<'_, AppServices>,
     paths: Vec<String>,
+) -> Result<Vec<crate::cleanup::DeleteResultItem>, String> {
+    let store = services.store();
+    let last_report = services.last_report.lock().unwrap().clone();
+    Ok(cleanup_off_thread(store, last_report, paths, false).await)
+}
+
+/// Run the blocking cleanup on a blocking-task thread, never on the async
+/// runtime thread or the platform main thread.
+async fn cleanup_off_thread(
+    store: Arc<Store>,
+    last_report: HashMap<PathBuf, ReportItem>,
+    paths: Vec<String>,
+    automatic: bool,
 ) -> Vec<crate::cleanup::DeleteResultItem> {
-    perform_cleanup(&services, &paths, false)
+    // Kept for the panic fallback: the closure takes ownership of `paths`.
+    let requested = paths.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        perform_cleanup_with(&store, &last_report, &paths, automatic)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        // The task panicked without reporting. Never return nothing: answer
+        // every requested path as an individual failure.
+        requested
+            .iter()
+            .map(|path| crate::cleanup::DeleteResultItem {
+                path: path.clone(),
+                ok: false,
+                error: Some("err.cleanupInterrupted".to_string()),
+            })
+            .collect()
+    })
 }
 
 /// One guardrail-checked cleanup, shared by the interactive command, the
@@ -348,8 +383,21 @@ pub(crate) fn perform_cleanup(
     automatic: bool,
 ) -> Vec<crate::cleanup::DeleteResultItem> {
     let store = services.store();
-    let cleanable = store.cleanable();
     let last_report = services.last_report.lock().unwrap();
+    perform_cleanup_with(&store, &last_report, paths, automatic)
+}
+
+/// The blocking cleanup over owned/shared data. Split out so the same work can
+/// run on a spawned thread (an async command, the tray menu) without borrowing
+/// [`AppServices`]: the `Arc<Store>` gives shared ownership of persistence, and
+/// the last-report map is snapshotted by the caller before spawning.
+fn perform_cleanup_with(
+    store: &Arc<Store>,
+    last_report: &HashMap<PathBuf, ReportItem>,
+    paths: &[String],
+    automatic: bool,
+) -> Vec<crate::cleanup::DeleteResultItem> {
+    let cleanable = store.cleanable();
     let now = now_ms();
 
     struct Allowed {
@@ -1047,7 +1095,7 @@ pub fn toggle_routine_mode(services: State<'_, AppServices>, id: String) -> Resu
 
 /// Run one saved routine now: trash every remembered `safe` item of its kind.
 #[tauri::command]
-pub fn run_routine(
+pub async fn run_routine(
     services: State<'_, AppServices>,
     id: String,
 ) -> Result<Vec<crate::cleanup::DeleteResultItem>, String> {
@@ -1070,7 +1118,10 @@ pub fn run_routine(
     if paths.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(perform_cleanup(&services, &paths, true))
+    // Finder IPC runs on a blocking-task thread, like clean_paths.
+    let store = services.store();
+    let last_report = services.last_report.lock().unwrap().clone();
+    Ok(cleanup_off_thread(store, last_report, paths, true).await)
 }
 
 fn safety_token(safety: Safety) -> &'static str {
