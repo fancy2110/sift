@@ -330,12 +330,47 @@ pub fn forget_cleanable(services: State<'_, AppServices>, id: String) -> Result<
 }
 
 /// Send paths to the trash and record the decisions.
+///
+/// Async and off-loaded to a blocking-task thread on purpose: the macOS remover
+/// talks to Finder over a synchronous Apple Event that can take seconds (a
+/// network volume, a Finder copy dialog), and running that on the async runtime
+/// or the main thread freezes the UI. Per-item results are unchanged.
 #[tauri::command]
-pub fn clean_paths(
+pub async fn clean_paths(
     services: State<'_, AppServices>,
     paths: Vec<String>,
+) -> Result<Vec<crate::cleanup::DeleteResultItem>, String> {
+    let store = services.store();
+    let last_report = services.last_report.lock().unwrap().clone();
+    Ok(cleanup_off_thread(store, last_report, paths, false).await)
+}
+
+/// Run the blocking cleanup on a blocking-task thread, never on the async
+/// runtime thread or the platform main thread.
+async fn cleanup_off_thread(
+    store: Arc<Store>,
+    last_report: HashMap<PathBuf, ReportItem>,
+    paths: Vec<String>,
+    automatic: bool,
 ) -> Vec<crate::cleanup::DeleteResultItem> {
-    perform_cleanup(&services, &paths, false)
+    // Kept for the panic fallback: the closure takes ownership of `paths`.
+    let requested = paths.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        perform_cleanup_with(&store, &last_report, &paths, automatic)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        // The task panicked without reporting. Never return nothing: answer
+        // every requested path as an individual failure.
+        requested
+            .iter()
+            .map(|path| crate::cleanup::DeleteResultItem {
+                path: path.clone(),
+                ok: false,
+                error: Some("err.cleanupInterrupted".to_string()),
+            })
+            .collect()
+    })
 }
 
 /// One guardrail-checked cleanup, shared by the interactive command, the
@@ -348,8 +383,21 @@ pub(crate) fn perform_cleanup(
     automatic: bool,
 ) -> Vec<crate::cleanup::DeleteResultItem> {
     let store = services.store();
-    let cleanable = store.cleanable();
     let last_report = services.last_report.lock().unwrap();
+    perform_cleanup_with(&store, &last_report, paths, automatic)
+}
+
+/// The blocking cleanup over owned/shared data. Split out so the same work can
+/// run on a spawned thread (an async command, the tray menu) without borrowing
+/// [`AppServices`]: the `Arc<Store>` gives shared ownership of persistence, and
+/// the last-report map is snapshotted by the caller before spawning.
+fn perform_cleanup_with(
+    store: &Arc<Store>,
+    last_report: &HashMap<PathBuf, ReportItem>,
+    paths: &[String],
+    automatic: bool,
+) -> Vec<crate::cleanup::DeleteResultItem> {
+    let cleanable = store.cleanable();
     let now = now_ms();
 
     struct Allowed {
@@ -392,6 +440,22 @@ pub(crate) fn perform_cleanup(
                 path: text.clone(),
                 ok: false,
                 error: Some("err.keepRefused".into()),
+            });
+            continue;
+        }
+        // Re-verify the fingerprint immediately before deletion: the approval
+        // described the object as analysed. A replacement or rewrite since then
+        // is skipped, not deleted.
+        if !sift_monitor::policy::fingerprint_still_matches(
+            &path,
+            item.size,
+            item.mtime_ms,
+            item.is_dir,
+        ) {
+            results.push(crate::cleanup::DeleteResultItem {
+                path: text.clone(),
+                ok: false,
+                error: Some("err.fingerprintChanged".into()),
             });
             continue;
         }
@@ -846,10 +910,14 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
                 .with_language(ai.language.clone())
                 .with_batch_size(ai.batch_size);
                 if let Ok(remote) = sift_analyze::OpenAiCompatibleAdjudicator::new(config) {
-                    return Box::new(sift_analyze::RoutingAdjudicator::with_remote(
-                        RuleAdjudicator::new(),
-                        remote,
-                        sift_analyze::Guardrails::default(),
+                    return Box::new(sift_analyze::HabitAdjudicator::new(
+                        sift_analyze::RoutingAdjudicator::with_remote(
+                            RuleAdjudicator::new(),
+                            remote,
+                            sift_analyze::Guardrails::default(),
+                        ),
+                        services.store.decisions(),
+                        sift_analyze::HabitPolicy::default(),
                     ));
                 }
             }
@@ -859,10 +927,14 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
     // No usable real provider (no token configured): run the same pipeline
     // against the offline simulated adjudicator, so model-adjudicable families
     // still receive an AI-style judgment and impact without network access.
-    Box::new(sift_analyze::RoutingAdjudicator::with_remote(
-        RuleAdjudicator::new(),
-        sift_analyze::SimulatedAdjudicator::new(),
-        sift_analyze::Guardrails::default(),
+    Box::new(sift_analyze::HabitAdjudicator::new(
+        sift_analyze::RoutingAdjudicator::with_remote(
+            RuleAdjudicator::new(),
+            sift_analyze::SimulatedAdjudicator::new(),
+            sift_analyze::Guardrails::default(),
+        ),
+        services.store.decisions(),
+        sift_analyze::HabitPolicy::default(),
     ))
 }
 
@@ -1045,9 +1117,10 @@ pub fn toggle_routine_mode(services: State<'_, AppServices>, id: String) -> Resu
     Ok(changed)
 }
 
-/// Run one saved routine now: trash every remembered `safe` item of its kind.
+/// Run one saved routine now: trash every remembered, individually approved
+/// `safe` item of its kind.
 #[tauri::command]
-pub fn run_routine(
+pub async fn run_routine(
     services: State<'_, AppServices>,
     id: String,
 ) -> Result<Vec<crate::cleanup::DeleteResultItem>, String> {
@@ -1058,19 +1131,32 @@ pub fn run_routine(
         .cloned()
         .ok_or_else(|| "err.routineNotFound".to_string())?;
 
-    let paths: Vec<String> = services
-        .store
-        .cleanable()
-        .entries()
-        .iter()
-        .filter(|entry| entry.kind_token == routine.kind && entry.safety == Safety::Safe)
-        .map(|entry| entry.path.to_string_lossy().into_owned())
-        .collect();
+    let paths = select_routine_paths(services.store.cleanable().entries(), &routine.kind);
 
     if paths.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(perform_cleanup(&services, &paths, true))
+    // Finder IPC runs on a blocking-task thread, like clean_paths.
+    let store = services.store();
+    let last_report = services.last_report.lock().unwrap().clone();
+    Ok(cleanup_off_thread(store, last_report, paths, true).await)
+}
+
+/// Select remembered entries a "run routine now" may act on: matching the
+/// routine's family, `Safe`, and individually approved for automatic cleanup.
+pub(crate) fn select_routine_paths(
+    entries: &[sift_store::CleanableEntry],
+    kind: &str,
+) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| {
+            entry.kind_token == kind
+                && entry.safety == Safety::Safe
+                && entry.approved_for_auto
+        })
+        .map(|entry| entry.path.to_string_lossy().into_owned())
+        .collect()
 }
 
 fn safety_token(safety: Safety) -> &'static str {
@@ -1274,5 +1360,99 @@ mod tests {
         // nothing is transmitted.
         assert!(!services.store.settings().ai.is_usable());
         assert!(!remote_configured_without_consent(&services));
+    }
+
+    #[test]
+    fn perform_cleanup_skips_items_whose_fingerprint_changed() {
+        let services = AppServices::new();
+        let dir = std::env::temp_dir().join(format!("sift-cleanup-fp-{:?}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("stale.bin");
+        std::fs::write(&path, b"hello").unwrap();
+        let original = std::fs::symlink_metadata(&path).unwrap();
+
+        // Register the item in the last report with its ORIGINAL fingerprint.
+        let item = ReportItem {
+            key: sift_core::NodeKey::from_bytes(b"stale"),
+            name: "stale.bin".into(),
+            display_path: "~/tmp/stale.bin".into(),
+            is_dir: false,
+            size: original.len(),
+            mtime_ms: meta_mtime_ms(&original),
+            kind_token: "installer".into(),
+            safety: Safety::Review,
+        };
+        services
+            .last_report
+            .lock()
+            .unwrap()
+            .insert(path.clone(), item);
+
+        // Rewrite after analysis: same path, different object.
+        std::fs::write(&path, b"a much longer replacement body").unwrap();
+
+        let text = path.to_string_lossy().into_owned();
+        let results = perform_cleanup(&services, &[text], false);
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert_eq!(results[0].error.as_deref(), Some("err.fingerprintChanged"));
+        assert!(path.exists(), "the changed file must not be deleted");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn meta_mtime_ms(meta: &std::fs::Metadata) -> i64 {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            meta.mtime() * 1000 + meta.mtime_nsec() / 1_000_000
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = meta;
+            0
+        }
+    }
+
+    fn routine_entry(kind: &str, safety: Safety, approved: bool) -> sift_store::CleanableEntry {
+        sift_store::CleanableEntry {
+            fingerprint: sift_analyze::PathFingerprint::new(
+                sift_core::NodeKey::from_bytes(kind.as_bytes()),
+                1,
+                0,
+                true,
+            ),
+            path: PathBuf::from(format!("/Users/me/project/{kind}")),
+            display_path: format!("~/project/{kind}"),
+            name: kind.to_string(),
+            kind_token: kind.into(),
+            size: 1,
+            safety,
+            confidence: 0.9,
+            reason: Reason::key("reason.rebuildableCache"),
+            source: VerdictSource::rule("dir.node_modules"),
+            first_seen_ms: 0,
+            last_seen_ms: 0,
+            times_seen: 1,
+            approved_for_auto: approved,
+            cleanup_command: None,
+            cleanup_method: "trashItem".into(),
+            impact: Reason::key("reason.rebuildableCache"),
+        }
+    }
+
+    #[test]
+    fn routine_runs_only_safe_approved_items_of_its_kind() {
+        let entries = vec![
+            routine_entry("rebuildableCache", Safety::Safe, true),
+            routine_entry("rebuildableCache", Safety::Safe, false),
+            routine_entry("rebuildableCache", Safety::Review, true),
+            routine_entry("otherKind", Safety::Safe, true),
+        ];
+        let paths = select_routine_paths(&entries, "rebuildableCache");
+        assert_eq!(paths, vec!["/Users/me/project/rebuildableCache"]);
     }
 }

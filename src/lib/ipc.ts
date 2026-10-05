@@ -18,8 +18,8 @@ export function listVolumes(): Promise<VolumeInfo[]> {
   return invoke<VolumeInfo[]>('list_volumes');
 }
 
-export function startScan(root: string, focus: string): Promise<void> {
-  return invoke('start_scan', { root, focus });
+export function startScan(root: string, focus: string): Promise<number> {
+  return invoke<number>('start_scan', { root, focus });
 }
 
 export function cancelScan(): Promise<void> {
@@ -30,8 +30,8 @@ export function setScanFocus(focus: string): Promise<void> {
   return invoke('set_scan_focus', { focus });
 }
 
-export function scanRunning(): Promise<boolean> {
-  return invoke<boolean>('scan_running');
+export function scanRunning(): Promise<number | null> {
+  return invoke<number | null>('scan_running');
 }
 
 /**
@@ -230,6 +230,7 @@ export interface PermissionRequest {
 }
 
 export interface BatchUpdate {
+  epoch: number;
   discovered: Node[];
   sized: {
     id: string;
@@ -242,11 +243,13 @@ export interface BatchUpdate {
 }
 
 export interface ScanDoneEvent {
+  epoch: number;
   cancelled: boolean;
   root: string;
 }
 
 export interface RefreshedEvent {
+  epoch: number;
   path: string;
 }
 

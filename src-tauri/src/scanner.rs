@@ -103,6 +103,10 @@ pub struct PermissionInfo {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchUpdate {
+    /// Id of the scan this batch belongs to. The front end drops batches whose
+    /// epoch differs from the scan it is displaying, so late events from a
+    /// cancelled/replaced scan cannot repopulate a freshly reset tree.
+    pub epoch: u64,
     pub discovered: Vec<NodeInfo>,
     pub sized: Vec<SizedInfo>,
     pub permissions: Vec<PermissionInfo>,
@@ -222,24 +226,26 @@ impl ScanManager {
 // ---- commands --------------------------------------------------------------
 
 /// Start (or restart) a scan. Returns as soon as the engine is running; results
-/// arrive as events.
+/// arrive as events. The returned value is the scan's epoch id, which tags
+/// every event the scan emits.
 #[tauri::command]
 pub fn start_scan(
     app: AppHandle,
     manager: State<'_, ScanManager>,
     root: String,
     focus: String,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     start_scan_with(&app, &manager, root, focus)
 }
 
 /// Start a scan against a concrete manager, callable from non-command code.
+/// Returns the new scan's epoch id on success.
 pub fn start_scan_with(
     app: &AppHandle,
     manager: &ScanManager,
     root: String,
     focus: String,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     if manager.is_running() {
         return Err("scan already running".into());
     }
@@ -265,6 +271,7 @@ pub fn start_scan_with(
     let mut request = ScanRequest::new(manager.next_scan_id(), root_path.clone())
         .with_focus(PathBuf::from(&focus))
         .with_policy(ScanPolicy::thorough());
+    let epoch = request.id.0;
     if volume_used > 0 {
         request = request.with_volume_used_bytes(volume_used);
     }
@@ -303,7 +310,7 @@ pub fn start_scan_with(
         })
         .map_err(|err| err.to_string())?;
 
-    Ok(())
+    Ok(epoch)
 }
 
 /// Re-prioritize the running scan toward `focus`.
@@ -339,10 +346,19 @@ pub fn resume_scan(manager: State<'_, ScanManager>) {
     }
 }
 
-/// Whether a scan is currently running.
+/// The epoch id of the currently running scan, or `None` when idle. The front
+/// end uses the id to accept events from a scan that survived a webview reload.
 #[tauri::command]
-pub fn scan_running(manager: State<'_, ScanManager>) -> bool {
-    manager.is_running()
+pub fn scan_running(manager: State<'_, ScanManager>) -> Option<u64> {
+    if !manager.is_running() {
+        return None;
+    }
+    manager
+        .control
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|control| control.scan_id().0)
 }
 
 /// Feed the user's decision back to a directory parked pending authorization.
@@ -403,6 +419,7 @@ fn pump_events(
     let mut permissions: Vec<PermissionInfo> = Vec::new();
     let mut progress_due = false;
 
+    let epoch = handle.scan_id.0;
     let flush = |discovered: &mut Vec<NodeInfo>,
                  sized: &mut Vec<SizedInfo>,
                  permissions: &mut Vec<PermissionInfo>,
@@ -418,6 +435,7 @@ fn pump_events(
         let result = app.emit(
             "scan://batch",
             BatchUpdate {
+                epoch,
                 discovered: std::mem::take(discovered),
                 sized: std::mem::take(sized),
                 permissions: std::mem::take(permissions),
@@ -632,6 +650,7 @@ fn pump_events(
                 let _ = app.emit(
                     "scan://done",
                     serde_json::json!({
+                        "epoch": epoch,
                         "cancelled": matches!(outcome, ScanOutcome::Cancelled),
                         "root": root_text,
                     }),
@@ -648,7 +667,7 @@ fn pump_events(
                 // front end to refresh analysis without a new full scan.
                 let _ = app.emit(
                     "scan://refreshed",
-                    serde_json::json!({ "path": path }),
+                    serde_json::json!({ "epoch": epoch, "path": path }),
                 );
             }
             // `ScanEvent` is non-exhaustive; an unknown future variant is
@@ -692,6 +711,7 @@ fn pump_events(
         let _ = app.emit(
             "scan://done",
             serde_json::json!({
+                "epoch": epoch,
                 "cancelled": matches!(outcome, ScanOutcome::Cancelled),
                 "root": root_text,
             }),
