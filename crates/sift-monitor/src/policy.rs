@@ -400,16 +400,35 @@ fn lexical_normalize(path: &Path) -> PathBuf {
 /// A missing path never matches, so an entry whose target is already gone is
 /// skipped rather than reported as a failure.
 pub fn still_matches(entry: &CleanableEntry) -> bool {
-    let Ok(meta) = std::fs::symlink_metadata(&entry.path) else {
+    fingerprint_still_matches(
+        &entry.path,
+        entry.fingerprint.size,
+        entry.fingerprint.mtime_ms,
+        entry.fingerprint.is_dir,
+    )
+}
+
+/// Compare one remembered fingerprint against the filesystem *now*.
+///
+/// An approval was given for one object. If the path now holds something else
+/// (different kind, mtime, or — for files — size), the approval does not
+/// describe it and must not act on it. A missing path never matches.
+pub fn fingerprint_still_matches(
+    path: &Path,
+    fingerprint_size: u64,
+    fingerprint_mtime_ms: i64,
+    fingerprint_is_dir: bool,
+) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
         return false;
     };
-    if meta.is_dir() != entry.fingerprint.is_dir {
+    if meta.is_dir() != fingerprint_is_dir {
         return false;
     }
-    if modified_ms(&meta) != entry.fingerprint.mtime_ms {
+    if modified_ms(&meta) != fingerprint_mtime_ms {
         return false;
     }
-    if !entry.fingerprint.is_dir && meta.len() != entry.fingerprint.size {
+    if !fingerprint_is_dir && meta.len() != fingerprint_size {
         return false;
     }
     true
@@ -1027,6 +1046,42 @@ mod tests {
         assert!(paths[0].ends_with("a"));
         assert!(paths[1].ends_with("b"));
         let _ = ByteSize::ZERO;
+    }
+
+    #[test]
+    fn fingerprint_helper_matches_unchanged_file_and_catches_rewrite() {
+        let base = std::env::temp_dir().join(format!("sift-fp-{:?}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("same.bin");
+        std::fs::write(&file, b"hello").unwrap();
+        let meta = std::fs::symlink_metadata(&file).unwrap();
+
+        assert!(fingerprint_still_matches(
+            &file,
+            meta.len(),
+            modified_ms(&meta),
+            meta.is_dir(),
+        ));
+
+        // Rewrite with different content → size/mtime change, must fail.
+        std::fs::write(&file, b"a much longer replacement body").unwrap();
+        assert!(!fingerprint_still_matches(&file, meta.len(), modified_ms(&meta), false));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fingerprint_helper_kind_change_and_missing_path_fail() {
+        let base = std::env::temp_dir().join(format!("sift-fp-kind-{:?}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("thing");
+        std::fs::write(&file, b"x").unwrap();
+        // Claims a directory where a file exists.
+        assert!(!fingerprint_still_matches(&file, 1, i64::MAX, true));
+        let _ = std::fs::remove_file(&file);
+        // Missing path never matches.
+        assert!(!fingerprint_still_matches(&file, 0, 0, false));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -2915,7 +2915,7 @@ mod tests {
         std::fs::write(base.join("a/plain.bin"), vec![6u8; 1024]).unwrap();
 
         let mut buffer = BulkBuffer::new();
-        let (size, files) = size_only_walk(&base, false, &mut buffer);
+        let (size, files) = size_only_walk(&base, false, &AtomicBool::new(false), &mut buffer);
 
         // Fixture files (100 + 200 + 300 + 400) plus 4096 once and 1024.
         // Were the second name counted too, size would be 10216 and files 7.
