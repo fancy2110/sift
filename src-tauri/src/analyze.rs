@@ -1045,7 +1045,8 @@ pub fn toggle_routine_mode(services: State<'_, AppServices>, id: String) -> Resu
     Ok(changed)
 }
 
-/// Run one saved routine now: trash every remembered `safe` item of its kind.
+/// Run one saved routine now: trash every remembered, individually approved
+/// `safe` item of its kind.
 #[tauri::command]
 pub fn run_routine(
     services: State<'_, AppServices>,
@@ -1058,19 +1059,29 @@ pub fn run_routine(
         .cloned()
         .ok_or_else(|| "err.routineNotFound".to_string())?;
 
-    let paths: Vec<String> = services
-        .store
-        .cleanable()
-        .entries()
-        .iter()
-        .filter(|entry| entry.kind_token == routine.kind && entry.safety == Safety::Safe)
-        .map(|entry| entry.path.to_string_lossy().into_owned())
-        .collect();
+    let paths = select_routine_paths(services.store.cleanable().entries(), &routine.kind);
 
     if paths.is_empty() {
         return Ok(Vec::new());
     }
     Ok(perform_cleanup(&services, &paths, true))
+}
+
+/// Select remembered entries a "run routine now" may act on: matching the
+/// routine's family, `Safe`, and individually approved for automatic cleanup.
+pub(crate) fn select_routine_paths(
+    entries: &[sift_store::CleanableEntry],
+    kind: &str,
+) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| {
+            entry.kind_token == kind
+                && entry.safety == Safety::Safe
+                && entry.approved_for_auto
+        })
+        .map(|entry| entry.path.to_string_lossy().into_owned())
+        .collect()
 }
 
 fn safety_token(safety: Safety) -> &'static str {
@@ -1274,5 +1285,44 @@ mod tests {
         // nothing is transmitted.
         assert!(!services.store.settings().ai.is_usable());
         assert!(!remote_configured_without_consent(&services));
+    }
+
+    fn routine_entry(kind: &str, safety: Safety, approved: bool) -> sift_store::CleanableEntry {
+        sift_store::CleanableEntry {
+            fingerprint: sift_analyze::PathFingerprint::new(
+                sift_core::NodeKey::from_bytes(kind.as_bytes()),
+                1,
+                0,
+                true,
+            ),
+            path: PathBuf::from(format!("/Users/me/project/{kind}")),
+            display_path: format!("~/project/{kind}"),
+            name: kind.to_string(),
+            kind_token: kind.into(),
+            size: 1,
+            safety,
+            confidence: 0.9,
+            reason: Reason::key("reason.rebuildableCache"),
+            source: VerdictSource::rule("dir.node_modules"),
+            first_seen_ms: 0,
+            last_seen_ms: 0,
+            times_seen: 1,
+            approved_for_auto: approved,
+            cleanup_command: None,
+            cleanup_method: "trashItem".into(),
+            impact: Reason::key("reason.rebuildableCache"),
+        }
+    }
+
+    #[test]
+    fn routine_runs_only_safe_approved_items_of_its_kind() {
+        let entries = vec![
+            routine_entry("rebuildableCache", Safety::Safe, true),
+            routine_entry("rebuildableCache", Safety::Safe, false),
+            routine_entry("rebuildableCache", Safety::Review, true),
+            routine_entry("otherKind", Safety::Safe, true),
+        ];
+        let paths = select_routine_paths(&entries, "rebuildableCache");
+        assert_eq!(paths, vec!["/Users/me/project/rebuildableCache"]);
     }
 }
