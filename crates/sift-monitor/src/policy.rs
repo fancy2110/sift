@@ -373,15 +373,21 @@ pub(crate) fn modified_ms(meta: &std::fs::Metadata) -> i64 {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        meta.last_write_time()
-            .map(|time| ((time as i128 - 116_444_736_000_000_000) / 10_000) as i64)
-            .unwrap_or(0)
+        filetime_to_unix_ms(meta.last_write_time())
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = meta;
         0
     }
+}
+
+/// Convert a Windows FILETIME (100 ns ticks since 1601-01-01 UTC) to Unix
+/// epoch milliseconds. Lives outside `#[cfg(windows)]` so the arithmetic can
+/// be unit-tested on any platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn filetime_to_unix_ms(filetime: u64) -> i64 {
+    ((filetime as i128 - 116_444_736_000_000_000) / 10_000) as i64
 }
 
 /// A path kept for tests and callers that need a plain `PathBuf` list.
@@ -917,5 +923,18 @@ mod tests {
         assert!(paths[0].ends_with("a"));
         assert!(paths[1].ends_with("b"));
         let _ = ByteSize::ZERO;
+    }
+
+    #[test]
+    fn filetime_epoch_anchor_is_unix_epoch() {
+        // FILETIME of 1970-01-01 00:00 UTC must map to 0 Unix ms.
+        assert_eq!(filetime_to_unix_ms(116_444_736_000_000_000), 0);
+    }
+
+    #[test]
+    fn filetime_known_date_converts_seconds_and_fraction() {
+        // 2020-01-01 00:00 UTC = Unix 1577836800 s.
+        let filetime = 116_444_736_000_000_000 + 1_577_836_800 * 10_000_000;
+        assert_eq!(filetime_to_unix_ms(filetime), 1_577_836_800_000);
     }
 }
