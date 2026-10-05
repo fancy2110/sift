@@ -37,6 +37,7 @@ import {
   type PermissionRequest,
   type ProgressInfo
 } from './ipc';
+import { findSurvivingAncestor } from './tree-prune';
 import type {
   AiConfig,
   Finding,
@@ -773,6 +774,16 @@ class AppStore {
       }
     }
 
+    // Resolve the post-prune view target BEFORE records are deleted: afterwards
+    // every parent lookup returns undefined, which previously left the view
+    // stranded on a deleted node with an empty directory listing.
+    let nextCurrent: string | null = null;
+    if (this.currentNodeId && remove.has(this.currentNodeId)) {
+      nextCurrent = findSurvivingAncestor(this.currentNodeId, remove, (id) =>
+        this.nodeRecords.get(id)?.parentId ?? null
+      );
+    }
+
     for (const id of remove) {
       const node = this.nodeRecords.get(id);
       if (node) this.pathToId.delete(node.path);
@@ -792,13 +803,9 @@ class AppStore {
     this.currentFiles = this.currentFiles.filter((file) => !remove.has(file.id));
 
     if (this.currentNodeId && remove.has(this.currentNodeId)) {
-      let pid = this.nodeRecords.get(this.currentNodeId)?.parentId ?? null;
-      while (pid && !this.nodeRecords.has(pid)) {
-        pid = this.nodeRecords.get(pid)?.parentId ?? null;
-      }
-      this.currentNodeId = pid;
-      if (pid) {
-        const node = this.nodeRecords.get(pid);
+      this.currentNodeId = nextCurrent;
+      if (nextCurrent) {
+        const node = this.nodeRecords.get(nextCurrent);
         if (node) setScanFocus(node.path);
       }
     }
