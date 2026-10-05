@@ -563,6 +563,9 @@ struct CoordinatorState {
     /// coordinator dispatches one job at a time so the user's view is
     /// deterministic-first instead of racing the rest of the volume.
     initial_focus: PathBuf,
+    /// `realpath` of the initial focus, taken once at start so a focus spelled
+    /// through a symlink can still match the paths the walker lists.
+    initial_focus_real: Option<PathBuf>,
     focus_processed: bool,
     cancelled: bool,
     paused: bool,
@@ -651,6 +654,11 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         finished,
     } = inputs;
 
+    // Every path comparison below assumes one spelling per directory:
+    // collapse `.`/`..` and trailing separators once, at the boundary.
+    let root_path = normalize(&root_path);
+    let focus_path = normalize(&focus_path);
+
     // Root (index 0) is open from the start; every adopted node whose subtree
     // was unfinished is also open and will be re-walked.
     let seed_open = 1 + adopted_nodes.iter().filter(|node| !node.closed).count() as u64;
@@ -677,6 +685,7 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         focus: focus_path.clone(),
         focus_seen_generation: 0,
         initial_focus: focus_path.clone(),
+        initial_focus_real: std::fs::canonicalize(&focus_path).ok(),
         focus_processed: focus_path == root_path,
         cancelled: false,
         paused: false,
@@ -869,7 +878,7 @@ fn coordinator_loop(
         let generation = focus_generation.load(AtomicOrdering::SeqCst);
         if generation != state.focus_seen_generation {
             state.focus_seen_generation = generation;
-            state.focus = focus.lock().unwrap().clone();
+            state.focus = normalize(&focus.lock().unwrap());
             rebuild_categories(state);
         }
 
@@ -1600,19 +1609,23 @@ fn process_dir_entries(
     // Focus determinism: once the initial focus is listed (or found to be
     // unreachable), the coordinator may open the throttle to full parallelism.
     if !state.focus_processed {
-        let initial_focus = state.initial_focus.to_string_lossy();
-        if dir_path == initial_focus {
-            state.focus_processed = true;
-        } else if initial_focus.starts_with(&dir_path) {
-            // This directory is an ancestor of the focus; if the next chain
-            // component is not among its entries, the focus does not exist.
-            let next = next_chain_component(&dir_path, &initial_focus);
-            let reachable = entries
-                .iter()
-                .any(|e| e.is_dir && e.name == next.as_bytes());
-            if !reachable {
-                state.focus_processed = true;
+        match focus_relation(
+            Path::new(&dir_path),
+            &state.initial_focus,
+            state.initial_focus_real.as_deref(),
+        ) {
+            FocusRelation::AtTarget => state.focus_processed = true,
+            FocusRelation::Ancestor { next } => {
+                // If the next chain component is not among this directory's
+                // entries, the focus does not exist — release the throttle.
+                let reachable = entries
+                    .iter()
+                    .any(|e| e.is_dir && e.name == next.as_bytes());
+                if !reachable {
+                    state.focus_processed = true;
+                }
             }
+            FocusRelation::Unrelated => {}
         }
     }
 
@@ -2121,13 +2134,81 @@ fn size_only_walk(
 
 /// The next path component of `focus` after `ancestor`, as a `String`, or an
 /// empty string when `focus` is not under `ancestor`.
-fn next_chain_component(ancestor: &str, focus: &str) -> String {
-    let Some(rel) = focus.strip_prefix(ancestor) else {
-        return String::new();
-    };
-    let rel = rel.trim_start_matches('/');
-    let component = rel.split('/').next().unwrap_or("");
-    component.to_string()
+/// How a listed directory sits relative to the initial focus.
+#[derive(Debug, PartialEq, Eq)]
+enum FocusRelation {
+    Unrelated,
+    /// The listed directory is the focus itself.
+    AtTarget,
+    /// The listed directory contains the focus; `next` is the entry name to
+    /// follow, exposed so callers can test whether the chain still exists.
+    Ancestor { next: String },
+}
+
+/// Decide the relation of a just-listed `dir` to the initial focus.
+///
+/// Both the lexical view (normalized components) and, when available, the
+/// realpath view are tested: a focus given as `/tmp/x` while the walker
+/// reached `/private/tmp/x` matches through the canonical path.
+fn focus_relation(dir: &Path, focus: &Path, real_focus: Option<&Path>) -> FocusRelation {
+    let norm_dir = normalize(dir);
+    let norm_focus = normalize(focus);
+    if norm_dir == norm_focus {
+        return FocusRelation::AtTarget;
+    }
+
+    if let Some(real_focus) = real_focus {
+        if let Ok(real_dir) = std::fs::canonicalize(&norm_dir) {
+            if real_dir == real_focus {
+                return FocusRelation::AtTarget;
+            }
+            if let Some(next) = next_path_component(&real_dir, real_focus) {
+                return FocusRelation::Ancestor { next };
+            }
+        }
+    }
+
+    if let Some(next) = next_path_component(&norm_dir, &norm_focus) {
+        return FocusRelation::Ancestor { next };
+    }
+    FocusRelation::Unrelated
+}
+
+/// The entry name immediately below `dir` on the component chain to `focus`,
+/// when `dir` is a proper ancestor of `focus`. Component-level comparison
+/// instead of string splitting, so trailing separators cannot fool it.
+fn next_path_component(dir: &Path, focus: &Path) -> Option<String> {
+    let mut chain = focus.components();
+    for component in dir.components() {
+        let ahead = chain.next()?;
+        if ahead != component {
+            return None;
+        }
+    }
+    chain
+        .next()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+}
+
+/// Collapse `.`/`..` components and trailing separators without touching the
+/// filesystem. A `..` that escapes the path's own root is left in place.
+fn normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 fn join_bytes(dir: &str, name: &[u8]) -> String {
@@ -2850,6 +2931,141 @@ mod tests {
         drop(tree);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn normalization_collapses_components_lexically() {
+        assert_eq!(normalize(Path::new("/a/b/")), PathBuf::from("/a/b"));
+        assert_eq!(normalize(Path::new("/a/./b")), PathBuf::from("/a/b"));
+        assert_eq!(normalize(Path::new("/a/b/../c")), PathBuf::from("/a/c"));
+        assert_eq!(
+            normalize(Path::new("/a/b/../../c")),
+            PathBuf::from("/c")
+        );
+        // An escape past the root cannot be resolved and survives.
+        assert_eq!(normalize(Path::new("/../a")), PathBuf::from("/../a"));
+    }
+
+    #[test]
+    fn focus_relation_matches_despite_spelling_differences() {
+        let focus = Path::new("/root/a/b");
+        // Trailing slash and `.`/`..` on the listed path still name the focus.
+        assert_eq!(
+            focus_relation(Path::new("/root/a/b/"), focus, None),
+            FocusRelation::AtTarget
+        );
+        assert_eq!(
+            focus_relation(Path::new("/root/a/./b"), focus, None),
+            FocusRelation::AtTarget
+        );
+        assert_eq!(
+            focus_relation(Path::new("/root/a/c/../b"), focus, None),
+            FocusRelation::AtTarget
+        );
+        // Ancestor exposes the next chain entry by name, not raw substring.
+        assert_eq!(
+            focus_relation(Path::new("/root"), focus, None),
+            FocusRelation::Ancestor {
+                next: "a".to_string()
+            }
+        );
+        assert_eq!(
+            focus_relation(Path::new("/root/a"), focus, None),
+            FocusRelation::Ancestor {
+                next: "b".to_string()
+            }
+        );
+        // Prefix-shaped siblings are caught at the component level.
+        assert_eq!(
+            focus_relation(Path::new("/root/ab"), focus, None),
+            FocusRelation::Unrelated
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn focus_relation_matches_through_symlink_spelling() {
+        let base = std::env::temp_dir()
+            .join(format!("sift-scan-symrel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let real = base.join("real");
+        std::fs::create_dir_all(real.join("a")).unwrap();
+        let alias = base.join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+        // Focus given through the alias spelling; the walker lists real paths.
+        let focus = alias.join("a");
+        let real_focus = std::fs::canonicalize(&focus).ok();
+
+        assert_eq!(
+            focus_relation(&real.join("a"), &focus, real_focus.as_deref()),
+            FocusRelation::AtTarget,
+            "realpath must reveal the focus under its alias spelling"
+        );
+        assert_eq!(
+            focus_relation(&real, &focus, real_focus.as_deref()),
+            FocusRelation::Ancestor {
+                next: "a".to_string()
+            }
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_with_symlink_spelled_focus_keeps_priority_and_finishes() {
+        let base = temp_tree("focus-sym");
+        let alias = base
+            .parent()
+            .unwrap()
+            .join(format!("sift-scan-alias-{}", std::process::id()));
+        let _ = std::fs::remove_file(&alias);
+        std::os::unix::fs::symlink(&base, &alias).unwrap();
+
+        // Walker spells paths from the real root; the focus arrives in the
+        // alias spelling. Before the fix these never compared and the
+        // coordinator stayed single-threaded for the whole scan.
+        let engine = ScanEngine::with_workers(4);
+        let handle = engine
+            .scan(
+                ScanRequest::new(ScanId(9), base.clone())
+                    .with_focus(alias.join("a")),
+            )
+            .unwrap();
+
+        let mut listed: Vec<String> = Vec::new();
+        let mut focus_index = None;
+        let mut sibling_index = None;
+        loop {
+            match handle.events.recv() {
+                Ok(ScanEvent::DirectoryListed { dir, .. }) => {
+                    if dir.path == base.join("a").to_string_lossy() {
+                        focus_index = Some(listed.len());
+                    }
+                    if dir.path == base.join("x").to_string_lossy() {
+                        sibling_index = Some(listed.len());
+                    }
+                    listed.push(dir.path.clone());
+                }
+                Ok(ScanEvent::Finished { outcome, .. }) => {
+                    assert_eq!(outcome, ScanOutcome::Completed);
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        handle.join();
+
+        let focus_ix = focus_index.expect("focus found through alias spelling");
+        if let Some(sib_ix) = sibling_index {
+            assert!(focus_ix < sib_ix, "focus-first ordering; {listed:?}");
+        }
+        assert_eq!(handle.tree.lock().unwrap().total().logical, 1000);
+
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_file(&alias);
     }
 
     /// Synchronous in-memory journal used by the resume test.
