@@ -68,7 +68,7 @@ export interface Toast {
 class AppStore {
   // ---- hub navigation ----
   view = $state<'home' | 'dashboard' | 'sub'>('home');
-  subTab = $state<'smart' | 'explorer' | 'history' | 'map'>('smart');
+  subTab = $state<'smart' | 'explorer' | 'history' | 'routines' | 'map'>('smart');
   settingsOpen = $state(false);
   /** AI provider configuration behind the settings sheet. */
   aiConfig = $state<AiConfig | null>(null);
@@ -451,12 +451,12 @@ class AppStore {
     this.view = 'home';
   }
 
-  goSub(tab: 'smart' | 'explorer' | 'history' | 'map' = 'smart') {
+  goSub(tab: 'smart' | 'explorer' | 'history' | 'routines' | 'map' = 'smart') {
     this.subTab = tab;
     this.view = 'sub';
   }
 
-  setSubTab(tab: 'smart' | 'explorer' | 'history' | 'map') {
+  setSubTab(tab: 'smart' | 'explorer' | 'history' | 'routines' | 'map') {
     this.subTab = tab;
   }
 
