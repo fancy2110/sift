@@ -242,6 +242,9 @@ const zh: Record<string, string> = {
   'permission.heading': '未授权目录 · {0}',
   'permission.drawerTab': '需要授权',
   'permission.collapse': '收起侧边栏',
+  'permission.groupGrantable': '需要授权 · {0}',
+  'permission.groupSystem': '系统保护 · {0}',
+  'permission.systemFoot': '这些目录受 macOS 系统保护，应用无法获取访问权限，仅作展示，不会阻塞扫描。',
   // Directory status badges
   'status.estimated': '估算',
   'status.denied': '拒绝访问',
@@ -584,6 +587,9 @@ const en: Record<string, string> = {
   'permission.heading': 'Restricted directories · {0}',
   'permission.drawerTab': 'Access needed',
   'permission.collapse': 'Collapse sidebar',
+  'permission.groupGrantable': 'Authorization needed · {0}',
+  'permission.groupSystem': 'System-protected · {0}',
+  'permission.systemFoot': 'These directories are protected by macOS and cannot be accessed from the app. Listed for information only; they do not block the scan.',
   // Directory status badges
   'status.estimated': 'estimated',
   'status.denied': 'access denied',

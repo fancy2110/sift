@@ -608,15 +608,19 @@ class AppStore {
     this.removePermissionRequest(req.id);
   }
 
-  /** Mark every unresolved directory denied in one action. */
+  /** Deny every grantable (TCC) directory in one action. Read-only system
+   *  entries are not actionable and stay listed. */
   async skipAllPermissions() {
-    try {
-      await resolvePermission('*', false);
-    } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
-      return;
+    const targets = this.permissionRequests.filter((req) => req.tcc);
+    for (const req of targets) {
+      try {
+        await resolvePermission(req.id, false);
+        this.removePermissionRequest(req.id);
+      } catch (error) {
+        this.toast(t('toast.settingsFailed', [String(error)]));
+        return;
+      }
     }
-    this.permissionRequests = [];
   }
 
   /** Reflect backend findings onto their records (insightId + risk). */

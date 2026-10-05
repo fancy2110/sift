@@ -10,9 +10,12 @@
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
 
-  // TCC requests first (user can grant immediately), POSIX/admin after.
-  let sorted = $derived([...store.permissionRequests].sort(
-    (a, b) => Number(b.tcc) - Number(a.tcc)));
+  // Grantable TCC entries (an open panel genuinely authorizes these);
+  // system/POSIX entries cannot be granted from the app and are read-only.
+  let grantable = $derived(
+    store.permissionRequests.filter((req) => req.tcc));
+  let readonly = $derived(
+    store.permissionRequests.filter((req) => !req.tcc));
 
   // Floating, collapsible panel on the right edge so the permission list never
   // reflows the home layout. Auto-expands the first time requests appear; once
@@ -37,7 +40,7 @@
   }
 </script>
 
-{#if sorted.length}
+{#if store.permissionRequests.length}
   {#if !open}
     <button
       type="button"
@@ -45,7 +48,7 @@
       onclick={toggle}
       in:fly={{ x: 80, duration: 260, easing: cubicOut }}
     >
-      <span class="tab-badge">{sorted.length}</span>
+      <span class="tab-badge">{store.permissionRequests.length}</span>
       <Icon name="shield" size={14} />
       <span class="tab-text">{t('permission.drawerTab')}</span>
       <Icon name="chevronLeft" size={13} />
@@ -59,15 +62,13 @@
       out:fly={{ x: 380, duration: 220, easing: cubicOut }}
     >
       <header class="drawer-head">
-        <span>{t('permission.heading', [sorted.length])}</span>
+        <span class="drawer-title">{t('permission.heading', [store.permissionRequests.length])}</span>
         <div class="head-actions">
-          <button
-            type="button"
-            class="head-btn"
-            onclick={() => store.skipAllPermissions()}
-          >
-            {t('permission.skipAll')}
-          </button>
+          {#if grantable.length}
+            <button type="button" class="head-btn" onclick={() => store.skipAllPermissions()}>
+              {t('permission.skipAll')}
+            </button>
+          {/if}
           <button
             type="button"
             class="head-icon"
@@ -80,19 +81,16 @@
       </header>
 
       <div class="drawer-scroll">
-        {#each sorted as req (req.id)}
-          <div class="perm-card" class:posix={!req.tcc}>
-            <p class="perm-title">
-              <span class="perm-tag" class:tag-posix={!req.tcc}>
-                {req.tcc ? t('permission.tccTag') : t('permission.adminTag')}
-              </span>
-              {req.name}
-            </p>
-            <p class="perm-msg">
-              {req.tcc ? t('permission.message', [req.name]) : t('permission.adminNeeded')}
-            </p>
-            <div class="perm-actions">
-              {#if req.tcc}
+        {#if grantable.length}
+          <p class="group-label">{t('permission.groupGrantable', [grantable.length])}</p>
+          {#each grantable as req (req.id)}
+            <div class="perm-card">
+              <p class="perm-title">
+                <span class="perm-tag">{t('permission.tccTag')}</span>
+                <span class="perm-name">{req.name}</span>
+              </p>
+              <p class="perm-msg">{t('permission.message', [req.name])}</p>
+              <div class="perm-actions">
                 <button
                   type="button"
                   class="perm-btn primary"
@@ -100,17 +98,28 @@
                 >
                   {t('permission.grant')}
                 </button>
-              {/if}
-              <button
-                type="button"
-                class="perm-btn"
-                onclick={() => store.skipPermission(req)}
-              >
-                {t('permission.skip')}
-              </button>
+                <button
+                  type="button"
+                  class="perm-btn"
+                  onclick={() => store.skipPermission(req)}
+                >
+                  {t('permission.skip')}
+                </button>
+              </div>
             </div>
-          </div>
-        {/each}
+          {/each}
+        {/if}
+
+        {#if readonly.length}
+          <p class="group-label">{t('permission.groupSystem', [readonly.length])}</p>
+          {#each readonly as req (req.id)}
+            <div class="ro-row" title={req.path}>
+              <span class="ro-tag">{t('permission.adminTag')}</span>
+              <span class="ro-name">{req.name}</span>
+            </div>
+          {/each}
+          <p class="ro-foot">{t('permission.systemFoot')}</p>
+        {/if}
       </div>
     </aside>
   {/if}
@@ -133,6 +142,7 @@
     color: var(--color-fg);
     box-shadow: -14px 22px 44px -26px var(--color-shadow);
     cursor: default;
+    white-space: nowrap;
     transition: background 0.15s ease;
   }
   .drawer-tab:hover {
@@ -180,28 +190,38 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 14px 14px 12px 16px;
+    padding: 13px 10px 12px 16px;
+    border-bottom: 1px solid color-mix(in oklch, var(--color-border-strong) 36%, transparent);
+  }
+  .drawer-title {
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-family: var(--font-mono);
     font-size: 10.5px;
     font-weight: 600;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.1em;
     color: var(--color-faint);
-    border-bottom: 1px solid color-mix(in oklch, var(--color-border-strong) 36%, transparent);
   }
   .head-actions {
+    flex: none;
     display: flex;
     align-items: center;
     gap: 4px;
   }
   .head-btn {
-    padding: 4px 9px;
+    height: 26px;
+    padding: 0 10px;
     border-radius: 8px;
     border: 1px solid color-mix(in oklch, var(--color-border-strong) 60%, transparent);
     background: transparent;
     color: var(--color-faint);
     font-size: 10.5px;
     font-weight: 600;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
     cursor: default;
     transition: background 0.15s ease, color 0.15s ease;
   }
@@ -213,8 +233,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     padding: 0;
     border: none;
     border-radius: 8px;
@@ -233,8 +253,7 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 12px;
+    padding: 12px 12px 14px;
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-width: thin;
@@ -253,32 +272,36 @@
     background: color-mix(in oklch, var(--color-border-strong) 70%, transparent);
   }
 
+  .group-label {
+    margin: 2px 2px 8px;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    color: var(--color-faint);
+  }
+
   .perm-card {
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
     gap: 8px;
     padding: 12px 14px;
+    margin-bottom: 10px;
     border-radius: 14px;
     border: 1px solid color-mix(in oklch, var(--color-border-strong) 55%, transparent);
     background: color-mix(in oklch, var(--color-surface) 92%, var(--color-shadow) 6%);
     box-shadow: 0 16px 36px -24px var(--color-shadow);
-  }
-  .perm-card.posix {
-    border-color: color-mix(in oklch, var(--color-amber, #c8852c) 38%, transparent);
   }
   .perm-title {
     margin: 0;
     display: flex;
     align-items: center;
     gap: 8px;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--color-fg);
+    min-width: 0;
   }
   .perm-tag {
-    flex-shrink: 0;
+    flex: none;
     padding: 2px 8px;
     border-radius: 7px;
     font-size: 9.5px;
@@ -286,13 +309,20 @@
     color: var(--color-violet);
     background: color-mix(in oklch, var(--color-violet) 14%, transparent);
   }
-  .perm-tag.tag-posix {
-    color: var(--color-amber, #c8852c);
-    background: color-mix(in oklch, var(--color-amber, #c8852c) 14%, transparent);
+  .perm-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--color-fg);
   }
   .perm-msg {
     margin: 0;
-    font-size: 12.5px;
+    font-size: 12px;
+    line-height: 1.5;
     color: var(--color-faint);
   }
   .perm-actions {
@@ -308,6 +338,7 @@
     color: var(--color-fg);
     font-size: 12px;
     font-weight: 600;
+    white-space: nowrap;
     cursor: default;
     transition: background 0.15s ease, border-color 0.15s ease;
   }
@@ -321,5 +352,42 @@
   }
   .perm-btn.primary:hover {
     background: color-mix(in oklch, var(--color-violet) 88%, #fff 6%);
+  }
+
+  /* Read-only system entries: compact one-line rows, no actions. */
+  .ro-row {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 7px 10px;
+    margin-bottom: 6px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in oklch, var(--color-amber, #c8852c) 26%, transparent);
+    background: color-mix(in oklch, var(--color-amber, #c8852c) 5%, var(--color-surface));
+  }
+  .ro-tag {
+    flex: none;
+    padding: 2px 7px;
+    border-radius: 6px;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    color: var(--color-amber, #c8852c);
+    background: color-mix(in oklch, var(--color-amber, #c8852c) 13%, transparent);
+  }
+  .ro-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11.5px;
+    color: var(--color-muted);
+  }
+  .ro-foot {
+    margin: 4px 2px 2px;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--color-faint);
   }
 </style>
