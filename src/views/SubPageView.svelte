@@ -616,7 +616,7 @@
   .segmented {
     position: relative;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     padding: 3px;
     border-radius: 12px;
     background: color-mix(in oklch, var(--color-bg) 55%, transparent);
