@@ -78,6 +78,21 @@ impl ByteSize {
     pub const fn is_zero(self) -> bool {
         self.logical == 0 && self.physical == 0
     }
+
+    /// Apply a signed calibration delta to both axes, saturating at zero
+    /// instead of wrapping. A post-scan recalibration can find a smaller total
+    /// than the earlier estimate, so the subtraction must not clamp to
+    /// `u64::MAX` the way `+=` on a wrapping-encoded delta would.
+    #[inline]
+    pub fn apply_signed(&mut self, logical: i128, physical: i128) {
+        self.logical = signed_saturating_add(self.logical, logical);
+        self.physical = signed_saturating_add(self.physical, physical);
+    }
+}
+
+#[inline]
+fn signed_saturating_add(value: u64, delta: i128) -> u64 {
+    (value as i128 + delta).clamp(0, u64::MAX as i128) as u64
 }
 
 impl AddAssign for ByteSize {
@@ -156,6 +171,16 @@ mod tests {
         let mut total = ByteSize::new(u64::MAX, 0);
         total += ByteSize::new(10, 0);
         assert_eq!(total.logical, u64::MAX);
+    }
+
+    #[test]
+    fn apply_signed_subtracts_and_saturates_at_zero() {
+        let mut size = ByteSize::new(100, 50);
+        size.apply_signed(-30, -50);
+        assert_eq!(size, ByteSize::new(70, 0));
+        // A delta larger than the total clamps at zero on both axes.
+        size.apply_signed(-1_000, -1);
+        assert_eq!(size, ByteSize::ZERO);
     }
 
     #[test]
