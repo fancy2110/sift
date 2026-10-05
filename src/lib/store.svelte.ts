@@ -1,4 +1,5 @@
-import { open } from '@tauri-apps/plugin-dialog';
+import { pickDirectory } from './dialog';
+import { isTauri } from './runtime';
 import {
   analyzeCurrent,
   cancelScan,
@@ -135,6 +136,9 @@ class AppStore {
 
   /** Bumped on scope switch so transitions can reset. */
   treeVersion = $state(0);
+
+  /** True outside the Tauri shell, when every command is served by the mock. */
+  browserMode = $state(false);
 
   private toastSeq = 0;
   private started = false;
@@ -295,6 +299,9 @@ class AppStore {
   async init() {
     if (this.started) return;
     this.started = true;
+
+    this.browserMode = !isTauri();
+    if (this.browserMode) this.toast(t('toast.browserMode'));
 
     await Promise.all([
       onScanBatch((batch) => this.handleBatch(batch)),
@@ -616,20 +623,14 @@ class AppStore {
    * The panel opens pointed at the requested path, then the engine re-walks.
    */
   async grantPermission(req: PermissionRequest) {
-    let selected: string | string[] | null;
+    let picked: string | null;
     try {
-      selected = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: req.path,
-      });
+      picked = await pickDirectory(req.path);
     } catch (error) {
       this.toast(t('toast.settingsFailed', [String(error)]));
       return;
     }
     // Panel cancelled: stay parked.
-    if (!selected) return;
-    const picked = Array.isArray(selected) ? selected[0] : selected;
     if (!picked) return;
 
     if (!pathIsWithin(req.path, picked)) {
