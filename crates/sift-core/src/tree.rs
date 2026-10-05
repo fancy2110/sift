@@ -569,25 +569,27 @@ impl ScanTree {
     ///
     /// The difference between measured and previously estimated totals is
     /// propagated up the (already closed) ancestor chain, so the volume total
-    /// stays exact after an asynchronous recalibration.
+    /// stays exact after an asynchronous recalibration — including when the new
+    /// measurement is *smaller* than the estimate. Returns the node's new totals
+    /// and the file-count delta.
     pub fn adjust_totals(&mut self, index: u32, measured: ByteSize, files: u64) -> (ByteSize, i64) {
         let Some(node) = self.nodes.get(index as usize).copied() else {
             return (ByteSize::ZERO, 0);
         };
         let old_size = node.size;
         let old_files = node.file_count as u64;
-        let signed_size = ByteSize::new(
-            measured.logical.wrapping_sub(old_size.logical),
-            measured.physical.wrapping_sub(old_size.physical),
-        );
+        let logical_delta = measured.logical as i128 - old_size.logical as i128;
+        let physical_delta = measured.physical as i128 - old_size.physical as i128;
         let file_delta = files as i64 - old_files as i64;
 
         let mut cursor = index;
         loop {
-            let Some(node) = self.nodes.get(cursor as usize).copied() else { break };
+            let Some(node) = self.nodes.get(cursor as usize).copied() else {
+                break;
+            };
             let parent = node.parent;
             if let Some(n) = self.nodes.get_mut(cursor as usize) {
-                n.size += signed_size;
+                n.size.apply_signed(logical_delta, physical_delta);
                 if file_delta >= 0 {
                     n.file_count = n.file_count.saturating_add(file_delta as u32);
                 } else {
@@ -599,7 +601,7 @@ impl ScanTree {
             }
             cursor = parent;
         }
-        (signed_size, file_delta)
+        (measured, file_delta)
     }
 
     /// Prepare a closed subtree for a refresh walk: subtract its current
@@ -1011,6 +1013,32 @@ mod tests {
         assert_eq!(tree.node(b).unwrap().file_count, 3);
         assert_eq!(tree.node(a).unwrap().file_count, 3);
         assert_eq!(tree.node(root).unwrap().file_count, 3);
+    }
+
+    #[test]
+    fn calibration_downward_subtracts_instead_of_clamping_to_max() {
+        let mut tree = tree();
+        let root = tree.root();
+        let a = tree.open_dir(root, key("/a"), b"a", 0, true, false).unwrap();
+        let b = tree
+            .open_dir(a, key("/a/b"), b"b", 0, true, false)
+            .unwrap();
+
+        // First calibration over-estimates the subtree.
+        let estimated = ByteSize::new(9000, 16384);
+        tree.adjust_totals(b, estimated, 10);
+        assert_eq!(tree.node(root).unwrap().size, estimated);
+
+        // Recalibrate downward to the true, smaller total.
+        let measured = ByteSize::new(4000, 8192);
+        let (new_totals, file_delta) = tree.adjust_totals(b, measured, 3);
+        assert_eq!(new_totals, measured);
+        assert_eq!(file_delta, -7);
+
+        assert_eq!(tree.node(b).unwrap().size, measured);
+        assert_eq!(tree.node(a).unwrap().size, measured);
+        assert_eq!(tree.node(root).unwrap().size, measured);
+        assert!(tree.node(root).unwrap().size.logical < u64::MAX);
     }
 
     #[test]
