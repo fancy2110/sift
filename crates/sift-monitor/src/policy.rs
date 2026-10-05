@@ -16,7 +16,7 @@
 //! 4. Nothing is selected twice inside the cooldown window.
 //! 5. `NotifyOnly` (and `Off`) never select anything at all.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sift_analyze::ConfidencePolicy;
@@ -317,13 +317,66 @@ pub fn evaluate(
 
 /// Whether `path` sits inside `home`.
 ///
-/// A missing home means "cannot prove it is inside", which refuses the entry:
-/// the safe direction for an unattended deletion.
+/// Both sides are lexically normalized (collapsing `.`/`..`) before the prefix
+/// test, so a path like `<home>/../elsewhere` cannot smuggle an outside entry
+/// past the boundary. A missing home means "cannot prove it is inside", which
+/// refuses the entry: the safe direction for an unattended deletion.
+///
+/// Note this stays purely lexical — it cannot see through symlinks. Callers
+/// that need to prove where a path actually points use
+/// [`resolved_inside_home`] instead.
 pub fn inside_home(path: &Path, home: Option<&Path>) -> bool {
     let Some(home) = home else {
         return false;
     };
-    path.starts_with(home)
+    lexical_normalize(path).starts_with(lexical_normalize(home))
+}
+
+/// Filesystem-proven variant of [`inside_home`].
+///
+/// Both paths are canonicalized (`realpath`) first, so a symlink that points
+/// at something outside the home cannot keep an entry inside the boundary by
+/// looking home-shaped lexically. If either side cannot be resolved — the path
+/// vanished, a component is not searchable — the answer is `false`: "cannot
+/// prove it is inside" always refuses an unattended deletion.
+pub fn resolved_inside_home(path: &Path, home: Option<&Path>) -> bool {
+    let Some(home) = home else {
+        return false;
+    };
+    let Ok(real_home) = std::fs::canonicalize(home) else {
+        return false;
+    };
+    let Ok(real_path) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    real_path.starts_with(real_home)
+}
+
+/// Collapse `.`/`..` components without touching the filesystem.
+///
+/// A `..` that would escape past the path's own root cannot be resolved and is
+/// left in place; such a path then only matches a home sharing the same
+/// unresolvable prefix, which a real home never does.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let can_pop = matches!(
+                    out.components().next_back(),
+                    Some(Component::Normal(_))
+                );
+                if can_pop {
+                    out.pop();
+                } else {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Compare a remembered entry against the filesystem *now*.
@@ -892,6 +945,57 @@ mod tests {
         assert!(inside_home(Path::new("/Users/me/a/b"), Some(home)));
         assert!(!inside_home(Path::new("/Users/men"), Some(home)));
         assert!(!inside_home(Path::new("/Users/me"), None));
+    }
+
+    #[test]
+    fn inside_home_normalizes_dot_dot_lexically() {
+        let home = Path::new("/Users/me");
+        // A wander out and back in still resolves inside.
+        assert!(inside_home(
+            Path::new("/Users/me/project/../project/file"),
+            Some(home)
+        ));
+        // The bypass the review found: `<home>/../<outside>` is not inside.
+        assert!(!inside_home(
+            Path::new("/Users/me/../etc/passwd"),
+            Some(home)
+        ));
+        assert!(!inside_home(Path::new("/Users/me/../../outside"), Some(home)));
+        // `.` components are noise.
+        assert!(inside_home(Path::new("/Users/me/./a"), Some(home)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolved_inside_home_catches_an_outward_symlink() {
+        use std::fs;
+        let base =
+            std::env::temp_dir().join(format!("sift-home-real-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let outside = base.join("outside");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        // Looks home-shaped, points out of the home.
+        std::os::unix::fs::symlink(&outside, home.join("link")).unwrap();
+
+        // The lexical check cannot see through the symlink...
+        assert!(inside_home(&home.join("link"), Some(&home)));
+        // ...the proven check refuses it.
+        assert!(!resolved_inside_home(&home.join("link"), Some(&home)));
+
+        // An entry genuinely inside passes; an unresolvable home refuses all.
+        fs::write(home.join("real.txt"), b"x").unwrap();
+        assert!(resolved_inside_home(&home.join("real.txt"), Some(&home)));
+        assert!(!resolved_inside_home(
+            &home.join("real.txt"),
+            Some(&base.join("missing"))
+        ));
+        assert!(!resolved_inside_home(&home.join("real.txt"), None));
+        // A path that no longer exists cannot be proven.
+        assert!(!resolved_inside_home(&home.join("gone"), Some(&home)));
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
