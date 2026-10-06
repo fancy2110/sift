@@ -155,8 +155,8 @@ export function setScheduledCleanup(enabled: boolean, hour: number): Promise<voi
   return call('set_scheduled_cleanup', { enabled, hour });
 }
 
-export function markPath(path: string): Promise<import('./types').Finding> {
-  return call('mark_path', { path });
+export function markPath(path: string, sizeHint?: number): Promise<import('./types').Finding> {
+  return call('mark_path', { path, bytes: sizeHint ?? null });
 }
 
 export function takeStoreWarnings(): Promise<StoreWarning[]> {

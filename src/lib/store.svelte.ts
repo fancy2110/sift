@@ -894,9 +894,17 @@ class AppStore {
       return;
     }
     try {
-      const finding = await markPath(node.path);
+      const finding = await markPath(node.path, node.size || undefined);
       this.findings = [...this.findings, finding];
       this.annotateNodes();
+      // Live-fetched files live outside nodeRecords: annotate their copies too,
+      // otherwise the row keeps showing 加入 after the finding is created.
+      this.currentFiles = this.currentFiles.map((file) =>
+        file.id === finding.id
+          ? { ...file, insightId: finding.id, risk: finding.safety }
+          : file
+      );
+      this.rebuildCurrentEntries();
       const next = new Set(this.selectedIds);
       next.add(finding.id);
       this.selectedIds = next;

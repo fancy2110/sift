@@ -759,7 +759,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
             name,
             path,
             displayPath: path.replace('/Users/demo', '~'),
-            size: 4 * GB,
+            size: typeof args.bytes === 'number' ? args.bytes : 4 * GB,
             isDir: false,
             safety: 'review',
             confidence: 0.5,

@@ -651,7 +651,11 @@ pub fn set_auto_clean_mode(services: State<'_, AppServices>, mode: String) -> Re
 /// refused here. User-marked items are `Review` — a manual choice never
 /// becomes a standing `Safe` approval.
 #[tauri::command]
-pub fn mark_path(services: State<'_, AppServices>, path: String) -> Result<FindingDto, String> {
+pub fn mark_path(
+    services: State<'_, AppServices>,
+    path: String,
+    bytes: Option<u64>,
+) -> Result<FindingDto, String> {
     use sift_core::deletable::classify_with_permissions;
 
     let as_path = PathBuf::from(&path);
@@ -665,12 +669,20 @@ pub fn mark_path(services: State<'_, AppServices>, path: String) -> Result<Findi
     let is_dir = meta.is_dir();
 
     #[cfg(unix)]
-    let size = {
+    let measured = {
         use std::os::unix::fs::MetadataExt;
         meta.len().max(meta.blocks() * 512)
     };
     #[cfg(not(unix))]
-    let size = meta.len();
+    let measured = meta.len();
+    // For a directory, `symlink_metadata` only yields the directory inode's
+    // own size, not its subtree. The caller supplies the measured subtree
+    // size (display/accounting only; deletion is gated by mtime + type).
+    let size = if is_dir {
+        measured.max(bytes.unwrap_or(0))
+    } else {
+        measured
+    };
 
     let mtime_ms = meta
         .modified()
