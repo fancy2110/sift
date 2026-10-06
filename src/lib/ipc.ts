@@ -8,7 +8,6 @@ import type {
   AnalysisSummary,
   MonitorStatus,
   Node,
-  Place,
   Routine,
   RoutineSuggestion,
   StoreWarning,
@@ -172,12 +171,6 @@ export function routineSuggestions(): Promise<RoutineSuggestion[]> {
   return call<RoutineSuggestion[]>('routine_suggestions');
 }
 
-// ---- quick places ----------------------------------------------------------
-
-export function listPlaces(): Promise<Place[]> {
-  return call<Place[]>('list_places');
-}
-
 // ---- cleanup history -------------------------------------------------------
 
 export function listHistory(): Promise<import('./types').HistoryEntry[]> {
@@ -192,6 +185,15 @@ export function listRoutines(): Promise<Routine[]> {
 
 export function acceptRoutineSuggestion(name: string, kind: string): Promise<void> {
   return call('accept_routine_suggestion', { name, kind });
+}
+
+export function saveRoutine(
+  title: string,
+  kind: string,
+  averageBytes: number,
+  path?: string
+): Promise<void> {
+  return call('save_routine', { title, kind, averageBytes, path: path ?? null });
 }
 
 export function dismissRoutineSuggestion(name: string, kind: string): Promise<void> {

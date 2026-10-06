@@ -19,7 +19,6 @@ import type {
   HistoryEntry,
   MonitorStatus,
   Node,
-  Place,
   Routine,
   RoutineSuggestion,
   VolumeInfo
@@ -656,27 +655,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
           resolve(undefined as T);
           break;
 
-        // ---- places, history, routines ----
-        case 'list_places': {
-          const home = '/Users/demo';
-          const rows: Array<[string, string, string]> = [
-            [`${home}`, 'place.home', 'home'],
-            [`${home}/Downloads`, 'place.downloads', 'download'],
-            [`${home}/Desktop`, 'place.desktop', 'desktop'],
-            [`${home}/Movies`, 'place.movies', 'film'],
-            [`${home}/.Trash`, 'place.trash', 'trash']
-          ];
-          resolve(
-            rows.map(([path, labelKey, icon]) => ({
-              id: idFor(path),
-              labelKey,
-              icon,
-              path,
-              volumeId: VOLUMES[0].id
-            })) as unknown as T
-          );
-          break;
-        }
+        // ---- history, routines ----
         case 'list_history':
           resolve([...state.history].reverse() as unknown as T);
           break;
@@ -704,8 +683,38 @@ export function createMockBackend(bus: EventBus): MockBackend {
             kind: suggestion.kind,
             cadence: suggestion.cadence,
             averageBytes: suggestion.averageBytes,
-            mode: 'approve'
+            mode: 'approve',
+            paths: []
           };
+          state.routines.push(routine);
+          resolve(undefined as T);
+          break;
+        }
+        case 'save_routine': {
+          const title = String(args.title ?? '');
+          const kind = String(args.kind ?? '');
+          const averageBytes = Number(args.averageBytes ?? 0);
+          const path = args.path ? String(args.path) : null;
+          const routine: Routine = path
+            ? {
+                id: `custom-${idFor(path)}`,
+                title,
+                kind: 'customPath',
+                cadence: 'cadence.weekly',
+                averageBytes,
+                mode: 'approve',
+                paths: [path]
+              }
+            : {
+                id: `routine-${kind}-${title}`,
+                title,
+                kind,
+                cadence: 'cadence.weekly',
+                averageBytes,
+                mode: 'approve',
+                paths: []
+              };
+          state.routines = state.routines.filter((r) => r.id !== routine.id);
           state.routines.push(routine);
           resolve(undefined as T);
           break;

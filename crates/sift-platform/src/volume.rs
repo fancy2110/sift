@@ -12,6 +12,7 @@ pub fn list_volumes() -> Vec<Volume> {
     let disks = sysinfo::Disks::new_with_refreshed_list();
     let mut volumes: Vec<Volume> = disks
         .iter()
+        .filter(|disk| is_user_volume(disk.mount_point()))
         .map(|disk| {
             let mount_point = disk.mount_point().to_path_buf();
             let file_system =
@@ -27,6 +28,14 @@ pub fn list_volumes() -> Vec<Volume> {
             )
         })
         .collect();
+
+    // macOS APFS: `/` (the sealed system) and `/System/Volumes/Data` (user
+    // data) are two volumes of one volume group on one physical disk. When the
+    // root is present, drop the Data row so the picker shows one Macintosh HD.
+    #[cfg(target_os = "macos")]
+    if volumes.iter().any(|volume| volume.mount_point == Path::new("/")) {
+        volumes.retain(|volume| volume.mount_point != Path::new("/System/Volumes/Data"));
+    }
 
     volumes.sort_by(|left, right| {
         right
@@ -99,22 +108,36 @@ pub fn device_id(_path: &Path) -> Option<u64> {
     None
 }
 
+/// Whether a mount point is a disk the user can meaningfully choose.
+///
+/// On macOS only the boot volume, its paired Data volume (collapsed into the
+/// root afterwards) and mounts under `/Volumes` qualify. Auxiliary system
+/// volumes (VM, Preboot, Update, Recovery, simulator runtimes) are hidden: they
+/// are not user disks and picking one for a scan is meaningless.
+#[cfg(target_os = "macos")]
+fn is_user_volume(mount_point: &Path) -> bool {
+    if mount_point == Path::new("/")
+        || mount_point == Path::new("/System/Volumes/Data")
+    {
+        return true;
+    }
+    mount_point.starts_with("/Volumes")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_user_volume(_mount_point: &Path) -> bool {
+    true
+}
+
 /// A human label for a mount point.
 ///
 /// The boot volume reports its mount point as `/`, which is not a name anyone
-/// recognises, so it gets the platform's conventional label. Nested system
-/// volumes are given a distinct label so the picker does not show three rows
-/// all called "Macintosh HD".
+/// recognises, so it gets the platform's conventional label.
 fn display_name(mount_point: &Path, reported: &str) -> String {
     #[cfg(target_os = "macos")]
     {
-        match mount_point.to_string_lossy().as_ref() {
-            "/" => return "Macintosh HD".to_string(),
-            "/System/Volumes/Data" => return "Macintosh HD — Data".to_string(),
-            "/System/Volumes/VM" => return "VM".to_string(),
-            "/System/Volumes/Preboot" => return "Preboot".to_string(),
-            "/System/Volumes/Update" => return "Update".to_string(),
-            _ => {}
+        if mount_point == Path::new("/") {
+            return "Macintosh HD".to_string();
         }
     }
     if !reported.is_empty() && reported != "/" && reported != "\\" {
@@ -174,17 +197,27 @@ mod tests {
         assert!(volumes[0].is_system(), "system volume is not sorted first");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn nested_system_volumes_get_distinct_labels() {
+    fn auxiliary_and_data_volumes_are_hidden_or_collapsed() {
         let volumes = list_volumes();
-        let mut names: Vec<&str> = volumes.iter().map(|v| v.name.as_str()).collect();
-        names.sort_unstable();
-        let before = names.len();
-        names.dedup();
-        // Duplicate labels are allowed only for genuinely distinct mounts we
-        // cannot name better; on macOS the system set must be distinct.
-        #[cfg(target_os = "macos")]
-        assert_eq!(names.len(), before, "duplicate volume labels: {names:?}");
+        for volume in &volumes {
+            assert_ne!(
+                volume.mount_point,
+                Path::new("/System/Volumes/Data"),
+                "Data volume must collapse into the root: {volumes:?}"
+            );
+            assert!(
+                !volume.mount_point.starts_with("/System/Volumes"),
+                "auxiliary system volume leaked into the picker: {}",
+                volume.mount_point.display()
+            );
+        }
+        // Exactly one boot disk.
+        assert!(
+            volumes.iter().any(|v| v.mount_point == Path::new("/")),
+            "boot volume missing: {volumes:?}"
+        );
     }
 
     #[test]

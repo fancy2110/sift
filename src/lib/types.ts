@@ -82,15 +82,6 @@ export interface RoutineSuggestion {
   cadence: string;
 }
 
-/** One quick scan location on the user's own volume. */
-export interface Place {
-  id: string;
-  labelKey: string;
-  icon: string;
-  path: string;
-  volumeId: string;
-}
-
 /** One finished cleanup session from the backend timeline. */
 export interface HistoryEntry {
   id: string;
@@ -109,6 +100,8 @@ export interface Routine {
   cadence: string;
   averageBytes: number;
   mode: 'auto' | 'approve';
+  /** Explicit targets of a path-based routine; empty for a kind-based one. */
+  paths: string[];
 }
 
 export interface MonitorStatus {
