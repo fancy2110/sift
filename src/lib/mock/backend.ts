@@ -19,7 +19,6 @@ import type {
   HistoryEntry,
   MonitorStatus,
   Node,
-  Place,
   Routine,
   RoutineSuggestion,
   VolumeInfo
@@ -363,7 +362,11 @@ export function createMockBackend(bus: EventBus): MockBackend {
       hasToken: false
     },
     /** Absolute paths "moved to trash"; hidden from later scans. */
-    deletedPaths: new Set<string>()
+    deletedPaths: new Set<string>(),
+    /** Directories closed (sized) in the current scan. */
+    sizedDirs: 0,
+    /** Start timestamp of the current scan, for the simulated rate. */
+    scanStartMs: Date.now()
   };
 
   const clearTimers = () => {
@@ -405,6 +408,15 @@ export function createMockBackend(bus: EventBus): MockBackend {
 
   const emitBatch = (dirs: MockDir[], options: { pending: boolean; final: boolean }) => {
     if (state.cancelled) return;
+    // Sized batches close their directories; coverage grows monotonically with
+    // the fraction of directories measured so the percent ring tracks progress
+    // instead of sitting at 0% until the final batch.
+    if (!options.pending) {
+      state.sizedDirs += dirs.length;
+    }
+    const ratio = state.scanDirs.length > 0 ? state.sizedDirs / state.scanDirs.length : 0;
+    const elapsedSec = Math.max(0.001, (Date.now() - state.scanStartMs) / 1000);
+    const bytes = Math.round(774 * GB * ratio);
     bus.emit('scan://batch', {
       epoch: state.epoch,
       discovered: dirs.map((dir) => dirNode(dir, options.pending)),
@@ -416,14 +428,12 @@ export function createMockBackend(bus: EventBus): MockBackend {
       })),
       permissions: [],
       progress: {
-        files: options.final ? 84_213 : 0,
-        dirs: options.final ? state.scanDirs.length : 0,
-        bytes: options.final
-          ? state.scanDirs.reduce((sum, dir) => sum + dir.size, 0)
-          : 0,
+        files: Math.round(84_213 * ratio),
+        dirs: state.sizedDirs,
+        bytes,
         totalBytes: 774 * GB,
-        percent: options.final ? 100 : 0,
-        rateBytesPerSec: options.final ? 420 * MB : 0,
+        percent: options.final ? 100 : Math.min(99, Math.floor(ratio * 100)),
+        rateBytesPerSec: Math.round(bytes / elapsedSec),
         awaiting: 0,
         trackedNodes: state.scanDirs.length
       }
@@ -438,6 +448,8 @@ export function createMockBackend(bus: EventBus): MockBackend {
     const epoch = state.epoch;
     state.rootPath = root;
     state.scanDirs = dirRecords(root, state.deletedPaths);
+    state.sizedDirs = 0;
+    state.scanStartMs = Date.now();
     const half = Math.ceil(state.scanDirs.length / 2);
     const firstHalf = state.scanDirs.slice(0, half);
     const secondHalf = state.scanDirs.slice(half);
@@ -643,27 +655,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
           resolve(undefined as T);
           break;
 
-        // ---- places, history, routines ----
-        case 'list_places': {
-          const home = '/Users/demo';
-          const rows: Array<[string, string, string]> = [
-            [`${home}`, 'place.home', 'home'],
-            [`${home}/Downloads`, 'place.downloads', 'download'],
-            [`${home}/Desktop`, 'place.desktop', 'desktop'],
-            [`${home}/Movies`, 'place.movies', 'film'],
-            [`${home}/.Trash`, 'place.trash', 'trash']
-          ];
-          resolve(
-            rows.map(([path, labelKey, icon]) => ({
-              id: idFor(path),
-              labelKey,
-              icon,
-              path,
-              volumeId: VOLUMES[0].id
-            })) as unknown as T
-          );
-          break;
-        }
+        // ---- history, routines ----
         case 'list_history':
           resolve([...state.history].reverse() as unknown as T);
           break;
@@ -691,8 +683,38 @@ export function createMockBackend(bus: EventBus): MockBackend {
             kind: suggestion.kind,
             cadence: suggestion.cadence,
             averageBytes: suggestion.averageBytes,
-            mode: 'approve'
+            mode: 'approve',
+            paths: []
           };
+          state.routines.push(routine);
+          resolve(undefined as T);
+          break;
+        }
+        case 'save_routine': {
+          const title = String(args.title ?? '');
+          const kind = String(args.kind ?? '');
+          const averageBytes = Number(args.averageBytes ?? 0);
+          const path = args.path ? String(args.path) : null;
+          const routine: Routine = path
+            ? {
+                id: `custom-${idFor(path)}`,
+                title,
+                kind: 'customPath',
+                cadence: 'cadence.weekly',
+                averageBytes,
+                mode: 'approve',
+                paths: [path]
+              }
+            : {
+                id: `routine-${kind}-${title}`,
+                title,
+                kind,
+                cadence: 'cadence.weekly',
+                averageBytes,
+                mode: 'approve',
+                paths: []
+              };
+          state.routines = state.routines.filter((r) => r.id !== routine.id);
           state.routines.push(routine);
           resolve(undefined as T);
           break;
@@ -737,7 +759,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
             name,
             path,
             displayPath: path.replace('/Users/demo', '~'),
-            size: 4 * GB,
+            size: typeof args.bytes === 'number' ? args.bytes : 4 * GB,
             isDir: false,
             safety: 'review',
             confidence: 0.5,

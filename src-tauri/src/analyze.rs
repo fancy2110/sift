@@ -651,7 +651,11 @@ pub fn set_auto_clean_mode(services: State<'_, AppServices>, mode: String) -> Re
 /// refused here. User-marked items are `Review` — a manual choice never
 /// becomes a standing `Safe` approval.
 #[tauri::command]
-pub fn mark_path(services: State<'_, AppServices>, path: String) -> Result<FindingDto, String> {
+pub fn mark_path(
+    services: State<'_, AppServices>,
+    path: String,
+    bytes: Option<u64>,
+) -> Result<FindingDto, String> {
     use sift_core::deletable::classify_with_permissions;
 
     let as_path = PathBuf::from(&path);
@@ -665,12 +669,20 @@ pub fn mark_path(services: State<'_, AppServices>, path: String) -> Result<Findi
     let is_dir = meta.is_dir();
 
     #[cfg(unix)]
-    let size = {
+    let measured = {
         use std::os::unix::fs::MetadataExt;
         meta.len().max(meta.blocks() * 512)
     };
     #[cfg(not(unix))]
-    let size = meta.len();
+    let measured = meta.len();
+    // For a directory, `symlink_metadata` only yields the directory inode's
+    // own size, not its subtree. The caller supplies the measured subtree
+    // size (display/accounting only; deletion is gated by mtime + type).
+    let size = if is_dir {
+        measured.max(bytes.unwrap_or(0))
+    } else {
+        measured
+    };
 
     let mtime_ms = meta
         .modified()
@@ -1021,6 +1033,8 @@ pub struct RoutineDto {
     pub average_bytes: u64,
     /// `auto` | `approve`.
     pub mode: String,
+    /// Explicit targets of a path-based routine; empty for a kind-based one.
+    pub paths: Vec<String>,
 }
 
 /// Read the user-facing cleanup timeline, newest first.
@@ -1057,6 +1071,7 @@ pub fn list_routines(services: State<'_, AppServices>) -> Vec<RoutineDto> {
             cadence: entry.cadence.clone(),
             average_bytes: entry.average_bytes,
             mode: routine_mode_token(entry.mode).to_string(),
+            paths: entry.paths.clone(),
         })
         .collect()
 }
@@ -1084,10 +1099,71 @@ pub fn accept_routine_suggestion(
         cadence: suggestion.cadence.label_key().to_string(),
         average_bytes: suggestion.average_bytes,
         mode: sift_store::RoutineMode::Approve,
+        paths: Vec::new(),
     });
     let _ = services.store.flush_if_dirty();
     Ok(())
 }
+
+/// Save a routine directly from the Smart list (a finding's cleanable family)
+/// or from the Explorer (one explicit path). New routines start in approve
+/// mode, so nothing is ever removed without a later confirmation.
+#[tauri::command]
+pub fn save_routine(
+    services: State<'_, AppServices>,
+    title: String,
+    kind: String,
+    average_bytes: u64,
+    path: Option<String>,
+) -> Result<(), String> {
+    if let Some(path) = path {
+        // One path-based routine per target, so adding it again updates rather
+        // than duplicates.
+        let key = sift_core::NodeKey::from_path(std::path::Path::new(&path));
+        let id = format!("custom:{key}");
+        services.store.upsert_routine(sift_store::RoutineEntry {
+            id,
+            title,
+            kind: CUSTOM_PATH_KIND.to_string(),
+            cadence: "cadence.weekly".to_string(),
+            average_bytes,
+            mode: sift_store::RoutineMode::Approve,
+            paths: vec![path],
+        });
+    } else {
+        if kind.is_empty() {
+            return Err("err.routineKindMissing".to_string());
+        }
+        let id = sift_store::suggestion_key(&title, &kind);
+        services.store.upsert_routine(sift_store::RoutineEntry {
+            id,
+            title,
+            kind: kind.clone(),
+            cadence: "cadence.weekly".to_string(),
+            average_bytes,
+            mode: sift_store::RoutineMode::Approve,
+            paths: Vec::new(),
+        });
+        // The user chose this family as a routine; let a later manual run act on
+        // its currently known Safe conclusions without another approval prompt.
+        let safe_keys: Vec<sift_core::NodeKey> = services
+            .store
+            .cleanable()
+            .entries()
+            .iter()
+            .filter(|entry| entry.kind_token == kind && entry.safety == Safety::Safe)
+            .map(|entry| entry.key())
+            .collect();
+        for key in safe_keys {
+            services.store.set_auto_approval(key, true);
+        }
+    }
+    let _ = services.store.flush_if_dirty();
+    Ok(())
+}
+
+/// Family token for a routine that targets explicit user-chosen paths.
+pub(crate) const CUSTOM_PATH_KIND: &str = "customPath";
 
 /// Dismiss one mined suggestion; it is not suggested again.
 #[tauri::command]
@@ -1131,7 +1207,18 @@ pub async fn run_routine(
         .cloned()
         .ok_or_else(|| "err.routineNotFound".to_string())?;
 
-    let paths = select_routine_paths(services.store.cleanable().entries(), &routine.kind);
+    let paths = if !routine.paths.is_empty() {
+        // A path-based routine: act only on targets that still exist, leaving
+        // the stored paths intact so missing ones are simply skipped.
+        routine
+            .paths
+            .iter()
+            .filter(|path| std::path::Path::new(path).exists())
+            .cloned()
+            .collect()
+    } else {
+        select_routine_paths(services.store.cleanable().entries(), &routine.kind)
+    };
 
     if paths.is_empty() {
         return Ok(Vec::new());

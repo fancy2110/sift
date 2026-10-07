@@ -8,7 +8,6 @@ import type {
   AnalysisSummary,
   MonitorStatus,
   Node,
-  Place,
   Routine,
   RoutineSuggestion,
   StoreWarning,
@@ -156,8 +155,8 @@ export function setScheduledCleanup(enabled: boolean, hour: number): Promise<voi
   return call('set_scheduled_cleanup', { enabled, hour });
 }
 
-export function markPath(path: string): Promise<import('./types').Finding> {
-  return call('mark_path', { path });
+export function markPath(path: string, sizeHint?: number): Promise<import('./types').Finding> {
+  return call('mark_path', { path, bytes: sizeHint ?? null });
 }
 
 export function takeStoreWarnings(): Promise<StoreWarning[]> {
@@ -170,12 +169,6 @@ export function storeLocation(): Promise<string> {
 
 export function routineSuggestions(): Promise<RoutineSuggestion[]> {
   return call<RoutineSuggestion[]>('routine_suggestions');
-}
-
-// ---- quick places ----------------------------------------------------------
-
-export function listPlaces(): Promise<Place[]> {
-  return call<Place[]>('list_places');
 }
 
 // ---- cleanup history -------------------------------------------------------
@@ -192,6 +185,15 @@ export function listRoutines(): Promise<Routine[]> {
 
 export function acceptRoutineSuggestion(name: string, kind: string): Promise<void> {
   return call('accept_routine_suggestion', { name, kind });
+}
+
+export function saveRoutine(
+  title: string,
+  kind: string,
+  averageBytes: number,
+  path?: string
+): Promise<void> {
+  return call('save_routine', { title, kind, averageBytes, path: path ?? null });
 }
 
 export function dismissRoutineSuggestion(name: string, kind: string): Promise<void> {

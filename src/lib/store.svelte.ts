@@ -10,7 +10,6 @@ import {
   dismissRoutineSuggestion,
   listHistory,
   listDirFiles,
-  listPlaces,
   listRoutines,
   listVolumes,
   markPath,
@@ -23,6 +22,7 @@ import {
   resolvePermission,
   routineSuggestions,
   runRoutine,
+  saveRoutine,
   scanRunning,
   setAutoCleanMode,
   setScheduledCleanup,
@@ -47,7 +47,6 @@ import type {
   HistoryEntry,
   MonitorStatus as MonitorStatusInfo,
   Node,
-  Place,
   Routine,
   RoutineSuggestion,
   VolumeInfo
@@ -68,15 +67,13 @@ export interface Toast {
 class AppStore {
   // ---- hub navigation ----
   view = $state<'home' | 'dashboard' | 'sub'>('home');
-  subTab = $state<'smart' | 'explorer' | 'history' | 'routines' | 'map'>('smart');
+  subTab = $state<'smart' | 'explorer' | 'history' | 'routines'>('smart');
   settingsOpen = $state(false);
   /** AI provider configuration behind the settings sheet. */
   aiConfig = $state<AiConfig | null>(null);
 
   // ---- scan scopes ----
   volumes = $state<VolumeInfo[]>([]);
-  places = $state<Place[]>([]);
-  scopeKind = $state<'disk' | 'place'>('disk');
   scopeId = $state<string | null>(null);
 
   /**
@@ -126,6 +123,18 @@ class AppStore {
 
   /** Analyzed candidates from the backend. */
   findings = $state<Finding[]>([]);
+
+  /**
+   * Node id -> finding lookup, rebuilt whenever findings change. This is the
+   * single source of truth for a row's marked state: annotations are read
+   * through it instead of being copied onto node snapshots, where a live
+   * re-fetch of the open folder could overwrite them.
+   */
+  findingsById = $derived.by(() => {
+    const map = new Map<string, Finding>();
+    for (const finding of this.findings) map.set(finding.id, finding);
+    return map;
+  });
   routineSuggestions = $state<RoutineSuggestion[]>([]);
   routines = $state<Routine[]>([]);
   history = $state<HistoryEntry[]>([]);
@@ -154,25 +163,17 @@ class AppStore {
   // ---- scope lookups ----
 
   get currentVolume(): VolumeInfo | null {
-    return this.scopeKind === 'disk'
-      ? (this.volumes.find((v) => v.id === this.scopeId) ?? null)
-      : null;
-  }
-
-  get currentPlace(): Place | null {
-    return this.scopeKind === 'place'
-      ? (this.places.find((p) => p.id === this.scopeId) ?? null)
-      : null;
+    return this.volumes.find((v) => v.id === this.scopeId) ?? null;
   }
 
   /** Root path of the active scan. */
   get scopePath(): string | null {
-    return this.currentVolume?.mountPoint ?? this.currentPlace?.path ?? null;
+    return this.currentVolume?.mountPoint ?? null;
   }
 
   /** Display name of the active scope. */
   get scopeName(): string {
-    return this.currentVolume?.name ?? this.currentPlace?.labelKey ?? '';
+    return this.currentVolume?.name ?? '';
   }
 
   get currentNode(): Node | null {
@@ -294,6 +295,11 @@ class AppStore {
     return this.selectedIds.has(id);
   }
 
+  /** Finding attached to a node, or undefined. Reactive when read in a template. */
+  insightFor(id: string): Finding | undefined {
+    return this.findingsById.get(id);
+  }
+
   // ---- lifecycle ----
 
   async init() {
@@ -326,7 +332,6 @@ class AppStore {
     }
 
     this.volumes = await listVolumes();
-    this.places = await listPlaces();
     await this.loadHistory();
     await this.loadRoutines();
 
@@ -341,12 +346,6 @@ class AppStore {
   // ---- scope selection ----
 
   async selectDisk(id: string) {
-    this.scopeKind = 'disk';
-    await this.startScope(id);
-  }
-
-  async selectPlace(id: string) {
-    this.scopeKind = 'place';
     await this.startScope(id);
   }
 
@@ -451,12 +450,12 @@ class AppStore {
     this.view = 'home';
   }
 
-  goSub(tab: 'smart' | 'explorer' | 'history' | 'routines' | 'map' = 'smart') {
+  goSub(tab: 'smart' | 'explorer' | 'history' | 'routines' = 'smart') {
     this.subTab = tab;
     this.view = 'sub';
   }
 
-  setSubTab(tab: 'smart' | 'explorer' | 'history' | 'routines' | 'map') {
+  setSubTab(tab: 'smart' | 'explorer' | 'history' | 'routines') {
     this.subTab = tab;
   }
 
@@ -593,7 +592,6 @@ class AppStore {
     }
 
     this.rebuildCurrentEntries();
-    this.annotateNodes();
   }
 
   /** Fetch the current folder's file entries live from the backend. */
@@ -609,6 +607,8 @@ class AppStore {
     // A navigation may have happened before the reply landed.
     if (this.currentNodeId !== node.id) return;
     this.currentFiles = entries.filter((entry) => !entry.isDir);
+    // Marked state derives from findings (see insightFor), so the re-fetched
+    // copies need no annotation and can never strip an existing mark.
     this.rebuildCurrentEntries();
   }
 
@@ -679,17 +679,6 @@ class AppStore {
     }
   }
 
-  /** Reflect backend findings onto their records (insightId + risk). */
-  private annotateNodes() {
-    for (const finding of this.findings) {
-      const node = this.nodeRecords.get(finding.id);
-      if (node && node.insightId !== finding.id) {
-        node.insightId = finding.id;
-        node.risk = finding.safety;
-      }
-    }
-  }
-
   private async handleScanDone(event: ScanDoneEvent) {
     // This scan was cancelled to make room for a scope switch; release the
     // switch wait without touching the (about-to-be-reset) view state.
@@ -726,7 +715,6 @@ class AppStore {
       const summary = await analyzeCurrent();
       this.findings = summary.findings;
       this.routineSuggestions = await routineSuggestions();
-      this.annotateNodes();
 
       const next = new Set(this.selectedIds);
       for (const finding of summary.findings) {
@@ -904,17 +892,19 @@ class AppStore {
       this.toast(t('toast.noDeletePermission', [node.name]));
       return;
     }
-    if (node.insightId) {
+    const existing = this.findingsById.get(node.id);
+    if (existing) {
       const next = new Set(this.selectedIds);
-      next.add(node.insightId);
+      next.add(existing.id);
       this.selectedIds = next;
       this.toast(t('toast.addedToQueue', [node.name]));
       return;
     }
     try {
-      const finding = await markPath(node.path);
+      const finding = await markPath(node.path, node.size || undefined);
+      // Append the finding first; rows derive their marked state from it, so
+      // the keyed row flips regardless of snapshot/rebuild timing.
       this.findings = [...this.findings, finding];
-      this.annotateNodes();
       const next = new Set(this.selectedIds);
       next.add(finding.id);
       this.selectedIds = next;
@@ -995,6 +985,28 @@ class AppStore {
       await runRoutine(id);
       await this.loadHistory();
       await this.loadRoutines();
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
+    }
+  }
+
+  /** Add a Smart finding's cleanable family as a standing routine. */
+  async addRoutineFromFinding(finding: Finding) {
+    try {
+      await saveRoutine(finding.name, finding.kind, finding.size);
+      await this.loadRoutines();
+      this.toast(t('toast.routineSaved', [finding.name]));
+    } catch (error) {
+      this.toast(t('toast.settingsFailed', [String(error)]));
+    }
+  }
+
+  /** Add one Explorer item (a folder or file) as a path-based routine. */
+  async addRoutineFromNode(node: Node) {
+    try {
+      await saveRoutine(node.name, '', node.size, node.path);
+      await this.loadRoutines();
+      this.toast(t('toast.routineSaved', [node.name]));
     } catch (error) {
       this.toast(t('toast.settingsFailed', [String(error)]));
     }

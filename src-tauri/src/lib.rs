@@ -9,7 +9,6 @@ mod analyze;
 mod cleanup;
 mod credentials;
 mod disks;
-mod places;
 mod scanner;
 mod schedule;
 mod tray;
@@ -17,7 +16,6 @@ mod watcher;
 
 use analyze::AppServices;
 use disks::list_volumes;
-use places::list_places;
 use scanner::{
     cancel_scan, list_dir_files, pause_scan, resolve_permission, resume_scan, scan_running,
     set_scan_focus, start_scan, ScanManager,
@@ -42,7 +40,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // volumes and scanning
             list_volumes,
-            list_places,
             start_scan,
             cancel_scan,
             pause_scan,
@@ -73,6 +70,7 @@ pub fn run() {
             analyze::list_history,
             analyze::list_routines,
             analyze::accept_routine_suggestion,
+            analyze::save_routine,
             analyze::dismiss_routine_suggestion,
             analyze::delete_routine,
             analyze::toggle_routine_mode,

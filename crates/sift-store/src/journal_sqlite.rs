@@ -1,25 +1,27 @@
 //! SQLite implementation of [`ScanJournal`].
 //!
-//! Writes leave the scan hot path immediately: the coordinator hands records to
-//! one background writer that owns the connection, so directory discovery never
-//! waits on fsync. `load` is synchronous through request/reply so it observes
-//! committed data. WAL keeps writer and reader from contending.
+//! Writes never touch the scan hot path: the coordinator hands records to an
+//! unbounded queue and one background writer owns the connection, so directory
+//! discovery never waits on fsync. The writer drains everything queued and
+//! applies it in a single transaction, which keeps commit/fsync frequency flat
+//! no matter how fast the scan discovers directories. `load` is synchronous
+//! through request/reply, so it observes every earlier write. WAL keeps writer
+//! and reader from contending.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{channel, sync_channel, Sender, SyncSender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use sift_scan::{ClosedDir, DiscoveredDir, RestoredDir, RestoredScan, ScanJournal};
 
-/// Maximum queued writer messages. Beyond this the producer blocks: memory is
-/// bounded and back-pressure reaches the coordinator instead of an unbounded
-/// queue growing while a slow disk is fsyncing.
-const CHANNEL_CAPACITY: usize = 512;
+/// Maximum messages folded into one writer transaction. A cap bounds the work
+/// of a single commit; further messages go into the next drain immediately.
+const MAX_DRAIN: usize = 4096;
 
 /// A durable, SQLite-backed scan journal. Cheap to clone (state is shared).
 pub struct SqliteScanJournal {
-    cmd: SyncSender<WriterMsg>,
+    cmd: Sender<WriterMsg>,
     stats: Arc<WriterStats>,
 }
 
@@ -57,52 +59,14 @@ impl SqliteScanJournal {
         Self::with_conn(rusqlite::Connection::open_in_memory()?)
     }
 
-    fn with_conn(mut conn: rusqlite::Connection) -> rusqlite::Result<Self> {
-        init_schema(&mut conn)?;
-        let (cmd, rx) = sync_channel::<WriterMsg>(CHANNEL_CAPACITY);
+    fn with_conn(conn: rusqlite::Connection) -> rusqlite::Result<Self> {
+        init_schema(&conn)?;
+        let (cmd, rx) = channel::<WriterMsg>();
         let stats = Arc::<WriterStats>::default();
         let writer_stats = Arc::clone(&stats);
         std::thread::Builder::new()
             .name("sift-journal".into())
-            .spawn(move || {
-                while let Ok(msg) = rx.recv() {
-                    match msg {
-                        WriterMsg::Begin(root) => {
-                            if let Err(err) = apply_begin(&conn, &root) {
-                                record_write_error(&writer_stats, "begin", err);
-                            }
-                        }
-                        WriterMsg::Discovered { root, dirs } => {
-                            if let Err(err) = apply_discovered(&conn, &root, dirs) {
-                                record_write_error(&writer_stats, "discovered", err);
-                            }
-                        }
-                        WriterMsg::Closed { root, updates } => {
-                            if let Err(err) = apply_closed(&conn, &root, updates) {
-                                record_write_error(&writer_stats, "closed", err);
-                            }
-                        }
-                        WriterMsg::Load { root, reply } => {
-                            let scan = load_scan(&conn, &root).unwrap_or_default();
-                            let _ = reply.send(scan);
-                        }
-                        WriterMsg::PruneOpen(root) => {
-                            if let Err(err) = conn.execute(
-                                "DELETE FROM dirs WHERE root=?1 AND closed=0",
-                                rusqlite::params![root],
-                            ) {
-                                record_write_error(&writer_stats, "prune_open", err);
-                            }
-                        }
-                        WriterMsg::Complete(root) => {
-                            if let Err(err) = apply_complete(&conn, &root) {
-                                record_write_error(&writer_stats, "complete", err);
-                            }
-                        }
-                        WriterMsg::Shutdown => break,
-                    }
-                }
-            })
+            .spawn(move || writer_loop(&conn, &rx, &writer_stats))
             .expect("spawn journal writer");
         Ok(Self { cmd, stats })
     }
@@ -123,6 +87,121 @@ impl SqliteScanJournal {
     }
 }
 
+/// Own the connection until every sender disconnects (or a shutdown arrives).
+/// Each pass applies all currently queued messages in one transaction.
+fn writer_loop(conn: &rusqlite::Connection, rx: &Receiver<WriterMsg>, stats: &WriterStats) {
+    while let Ok(first) = rx.recv() {
+        let mut batch = Vec::with_capacity(MAX_DRAIN.min(64));
+        batch.push(first);
+        while batch.len() < MAX_DRAIN {
+            match rx.try_recv() {
+                Ok(msg) => batch.push(msg),
+                Err(_) => break,
+            }
+        }
+        if apply_batch(conn, batch, stats) {
+            break;
+        }
+    }
+}
+
+/// Apply one drained batch. Returns true when the writer should exit.
+fn apply_batch(conn: &rusqlite::Connection, msgs: Vec<WriterMsg>, stats: &WriterStats) -> bool {
+    let mut tx = match conn.unchecked_transaction() {
+        Ok(tx) => tx,
+        // Without a transaction the records cannot be applied; count one
+        // failure per batch rather than per message and let the scan continue.
+        Err(err) => {
+            record_write_error(stats, "begin transaction", err);
+            return false;
+        }
+    };
+
+    let mut shutdown = false;
+    for msg in msgs {
+        match msg {
+            WriterMsg::Begin(root) => {
+                if let Err(err) = tx.execute(
+                    "INSERT INTO scans(root, running) VALUES (?1, 1)\n\
+                     ON CONFLICT(root) DO UPDATE SET running=1",
+                    rusqlite::params![root.path],
+                ) {
+                    record_write_error(stats, "begin", err);
+                }
+                if let Err(err) = upsert_discovered(&tx, &root.path, &root) {
+                    record_write_error(stats, "begin", err);
+                }
+            }
+            WriterMsg::Discovered { root, dirs } => {
+                for d in &dirs {
+                    if let Err(err) = upsert_discovered(&tx, &root, d) {
+                        record_write_error(stats, "discovered", err);
+                    }
+                }
+            }
+            WriterMsg::Closed { root, updates } => {
+                for c in &updates {
+                    if let Err(err) = tx.execute(
+                        "UPDATE dirs SET closed=1, logical=?3, physical=?4, files=?5\n\
+                         WHERE root=?1 AND key=?2",
+                        rusqlite::params![
+                            root,
+                            c.key,
+                            c.logical as i64,
+                            c.physical as i64,
+                            c.files as i64
+                        ],
+                    ) {
+                        record_write_error(stats, "closed", err);
+                    }
+                }
+            }
+            // A load must observe every write that preceded it: commit the
+            // in-flight transaction, answer, then reopen for later messages.
+            WriterMsg::Load { root, reply } => {
+                if let Err(err) = tx.commit() {
+                    record_write_error(stats, "commit before load", err);
+                }
+                let scan = load_scan(conn, &root).unwrap_or_default();
+                let _ = reply.send(scan);
+                tx = match conn.unchecked_transaction() {
+                    Ok(tx) => tx,
+                    Err(err) => {
+                        record_write_error(stats, "reopen transaction", err);
+                        return false;
+                    }
+                };
+            }
+            WriterMsg::PruneOpen(root) => {
+                if let Err(err) = tx.execute(
+                    "DELETE FROM dirs WHERE root=?1 AND closed=0",
+                    rusqlite::params![root],
+                ) {
+                    record_write_error(stats, "prune_open", err);
+                }
+            }
+            WriterMsg::Complete(root) => {
+                if let Err(err) =
+                    tx.execute("DELETE FROM dirs WHERE root=?1", rusqlite::params![root])
+                {
+                    record_write_error(stats, "complete", err);
+                }
+                if let Err(err) =
+                    tx.execute("DELETE FROM scans WHERE root=?1", rusqlite::params![root])
+                {
+                    record_write_error(stats, "complete", err);
+                }
+            }
+            WriterMsg::Shutdown => shutdown = true,
+        }
+    }
+
+    if let Err(err) = tx.commit() {
+        record_write_error(stats, "commit", err);
+    }
+    shutdown
+}
+
 /// Log and record one background write failure.
 fn record_write_error(stats: &WriterStats, stage: &str, err: rusqlite::Error) {
     eprintln!("sift journal: write failed during {stage}: {err}");
@@ -134,10 +213,9 @@ fn record_write_error(stats: &WriterStats, stage: &str, err: rusqlite::Error) {
 
 impl Drop for SqliteScanJournal {
     fn drop(&mut self) {
-        // Best effort and never blocking: when the queue is full the sender is
-        // dropped right after this, and the writer exits on disconnect once it
-        // drains the queued messages.
-        let _ = self.cmd.try_send(WriterMsg::Shutdown);
+        // The queue is unbounded, so send never blocks. The writer applies all
+        // messages ahead of the shutdown and exits immediately afterwards.
+        let _ = self.cmd.send(WriterMsg::Shutdown);
     }
 }
 
@@ -171,22 +249,14 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     )
 }
 
-fn apply_begin(conn: &rusqlite::Connection, root: &DiscoveredDir) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO scans(root, running) VALUES (?1, 1)\n\
-         ON CONFLICT(root) DO UPDATE SET running=1",
-        rusqlite::params![root.path],
-    )?;
-    upsert_discovered(conn, &root.path, root)?;
-    Ok(())
-}
-
 fn upsert_discovered(
     conn: &rusqlite::Connection,
     scan_root: &str,
     d: &DiscoveredDir,
 ) -> rusqlite::Result<()> {
-    conn.execute(
+    // Cached across drain transactions: with millions of directories this
+    // avoids recompiling the statement for every row.
+    let mut stmt = conn.prepare_cached(
         "INSERT INTO dirs\n\
          (root, key, parent_key, name, path, depth, mtime_ms, dev, ino,\n\
           is_symlink, deletable, closed)\n\
@@ -196,54 +266,20 @@ fn upsert_discovered(
           depth=excluded.depth, mtime_ms=excluded.mtime_ms, dev=excluded.dev,\n\
           ino=excluded.ino, is_symlink=excluded.is_symlink,\n\
           deletable=excluded.deletable",
-        rusqlite::params![
-            scan_root,
-            d.key,
-            d.parent_key,
-            d.name,
-            d.path,
-            d.depth,
-            d.mtime_ms,
-            d.dev as i64,
-            d.ino as i64,
-            d.is_symlink as i64,
-            d.deletable as i64,
-        ],
     )?;
-    Ok(())
-}
-
-fn apply_discovered(
-    conn: &rusqlite::Connection,
-    root: &str,
-    dirs: Vec<DiscoveredDir>,
-) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
-    for d in &dirs {
-        upsert_discovered(&tx, root, d)?;
-    }
-    tx.commit()
-}
-
-fn apply_closed(
-    conn: &rusqlite::Connection,
-    root: &str,
-    updates: Vec<ClosedDir>,
-) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
-    for c in &updates {
-        tx.execute(
-            "UPDATE dirs SET closed=1, logical=?3, physical=?4, files=?5\n\
-             WHERE root=?1 AND key=?2",
-            rusqlite::params![root, c.key, c.logical as i64, c.physical as i64, c.files as i64],
-        )?;
-    }
-    tx.commit()
-}
-
-fn apply_complete(conn: &rusqlite::Connection, root: &str) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM dirs WHERE root=?1", rusqlite::params![root])?;
-    conn.execute("DELETE FROM scans WHERE root=?1", rusqlite::params![root])?;
+    stmt.execute(rusqlite::params![
+        scan_root,
+        d.key,
+        d.parent_key,
+        d.name,
+        d.path,
+        d.depth,
+        d.mtime_ms,
+        d.dev as i64,
+        d.ino as i64,
+        d.is_symlink as i64,
+        d.deletable as i64,
+    ])?;
     Ok(())
 }
 
@@ -396,6 +432,33 @@ mod tests {
         journal.discovered("/root", vec![dir("A", "R", "a", "/root/a", 1)]);
         journal.complete("/root");
         assert!(journal.load("/root").is_empty());
+    }
+
+    /// Thousands of records queued back-to-back must all survive: this is the
+    /// case the old bounded channel blocked on, freezing the coordinator.
+    #[test]
+    fn a_burst_of_records_is_fully_persisted() {
+        let journal = SqliteScanJournal::memory().unwrap();
+        let scan_root = "/root";
+        journal.begin(&dir("R", "", "root", scan_root, 0));
+
+        const BURST: usize = 10_000;
+        let chunk: Vec<DiscoveredDir> = (0..BURST)
+            .map(|i| {
+                dir(
+                    &format!("D{i}"),
+                    "R",
+                    &format!("d{i}"),
+                    &format!("/root/d{i}"),
+                    1,
+                )
+            })
+            .collect();
+        journal.discovered(scan_root, chunk);
+
+        let restored = journal.load(scan_root);
+        assert_eq!(restored.dirs.len(), BURST + 1, "root + every bursted dir");
+        assert!(journal.failed_write_count() == 0, "no write failures");
     }
 
     /// A write failure in the background writer must be observable: logged,

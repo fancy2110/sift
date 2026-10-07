@@ -55,7 +55,7 @@ use sift_core::{
     ScanOutcome, ScanPolicy, ScanRequest, ScanTree, TreeConfig,
 };
 use sift_platform::dir::{
-    close_raw_fd, fd_size, path_size, read_with_children, BulkBuffer, ChildFdMap, DirReader,
+    close_raw_fd, read_with_children, BulkBuffer, ChildFdMap, DirReader,
     RawEntry, ReadErrorKind,
 };
 
@@ -590,8 +590,6 @@ struct CoordinatorState {
     /// Restored key → live index, so the re-list can re-enqueue adopted open
     /// dirs at their existing nodes.
     adopted_index: HashMap<String, u32>,
-    /// Predicted giant directories awaiting exact post-scan calibration.
-    calibrate: Vec<CalibrationJob>,
     /// Directories parked while the user decides an authorization prompt,
     /// keyed by their node-key string so decisions from a front end resolve
     /// without a key→index lookup.
@@ -706,7 +704,6 @@ fn run_coordinator(inputs: CoordinatorInputs) {
             .collect(),
         adopted_closed,
         adopted_index,
-        calibrate: Vec::new(),
         awaiting: HashMap::new(),
         permission_rx,
         refresh_roots: HashSet::new(),
@@ -718,11 +715,53 @@ fn run_coordinator(inputs: CoordinatorInputs) {
     // Resume: publish restored nodes before normal discovery, and tell each
     // parent which adopted (open) children it is still waiting for. Closed
     // adopted children are not pending — they already pre-charged the parent.
+    //
+    // Restore in chunks with a Progress event between each one: a large resume
+    // can restore a million directories before the main walk emits anything,
+    // which otherwise looks like a frozen scan with items stuck at zero.
     if !adopted_nodes.is_empty() {
-        let _ = state.event_tx.send(ScanEvent::NodesAdopted {
-            scan: state.scan_id,
-            nodes: adopted_nodes,
-        });
+        let total = adopted_nodes.len();
+        let final_bytes = state.progress.bytes;
+        let final_files = state.progress.files;
+        let final_dirs = state.progress.dirs;
+        let open_frontier =
+            total - adopted_nodes.iter().filter(|node| node.closed).count();
+        let restored_peak = if final_dirs + open_frontier as u64 > 0 {
+            final_dirs as f64 / (final_dirs + open_frontier as u64) as f64
+        } else {
+            1.0
+        };
+        state.progress.bytes = ByteSize::ZERO;
+        state.progress.files = 0;
+        state.progress.dirs = 0;
+        const ADOPT_CHUNK: usize = 2_000;
+        for (i, chunk) in adopted_nodes.chunks(ADOPT_CHUNK).enumerate() {
+            let _ = state.event_tx.send(ScanEvent::NodesAdopted {
+                scan: state.scan_id,
+                nodes: chunk.to_vec(),
+            });
+            let fraction =
+                ((i + 1) * ADOPT_CHUNK).min(total) as f64 / total as f64;
+            state.progress.bytes = ByteSize::new(
+                (final_bytes.logical as f64 * fraction) as u64,
+                (final_bytes.physical as f64 * fraction) as u64,
+            );
+            state.progress.files = (final_files as f64 * fraction) as u64;
+            state.progress.dirs = (final_dirs as f64 * fraction) as u64;
+            state.progress.elapsed_secs = state.started.elapsed().as_secs_f64();
+            state.progress.coverage = restored_peak * fraction;
+            let _ = state.event_tx.send(ScanEvent::Progress {
+                scan: state.scan_id,
+                progress: state.progress,
+            });
+        }
+        // Exact seed state for the main walk; hold the peak so the percent
+        // cannot dip backwards between restoration and the first flush.
+        state.progress.bytes = final_bytes;
+        state.progress.files = final_files;
+        state.progress.dirs = final_dirs;
+        state.progress.coverage = restored_peak;
+        state.percent_peak = restored_peak;
     }
     for (parent, count) in seed_pending {
         *state.pending_children.entry(parent).or_insert(0) += count;
@@ -786,28 +825,6 @@ fn run_coordinator(inputs: CoordinatorInputs) {
     // the next scan to resume.
     if outcome == ScanOutcome::Completed {
         state.journal.complete(&state.root_text);
-    }
-
-    // Predicted giant directories are measured exactly after the main scan.
-    // The background thread holds its own event sender, so `Finished` below
-    // still precedes the `Calibrated` updates. Nothing is launched for a
-    // cancellation: estimates stay estimates until the next scan.
-    let calibrate = std::mem::take(&mut state.calibrate);
-    if matches!(outcome, ScanOutcome::Completed) && !calibrate.is_empty() {
-        let bg_tree = Arc::clone(&tree);
-        let bg_event_tx = state.event_tx.clone();
-        std::thread::Builder::new()
-            .name("sift-calibration".into())
-            .spawn(move || {
-                run_background_calibration(
-                    calibrate,
-                    bg_tree,
-                    bg_event_tx,
-                    scan_id,
-                    workers,
-                );
-            })
-            .ok();
     }
 
     let final_progress = state.progress;
@@ -1070,21 +1087,6 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
             {
                 close_and_cascade(state, &mut tree_guard, parent);
             }
-            drop(tree_guard);
-        }
-        DirResult::Predicted { index } => {
-            // The worker skipped the read; queue exact calibration and close
-            // the node at zero so the main scan can complete.
-            let path = {
-                let mut tree_guard = tree.lock().unwrap();
-                tree_guard.path(index)
-            };
-            state.calibrate.push(CalibrationJob {
-                index,
-                path: PathBuf::from(&path),
-            });
-            let mut tree_guard = tree.lock().unwrap();
-            close_predicted(state, &mut tree_guard, index);
             drop(tree_guard);
         }
     }
@@ -1797,137 +1799,6 @@ fn finish_refresh_root(state: &mut CoordinatorState, tree: &mut ScanTree, index:
     });
 }
 
-/// One predicted giant directory awaiting exact measurement.
-struct CalibrationJob {
-    index: u32,
-    path: PathBuf,
-}
-
-/// A directory at or above this own-size threshold is treated as a giant.
-///
-/// On APFS a directory's `st_size` grows roughly linearly with its entry count
-/// (~32 B/entry) once it spills out of inline storage, so 4 MiB predicts a
-/// directory on the order of 100k+ entries.
-const PREDICT_MIN_DIR_SIZE: u64 = 4 * 1024 * 1024;
-
-/// Tag the node as an estimate and close it at its current (zero) totals.
-fn close_predicted(state: &mut CoordinatorState, tree: &mut ScanTree, index: u32) {
-    if let Some(node) = tree.node_mut(index) {
-        node.set_estimated(true);
-    }
-    close_and_cascade(state, tree, index);
-}
-
-/// Measure every predicted giant subtree on a small thread pool, patching each
-/// exact result into the closed tree and publishing `Calibrated`.
-fn run_background_calibration(
-    jobs: Vec<CalibrationJob>,
-    tree: Arc<Mutex<ScanTree>>,
-    event_tx: mpsc::Sender<ScanEvent>,
-    scan_id: ScanId,
-    workers: usize,
-) {
-    let started = Instant::now();
-    let worker_count = workers.clamp(1, 16);
-    let (job_tx, job_rx) = crossbeam_channel::unbounded::<CalibrationJob>();
-    let (result_tx, result_rx) =
-        mpsc::channel::<(u32, ByteSize, u32)>();
-
-    let mut handles = Vec::new();
-    for _ in 0..worker_count {
-        let job_rx = job_rx.clone();
-        let result_tx = result_tx.clone();
-        let handle = std::thread::Builder::new()
-            .name("sift-calibrator".into())
-            .spawn(move || {
-                let mut buffer = BulkBuffer::new();
-                while let Ok(job) = job_rx.recv() {
-                    let (size, files) =
-                        measure_subtree(&job.path, &mut buffer);
-                    if result_tx.send((job.index, size, files)).is_err() {
-                        break;
-                    }
-                }
-            });
-        if let Ok(handle) = handle {
-            handles.push(handle);
-        }
-    }
-    drop(result_tx);
-    for job in jobs {
-        if job_tx.send(job).is_err() {
-            break;
-        }
-    }
-    drop(job_tx);
-
-    for (index, size, files) in result_rx {
-        let (key, new_size, new_files) = {
-            let mut guard = tree.lock().unwrap();
-            let key = guard
-                .node(index)
-                .map(|node| node.key)
-                .unwrap_or_else(|| NodeKey::from_path(Path::new("")));
-            guard.adjust_totals(index, size, files as u64);
-            if let Some(node) = guard.node_mut(index) {
-                node.set_estimated(false);
-            }
-            let node = guard.node(index).copied();
-            (
-                key,
-                node.map(|node| node.size).unwrap_or(size),
-                node.map(|node| node.file_count as u64).unwrap_or(files as u64),
-            )
-        };
-        let _ = event_tx.send(ScanEvent::Calibrated {
-            scan: scan_id,
-            key,
-            size: new_size,
-            files: new_files,
-        });
-    }
-
-    for handle in handles {
-        let _ = handle.join();
-    }
-    let _ = event_tx.send(ScanEvent::Warning {
-        scan: scan_id,
-        message: format!("大型目录校准完成（{:.1}s）", started.elapsed().as_secs_f64()),
-    });
-    let _ = event_tx.send(ScanEvent::CalibrationFinished { scan: scan_id });
-}
-
-/// Sum a whole subtree without building tree nodes, deduping hardlinks in a
-/// local set the same way the tracked walk does. Iterative so stack usage is
-/// bounded regardless of tree depth.
-fn measure_subtree(path: &Path, buffer: &mut BulkBuffer) -> (ByteSize, u32) {
-    let mut total = ByteSize::ZERO;
-    let mut files = 0u32;
-    let mut seen_links: HashSet<FileId> = HashSet::new();
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = DirReader::read_reusing(&dir, true, buffer) else {
-            continue;
-        };
-        for entry in entries {
-            if entry.is_dir && !entry.is_symlink {
-                stack.push(join_path(&dir, &entry.name));
-            } else if entry.is_file {
-                if entry.nlink > 1 {
-                    if let Some(id) = entry.file_id() {
-                        if !seen_links.insert(id) {
-                            continue;
-                        }
-                    }
-                }
-                total += entry.size();
-                files += 1;
-            }
-        }
-    }
-    (total, files)
-}
-
 /// Recompute every queued category against the current focus.
 fn rebuild_categories(state: &mut CoordinatorState) {
     let items: Vec<OrdDir> = state.queue.drain().collect();
@@ -2051,7 +1922,6 @@ enum DirResult {
         size: ByteSize,
         files: u32,
     },
-    Predicted { index: u32 },
 }
 
 fn read_job(
@@ -2067,26 +1937,13 @@ fn read_job(
             writable,
             preopened,
         } => {
-            // One fstat on the descriptor already in hand decides whether
-            // this is a giant flat directory, which is skipped during the
-            // main scan and measured exactly afterward. The scan root is
-            // exempt: never predict the whole walk away.
+            // Every directory — including giant flat ones — is read inline so
+            // the finished tree is exact with every parent equal to the sum of
+            // its children. A tied worker is hidden by the rest of the pool.
             let index = *index;
             let writable = *writable;
             let mut preopened = preopened.take();
             let path = std::mem::take(path);
-            let dir_size = match preopened {
-                Some(fd) => fd_size(fd),
-                None => path_size(&path),
-            };
-            if index != 0
-                && dir_size.is_some_and(|size| size >= PREDICT_MIN_DIR_SIZE)
-            {
-                if let Some(fd) = preopened {
-                    close_raw_fd(fd);
-                }
-                return DirResult::Predicted { index };
-            }
             let outcome =
                 read_with_children(preopened.take(), &path, want_physical, buffer);
             DirResult::Tracked {

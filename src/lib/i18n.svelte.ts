@@ -26,6 +26,7 @@ const zh: Record<string, string> = {
   'ctx.add': '添加到删除队列',
   'ctx.remove': '从删除队列移除',
   'ctx.noPermission': '无权限',
+  'ctx.addRoutine': '添加为例行任务',
 
   'detail.title': '清理候选',
   'detail.panel': '详情面板',
@@ -146,6 +147,7 @@ const zh: Record<string, string> = {
   'toast.cleanDone': '已释放 {0}（文件在回收站，可恢复）',
   'toast.noDeletePermission': '你没有删除「{0}」的权限',
   'toast.addedToQueue': '已将「{0}」加入删除队列',
+  'toast.routineSaved': '已将「{0}」添加为例行任务',
   'toast.cannotAdd': '无法加入「{0}」：{1}',
   'toast.autoOn': '自动整理已开启，仅清理你确认过的安全项',
   'toast.autoOff': '自动整理已关闭，仅保留提醒',
@@ -202,12 +204,6 @@ const zh: Record<string, string> = {
   ,
   'common.back': '返回',
 
-  'location.places': '快捷位置',
-  'place.home': '用户文件夹',
-  'place.downloads': '下载',
-  'place.desktop': '桌面',
-  'place.movies': '影片',
-  'place.trash': '废纸篓',
 
   'routine.cadence.weekly': '每周',
   'routine.cadence.monthly': '每月',
@@ -297,6 +293,7 @@ const zh: Record<string, string> = {
   'sub.tab.routines': '例行任务',
   'sub.tab.map': '方块图',
   'sub.aiBadge': 'AI 推荐',
+  'sub.addRoutine': '添加为例行任务',
   'sub.reviewBadge': '待确认',
   'sub.smartEmpty': '没有待处理的内容',
   'sub.col.name': '名称',
@@ -383,6 +380,7 @@ const en: Record<string, string> = {
   'ctx.add': 'Add to delete queue',
   'ctx.remove': 'Remove from delete queue',
   'ctx.noPermission': 'No permission',
+  'ctx.addRoutine': 'Add to routines',
 
   'detail.title': 'Cleanup candidates',
   'detail.panel': 'Detail panel',
@@ -504,6 +502,7 @@ const en: Record<string, string> = {
   'toast.cleanDone': 'Freed {0} (files in Trash, recoverable)',
   'toast.noDeletePermission': 'You don’t have permission to delete “{0}”',
   'toast.addedToQueue': 'Added “{0}” to the delete queue',
+  'toast.routineSaved': 'Added “{0}” to routines',
   'toast.cannotAdd': 'Cannot add “{0}”: {1}',
   'toast.autoOn': 'Auto-clean enabled; only your confirmed safe items are cleaned',
   'toast.autoOff': 'Auto-clean disabled; only reminders remain',
@@ -560,12 +559,6 @@ const en: Record<string, string> = {
   ,
   'common.back': 'Back',
 
-  'location.places': 'Quick Places',
-  'place.home': 'Home',
-  'place.downloads': 'Downloads',
-  'place.desktop': 'Desktop',
-  'place.movies': 'Movies',
-  'place.trash': 'Trash',
 
   'routine.cadence.weekly': 'Weekly',
   'routine.cadence.monthly': 'Monthly',
@@ -655,6 +648,7 @@ const en: Record<string, string> = {
   'sub.tab.routines': 'Routines',
   'sub.tab.map': 'Treemap',
   'sub.aiBadge': 'AI pick',
+  'sub.addRoutine': 'Add to routines',
   'sub.reviewBadge': 'Review',
   'sub.smartEmpty': 'Nothing to do',
   'sub.col.name': 'Name',

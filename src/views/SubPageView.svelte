@@ -1,11 +1,10 @@
 <script lang="ts">
   import Icon from '../lib/components/Icon.svelte';
   import LocationPicker from '../lib/components/LocationPicker.svelte';
-  import TreemapView from '../lib/components/TreemapView.svelte';
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
   import type { Node } from '../lib/types';
-  type SubTab = 'smart' | 'explorer' | 'history' | 'routines' | 'map';
+  type SubTab = 'smart' | 'explorer' | 'history' | 'routines';
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { t } from '../lib/i18n.svelte';
@@ -35,11 +34,12 @@
       x = Math.min(Math.max(0, x), r.width - MENU_W - 4);
       y = Math.min(Math.max(0, y), r.height - 44);
     }
+    const insight = store.insightFor(node.id);
     listCtx = {
       x,
       y,
       node,
-      inQueue: !!node.insightId && store.selectedIds.has(node.insightId)
+      inQueue: !!insight && store.isSelected(insight.id)
     };
   }
 
@@ -47,12 +47,19 @@
     const c = listCtx;
     listCtx = null;
     if (!c) return;
-    if (c.inQueue && c.node.insightId) {
-      store.toggleSelected(c.node.insightId);
+    const insight = store.insightFor(c.node.id);
+    if (c.inQueue && insight) {
+      store.toggleSelected(insight.id);
       store.toast(t('list.removedFromQueue', [c.node.name]));
     } else {
       store.addManualCandidate(c.node);
     }
+  }
+
+  function confirmRoutineContext() {
+    const c = listCtx;
+    listCtx = null;
+    if (c) store.addRoutineFromNode(c.node);
   }
 
   function ago(ts: number): string {
@@ -75,15 +82,14 @@
     };
   }
 
-  const tabIndex = { smart: 0, explorer: 1, history: 2, routines: 3, map: 4 } as const;
-  const pagerOffset = $derived(tabIndex[store.subTab] * (100 / 5));
+  const tabIndex = { smart: 0, explorer: 1, history: 2, routines: 3 } as const;
+  const pagerOffset = $derived(tabIndex[store.subTab] * (100 / 4));
 
   const TABS: [SubTab, string, string][] = [
     ['smart', 'spark', t('sub.tab.smart')],
     ['explorer', 'layers', t('sub.tab.explorer')],
     ['history', 'clock', t('sub.tab.history')],
-    ['routines', 'routine', t('sub.tab.routines')],
-    ['map', 'dashboard', t('sub.tab.map')]
+    ['routines', 'routine', t('sub.tab.routines')]
   ];
 </script>
 
@@ -118,7 +124,7 @@
     <div class="segmented" role="tablist" aria-label={t('sub.tabsLabel')}>
       <span
         class="segmented-thumb"
-        style="width: calc(100%/5); transform: translateX({tabIndex[store.subTab] * 100}%)"
+        style="width: calc(100%/4); transform: translateX({tabIndex[store.subTab] * 100}%)"
         aria-hidden="true"
       ></span>
       {#each TABS as [tabId, icon, label]}
@@ -138,7 +144,7 @@
   </div>
 
   <div class="sp-body">
-    <div class="pager" style="width:500%; transform: translateX(-{pagerOffset}%)">
+    <div class="pager" style="width:400%; transform: translateX(-{pagerOffset}%)">
       <!-- SMART -->
       <section class="pager-panel" role="tabpanel">
         <div class="smart-scroll">
@@ -178,6 +184,16 @@
                   {/if}
                 </p>
               </div>
+
+              <button
+                type="button"
+                class="routine-mini"
+                title={t('sub.addRoutine')}
+                aria-label={t('sub.addRoutine')}
+                onclick={() => store.addRoutineFromFinding(item)}
+              >
+                <Icon name="clock" size={14} />
+              </button>
 
               {#if item.safety === 'safe'}
                 <span class="ai-badge">{t('sub.aiBadge')}</span>
@@ -238,12 +254,19 @@
                 {/if}
 
                 {#each store.listEntries as entry, i (entry.id)}
-                  <li class="ex-row group" in:listIn={{ index: i }} oncontextmenu={(e) => openListContext(e, entry)}>
+                  {@const marked = store.insightFor(entry.id)}
+                  <li
+                    class="ex-row group"
+                    oncontextmenu={(e) => {
+                      e.preventDefault();
+                      openListContext(e, entry);
+                    }}
+                  >
                     <span
                       class="ex-row-icon"
-                      style="color: {entry.insightId && entry.risk === 'safe' ? 'var(--color-ok)' : entry.risk === 'review' ? 'var(--color-warn)' : 'var(--color-faint)'}"
+                      style="color: {marked && marked.safety === 'safe' ? 'var(--color-ok)' : marked?.safety === 'review' ? 'var(--color-warn)' : 'var(--color-faint)'}"
                     >
-                      {#if entry.insightId && entry.risk === 'keep'}
+                      {#if marked && marked.safety === 'keep'}
                         <Icon name="shield" size={14} />
                       {:else}
                         <Icon name={entry.isDir ? 'folder' : 'hardDrive'} size={14} />
@@ -267,9 +290,9 @@
                       {/if}
                     </button>
 
-                    <span class="ex-note" class:ex-note-faint={!entry.insightId}>
-                      {#if entry.insightId}
-                        {reasonText(store.findings.find((f) => f.id === entry.insightId)!)}
+                    <span class="ex-note" class:ex-note-faint={!marked}>
+                      {#if marked}
+                        {reasonText(marked)}
                       {:else if entry.deletable === false}
                         {t('sub.noteProtected')}
                       {:else}
@@ -287,18 +310,18 @@
                     </span>
 
                     <span class="ex-action">
-                      {#if entry.risk === 'keep'}
+                      {#if marked?.safety === 'keep'}
                         <span class="ex-protected">{t('sub.protected')}</span>
                       {:else if entry.deletable === false}
                         <span class="ex-protected">{t('sub.noPermission')}</span>
-                      {:else if entry.insightId}
+                      {:else if marked}
                         <button
                           type="button"
                           class="ex-sift-btn"
-                          class:ex-sift-on={store.isSelected(entry.insightId)}
-                          onclick={() => store.toggleSelected(entry.insightId ?? '')}
+                          class:ex-sift-on={store.isSelected(marked.id)}
+                          onclick={() => store.toggleSelected(marked.id)}
                         >
-                          {#if store.isSelected(entry.insightId)}
+                          {#if store.isSelected(marked.id)}
                             <Icon name="undo" size={11} /> {t('sub.remove')}
                           {:else}
                             <Icon name="spark" size={11} /> {t('sub.clean')}
@@ -329,7 +352,7 @@
               in:scale={{ duration: 130, start: 0.96 }}
               out:scale={{ duration: 110, start: 0.96, opacity: 0 }}
             >
-              {#if listCtx.node.risk === 'keep'}
+              {#if store.insightFor(listCtx.node.id)?.safety === 'keep'}
                 <button type="button" class="list-ctx-item" disabled>
                   <Icon name="shield" size={14} /> {t('list.protected')}
                 </button>
@@ -348,6 +371,15 @@
                   {#if listCtx.node.deletable === false}
                     <span class="ctx-perm">{t('ctx.noPermission')}</span>
                   {/if}
+                </button>
+                <button
+                  type="button"
+                  class="list-ctx-item"
+                  role="menuitem"
+                  onclick={confirmRoutineContext}
+                >
+                  <Icon name="clock" size={14} />
+                  {t('ctx.addRoutine')}
                 </button>
               {/if}
             </div>
@@ -465,6 +497,9 @@
                   <p class="rt-card-meta num">
                     {t(r.cadence)} · ≈{formatSize(r.averageBytes)}
                   </p>
+                  {#if r.paths.length}
+                    <p class="rt-card-path" title={r.paths.join(', ')}>{r.paths[0]}</p>
+                  {/if}
                 </div>
                 <div class="rt-card-actions">
                   <button
@@ -476,15 +511,17 @@
                   >
                     <Icon name="play" size={10.5} /> {t('routines.runNow')}
                   </button>
-                  <button
-                    type="button"
-                    class="rt-btn"
-                    title={t('settings.toggleMode')}
-                    aria-label={t('settings.toggleMode')}
-                    onclick={() => store.toggleSavedRoutineMode(r.id)}
-                  >
-                    <Icon name="refresh" size={12} />
-                  </button>
+                  {#if !r.paths.length}
+                    <button
+                      type="button"
+                      class="rt-btn"
+                      title={t('settings.toggleMode')}
+                      aria-label={t('settings.toggleMode')}
+                      onclick={() => store.toggleSavedRoutineMode(r.id)}
+                    >
+                      <Icon name="refresh" size={12} />
+                    </button>
+                  {/if}
                   <button
                     type="button"
                     class="rt-btn rt-btn-danger"
@@ -499,35 +536,6 @@
             {:else}
               <p class="rt-empty">{t('routines.empty2')}</p>
             {/each}
-          </div>
-        </div>
-      </section>
-
-      <!-- TREEMAP -->
-      <section class="pager-panel" role="tabpanel">
-        <div class="treemap-page">
-          <div class="ex-crumb">
-            <LocationPicker />
-            {#each store.drillPath as seg, i (seg + i)}
-              <Icon name="chevronRight" size={11} style="color: var(--color-faint)" />
-              <button
-                type="button"
-                class="ex-crumb-item"
-                class:ex-crumb-current={i === store.drillPath.length - 1}
-                onclick={() => store.jumpCrumb(i)}
-              >
-                {seg}
-              </button>
-            {/each}
-            {#if store.drillPath.length > 0}
-              <button type="button" class="tm-up" onclick={() => store.goUp()}>
-                <Icon name="chevronUp" size={12} />
-                {t('sub.goUp')}
-              </button>
-            {/if}
-          </div>
-          <div class="tm-stage-wrap">
-            <TreemapView />
           </div>
         </div>
       </section>
@@ -664,41 +672,14 @@
   .pager {
     display: flex;
     height: 100%;
-    width: 500%;
+    width: 400%;
     transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .pager-panel {
-    width: calc(100% / 5);
+    width: calc(100% / 4);
     min-width: 0;
     height: 100%;
     overflow: hidden;
-  }
-  .treemap-page {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-  }
-  .tm-stage-wrap {
-    flex: 1;
-    min-height: 0;
-    padding: 0 16px 16px;
-  }
-  .tm-up {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-left: auto;
-    padding: 3px 9px;
-    border: 1px solid var(--color-border);
-    border-radius: 7px;
-    background: transparent;
-    color: var(--color-muted);
-    font-size: 11px;
-    cursor: default;
-  }
-  .tm-up:hover {
-    color: var(--color-fg);
-    border-color: var(--color-faint);
   }
   .sp-status {
     display: flex;
@@ -886,6 +867,25 @@
     color: var(--color-warn);
     border: 1px solid color-mix(in oklch, var(--color-warn) 50%, transparent);
     background: color-mix(in oklch, var(--color-warn) 9%, transparent);
+  }
+  .routine-mini {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-faint);
+    cursor: default;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .routine-mini:hover {
+    color: var(--color-accent);
+    border-color: color-mix(in oklch, var(--color-accent) 55%, var(--color-border));
+    background: color-mix(in oklch, var(--color-accent) 8%, transparent);
   }
   .explorer {
     position: relative;
@@ -1337,6 +1337,15 @@
     margin: 0;
     font-size: 10.5px;
     color: var(--color-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rt-card-path {
+    margin: 0;
+    font-size: 10.5px;
+    color: var(--color-faint);
+    opacity: 0.85;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
