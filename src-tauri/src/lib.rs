@@ -101,10 +101,13 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Sift")
-        .run(|app, event| {
+        .run(|app, event| match event {
+            // Clicking the Dock icon while the window is hidden (the app lives in
+            // the tray) must bring the window back; otherwise the click appears
+            // to do nothing.
+            tauri::RunEvent::Reopen { .. } => tray::show_window(app),
             // Flush conclusions and stop the watcher on the way out.
-            if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
-                analyze::shutdown(app);
-            }
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => analyze::shutdown(app),
+            _ => {}
         });
 }
