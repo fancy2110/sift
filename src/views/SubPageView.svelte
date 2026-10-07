@@ -34,11 +34,12 @@
       x = Math.min(Math.max(0, x), r.width - MENU_W - 4);
       y = Math.min(Math.max(0, y), r.height - 44);
     }
+    const insight = store.insightFor(node.id);
     listCtx = {
       x,
       y,
       node,
-      inQueue: !!node.insightId && store.selectedIds.has(node.insightId)
+      inQueue: !!insight && store.isSelected(insight.id)
     };
   }
 
@@ -46,8 +47,9 @@
     const c = listCtx;
     listCtx = null;
     if (!c) return;
-    if (c.inQueue && c.node.insightId) {
-      store.toggleSelected(c.node.insightId);
+    const insight = store.insightFor(c.node.id);
+    if (c.inQueue && insight) {
+      store.toggleSelected(insight.id);
       store.toast(t('list.removedFromQueue', [c.node.name]));
     } else {
       store.addManualCandidate(c.node);
@@ -252,9 +254,9 @@
                 {/if}
 
                 {#each store.listEntries as entry, i (entry.id)}
+                  {@const marked = store.insightFor(entry.id)}
                   <li
                     class="ex-row group"
-                    in:listIn={{ index: i }}
                     oncontextmenu={(e) => {
                       e.preventDefault();
                       openListContext(e, entry);
@@ -262,9 +264,9 @@
                   >
                     <span
                       class="ex-row-icon"
-                      style="color: {entry.insightId && entry.risk === 'safe' ? 'var(--color-ok)' : entry.risk === 'review' ? 'var(--color-warn)' : 'var(--color-faint)'}"
+                      style="color: {marked && marked.safety === 'safe' ? 'var(--color-ok)' : marked?.safety === 'review' ? 'var(--color-warn)' : 'var(--color-faint)'}"
                     >
-                      {#if entry.insightId && entry.risk === 'keep'}
+                      {#if marked && marked.safety === 'keep'}
                         <Icon name="shield" size={14} />
                       {:else}
                         <Icon name={entry.isDir ? 'folder' : 'hardDrive'} size={14} />
@@ -288,9 +290,9 @@
                       {/if}
                     </button>
 
-                    <span class="ex-note" class:ex-note-faint={!entry.insightId}>
-                      {#if entry.insightId}
-                        {reasonText(store.findings.find((f) => f.id === entry.insightId)!)}
+                    <span class="ex-note" class:ex-note-faint={!marked}>
+                      {#if marked}
+                        {reasonText(marked)}
                       {:else if entry.deletable === false}
                         {t('sub.noteProtected')}
                       {:else}
@@ -308,18 +310,18 @@
                     </span>
 
                     <span class="ex-action">
-                      {#if entry.risk === 'keep'}
+                      {#if marked?.safety === 'keep'}
                         <span class="ex-protected">{t('sub.protected')}</span>
                       {:else if entry.deletable === false}
                         <span class="ex-protected">{t('sub.noPermission')}</span>
-                      {:else if entry.insightId}
+                      {:else if marked}
                         <button
                           type="button"
                           class="ex-sift-btn"
-                          class:ex-sift-on={store.isSelected(entry.insightId)}
-                          onclick={() => store.toggleSelected(entry.insightId ?? '')}
+                          class:ex-sift-on={store.isSelected(marked.id)}
+                          onclick={() => store.toggleSelected(marked.id)}
                         >
-                          {#if store.isSelected(entry.insightId)}
+                          {#if store.isSelected(marked.id)}
                             <Icon name="undo" size={11} /> {t('sub.remove')}
                           {:else}
                             <Icon name="spark" size={11} /> {t('sub.clean')}
@@ -350,7 +352,7 @@
               in:scale={{ duration: 130, start: 0.96 }}
               out:scale={{ duration: 110, start: 0.96, opacity: 0 }}
             >
-              {#if listCtx.node.risk === 'keep'}
+              {#if store.insightFor(listCtx.node.id)?.safety === 'keep'}
                 <button type="button" class="list-ctx-item" disabled>
                   <Icon name="shield" size={14} /> {t('list.protected')}
                 </button>

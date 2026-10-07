@@ -123,6 +123,18 @@ class AppStore {
 
   /** Analyzed candidates from the backend. */
   findings = $state<Finding[]>([]);
+
+  /**
+   * Node id -> finding lookup, rebuilt whenever findings change. This is the
+   * single source of truth for a row's marked state: annotations are read
+   * through it instead of being copied onto node snapshots, where a live
+   * re-fetch of the open folder could overwrite them.
+   */
+  findingsById = $derived.by(() => {
+    const map = new Map<string, Finding>();
+    for (const finding of this.findings) map.set(finding.id, finding);
+    return map;
+  });
   routineSuggestions = $state<RoutineSuggestion[]>([]);
   routines = $state<Routine[]>([]);
   history = $state<HistoryEntry[]>([]);
@@ -281,6 +293,11 @@ class AppStore {
 
   isSelected(id: string): boolean {
     return this.selectedIds.has(id);
+  }
+
+  /** Finding attached to a node, or undefined. Reactive when read in a template. */
+  insightFor(id: string): Finding | undefined {
+    return this.findingsById.get(id);
   }
 
   // ---- lifecycle ----
@@ -575,7 +592,6 @@ class AppStore {
     }
 
     this.rebuildCurrentEntries();
-    this.annotateNodes();
   }
 
   /** Fetch the current folder's file entries live from the backend. */
@@ -591,6 +607,8 @@ class AppStore {
     // A navigation may have happened before the reply landed.
     if (this.currentNodeId !== node.id) return;
     this.currentFiles = entries.filter((entry) => !entry.isDir);
+    // Marked state derives from findings (see insightFor), so the re-fetched
+    // copies need no annotation and can never strip an existing mark.
     this.rebuildCurrentEntries();
   }
 
@@ -661,17 +679,6 @@ class AppStore {
     }
   }
 
-  /** Reflect backend findings onto their records (insightId + risk). */
-  private annotateNodes() {
-    for (const finding of this.findings) {
-      const node = this.nodeRecords.get(finding.id);
-      if (node && node.insightId !== finding.id) {
-        node.insightId = finding.id;
-        node.risk = finding.safety;
-      }
-    }
-  }
-
   private async handleScanDone(event: ScanDoneEvent) {
     // This scan was cancelled to make room for a scope switch; release the
     // switch wait without touching the (about-to-be-reset) view state.
@@ -708,7 +715,6 @@ class AppStore {
       const summary = await analyzeCurrent();
       this.findings = summary.findings;
       this.routineSuggestions = await routineSuggestions();
-      this.annotateNodes();
 
       const next = new Set(this.selectedIds);
       for (const finding of summary.findings) {
@@ -886,25 +892,19 @@ class AppStore {
       this.toast(t('toast.noDeletePermission', [node.name]));
       return;
     }
-    if (node.insightId) {
+    const existing = this.findingsById.get(node.id);
+    if (existing) {
       const next = new Set(this.selectedIds);
-      next.add(node.insightId);
+      next.add(existing.id);
       this.selectedIds = next;
       this.toast(t('toast.addedToQueue', [node.name]));
       return;
     }
     try {
       const finding = await markPath(node.path, node.size || undefined);
+      // Append the finding first; rows derive their marked state from it, so
+      // the keyed row flips regardless of snapshot/rebuild timing.
       this.findings = [...this.findings, finding];
-      this.annotateNodes();
-      // Live-fetched files live outside nodeRecords: annotate their copies too,
-      // otherwise the row keeps showing 加入 after the finding is created.
-      this.currentFiles = this.currentFiles.map((file) =>
-        file.id === finding.id
-          ? { ...file, insightId: finding.id, risk: finding.safety }
-          : file
-      );
-      this.rebuildCurrentEntries();
       const next = new Set(this.selectedIds);
       next.add(finding.id);
       this.selectedIds = next;

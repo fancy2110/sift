@@ -17,11 +17,6 @@ export interface Node {
   pending: boolean;
   status: NodeStatus;
   ext?: string;
-
-  // ---- client-assembled fields ----
-  /** AI finding id this node belongs to. */
-  insightId?: string;
-  risk?: Risk;
 }
 
 /** One analyzed candidate, exactly the backend FindingDto shape. */
