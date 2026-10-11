@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sift — AI 磁盘空间管家</title>
+    <!--
+      First-paint background, applied before the bundled CSS loads so the
+      webview never flashes the wrong shade. It mirrors app.css's --color-bg
+      and the native title bar, selected from the OS appearance.
+    -->
+    <style>
+      html { background: #f5f7f9; }
+      @media (prefers-color-scheme: dark) {
+        html { background: #07090c; }
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>
