@@ -53,6 +53,7 @@ import type {
   VolumeInfo
 } from './types';
 import { t, tr, renderStoreWarning } from './i18n.svelte';
+import { startupMark } from './startup';
 
 export type ToastTone = 'success' | 'error' | 'info';
 
@@ -321,6 +322,10 @@ class AppStore {
     this.browserMode = !isTauri();
     if (this.browserMode) this.toast(t('toast.browserMode'), 'info');
 
+    startupMark('init:parallel-start');
+    // Listeners first, and awaited: they are a few cheap registrations, and
+    // a scan already running on the backend must not emit its first batches
+    // into an unsubscribed webview.
     await Promise.all([
       onScanBatch((batch) => this.handleBatch(batch)),
       onScanDone((event) => this.handleScanDone(event)),
@@ -329,30 +334,44 @@ class AppStore {
       onMonitorEvent((event) => this.handleMonitorEvent(event))
     ]);
 
-    // A reload (or a webview reattach) can happen while a scan is still
-    // running on the backend; batches keep streaming either way, so reflect
-    // the live scan instead of rendering the idle home screen. Adopting the
-    // backend's epoch keeps those batches from being rejected as stale.
-    const activeEpoch = await scanRunning();
+    // All remaining bootstrap calls are independent; issuing them together
+    // collapses what used to be a serial chain of IPC round trips
+    // (scanRunning → warnings → volumes → history → routines) into one wave.
+    // The main-thread cost of each Tauri command is identical; only the
+    // waiting overlaps.
+    const activeEpochPromise = scanRunning();
+    const warningsPromise = takeStoreWarnings();
+    const volumesPromise = listVolumes();
+    const historyPromise = this.loadHistory();
+    const routinesPromise = this.loadRoutines();
+    // Monitor status only drives switches in other views; never block first
+    // paint on it.
+    const monitorPromise = this.refreshMonitorStatus();
+
+    const [activeEpoch, warnings, volumes] = await Promise.all([
+      activeEpochPromise,
+      warningsPromise,
+      volumesPromise,
+      historyPromise,
+      routinesPromise,
+      monitorPromise.catch(() => {})
+    ]);
+    startupMark('init:parallel-done');
+
     if (activeEpoch !== null) {
       this.scanning = true;
       this.scanEpoch = activeEpoch;
     }
-
-    for (const warning of await takeStoreWarnings()) {
+    for (const warning of warnings) {
       this.toast(renderStoreWarning(warning), 'info');
     }
 
-    this.volumes = await listVolumes();
-    await this.loadHistory();
-    await this.loadRoutines();
+    this.volumes = volumes;
 
     // Pre-select the system disk without scanning; the user starts the first
     // scan explicitly from the home screen CTA.
     const preferred = this.volumes.find((v) => !v.isRemovable) ?? this.volumes[0];
     if (preferred) this.scopeId = preferred.id;
-
-    this.refreshMonitorStatus();
   }
 
   // ---- scope selection ----

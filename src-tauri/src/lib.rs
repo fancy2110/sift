@@ -11,6 +11,7 @@ mod credentials;
 mod disks;
 mod scanner;
 mod schedule;
+pub mod startup_trace;
 mod tray;
 mod watcher;
 
@@ -23,8 +24,45 @@ use scanner::{
 use tauri::Manager as _;
 use watcher::{unwatch_fs, watch_fs, FsWatcherState};
 
+/// Snapshot of one startup trace mark for the `startup_trace` command.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupMarkDto {
+    label: String,
+    since_origin_ms: u64,
+    wall_ms: Option<i64>,
+}
+
+/// Read the collected startup phase marks (always available; cheap; no secrets).
+#[tauri::command]
+fn startup_trace() -> Vec<StartupMarkDto> {
+    startup_trace::marks()
+        .into_iter()
+        .map(|mark| StartupMarkDto {
+            label: mark.label,
+            since_origin_ms: mark.since_origin_ms,
+            wall_ms: mark.wall_ms,
+        })
+        .collect()
+}
+
+/// Let the webview contribute its own marks (module eval, first paint, data
+/// ready) aligned to the native wall-clock anchor.
+#[tauri::command]
+fn startup_mark(label: String, wall_ms: i64) {
+    startup_trace::mark_from_webview(&label, wall_ms);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    startup_trace::mark("run:enter");
+    let services_timer = std::time::Instant::now();
+    let services = AppServices::new();
+    startup_trace::mark(&format!(
+        "services:new ({} ms)",
+        services_timer.elapsed().as_millis()
+    ));
+
     tauri::Builder::default()
         .runtime(tauri_runtime_wry::Wry::default())
         .plugin(tauri_plugin_opener::init())
@@ -35,9 +73,12 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_dialog::init())
         .manage(ScanManager::new())
-        .manage(AppServices::new())
+        .manage(services)
         .manage(FsWatcherState::default())
         .invoke_handler(tauri::generate_handler![
+            // startup diagnostics
+            startup_trace,
+            startup_mark,
             // volumes and scanning
             list_volumes,
             home_dir,
@@ -83,7 +124,7 @@ pub fn run() {
             analyze::save_ai_config,
         ])
         .setup(|app| {
-            tray::build(app.handle())?;
+            startup_trace::mark("setup:enter");
             schedule::start(app.handle());
 
             // Closing the window keeps the app in the tray; the tray menu's
@@ -99,14 +140,29 @@ pub fn run() {
                     }
                 });
             }
+            startup_trace::mark("setup:done");
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building Sift")
         .run(|app, event| {
-            // Flush conclusions and stop the watcher on the way out.
-            if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
-                analyze::shutdown(app);
+            match event {
+                // The tray icon and menu are not needed to show the window.
+                // Build them on the first event-loop turn after the webview
+                // has been created, keeping NSStatusBar/menu construction out
+                // of the pre-window critical path.
+                tauri::RunEvent::Ready => {
+                    startup_trace::mark("run:ready");
+                    if let Err(err) = tray::build(app) {
+                        eprintln!("tray build failed: {err}");
+                    }
+                    startup_trace::mark("run:tray-built");
+                }
+                // Flush conclusions and stop the watcher on the way out.
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                    analyze::shutdown(app);
+                }
+                _ => {}
             }
         });
 }
