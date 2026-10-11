@@ -63,7 +63,12 @@
   });
 
   async function handleCta() {
-    if (store.scanning) return;
+    // One button: stop while scanning; otherwise review existing findings or
+    // start a fresh scan of the preferred disk.
+    if (store.scanning) {
+      await store.cancelCurrentScan();
+      return;
+    }
     if (store.hasFindings) {
       store.goSub('smart');
       return;
@@ -235,22 +240,18 @@
 
     <button
       class="hub-cta"
+      class:hub-cta-stop={store.scanning}
+      type="button"
       onclick={handleCta}
-      disabled={store.scanning}
       in:scale={{ duration: 480, delay: 380, easing: cubicOut }}
     >
-      {store.scanning ? t('home.ctaScanning') : t('home.ctaScan')}
-    </button>
-    {#if store.scanning}
-      <button
-        class="hub-stop"
-        type="button"
-        onclick={() => store.cancelCurrentScan()}
-      >
-        <Icon name="x" size={13} stroke={2.2} />
+      {#if store.scanning}
+        <Icon name="x" size={15} stroke={2.4} />
         {t('home.stopScan')}
-      </button>
-    {/if}
+      {:else}
+        {t('home.ctaScan')}
+      {/if}
+    </button>
     </div>
    </div>
   </div>
@@ -574,29 +575,17 @@
     outline: 2px solid color-mix(in oklch, var(--color-accent) 70%, transparent);
     outline-offset: 3px;
   }
-  .hub-stop {
-    margin-top: 12px;
+  /* Stop role: same button while a scan runs. */
+  .hub-cta-stop {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: 30px;
-    padding: 0 14px;
-    border: 1px solid var(--color-border-strong);
-    border-radius: 999px;
-    background: transparent;
-    color: var(--color-muted);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-  }
-  .hub-stop:hover {
+    gap: 8px;
+    background: color-mix(in oklch, var(--color-danger) 16%, var(--color-surface-2));
     color: var(--color-danger);
-    border-color: color-mix(in oklch, var(--color-danger) 55%, transparent);
-    background: color-mix(in oklch, var(--color-danger) 8%, transparent);
+    box-shadow: 0 18px 40px -18px color-mix(in oklch, var(--color-danger) 60%, transparent);
   }
-  .hub-stop:active {
-    transform: translateY(0.5px);
+  .hub-cta-stop:hover {
+    box-shadow: 0 26px 52px -20px color-mix(in oklch, var(--color-danger) 70%, transparent);
   }
 
   .hub-cards {

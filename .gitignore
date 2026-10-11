@@ -11,3 +11,6 @@ src-tauri/gen
 # Build output, including the per-crate target directories a test or
 # example run creates when it is started from inside a crate.
 target/
+
+# pnpm local store cache
+.pnpm-store/

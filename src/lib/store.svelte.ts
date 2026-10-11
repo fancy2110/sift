@@ -163,6 +163,12 @@ class AppStore {
    * new scan is starting, so late events from the previous scan are dropped.
    */
   private scanEpoch = 0;
+  /**
+   * Set when the current scope's scan was cancelled (or never completed).
+   * Selecting the same disk then starts a fresh scan instead of being treated
+   * as a redundant scope switch and no-op-ing. Cleared when a scan starts.
+   */
+  private rescanRequested = true;
   /** Resolvers waiting for a specific scan's done event during a scope switch. */
   private scanStopWaiters = new Map<number, () => void>();
 
@@ -356,7 +362,14 @@ class AppStore {
   }
 
   private async startScope(id: string) {
-    if (id === this.scopeId && this.rootId && !this.scanning) return;
+    // Same scope already fully scanned and idle, with no rescan pending:
+    // nothing to do. A cancelled scan sets rescanRequested, so re-selecting
+    // the same disk (or pressing the home CTA) starts a fresh scan instead of
+    // being treated as a redundant scope switch and no-op-ing.
+    if (id === this.scopeId && this.rootId && !this.scanning && !this.rescanRequested) {
+      return;
+    }
+    this.rescanRequested = false;
 
     // Stop the current scan before switching: the backend rejects a second
     // concurrent start with "scan already running", and late batches from the
@@ -412,7 +425,16 @@ class AppStore {
   /** Cancel the running scan from the UI. */
   async cancelCurrentScan() {
     if (!this.scanning) return;
-    await cancelScan();
+    this.rescanRequested = true;
+    try {
+      await cancelScan();
+    } catch (error) {
+      // If the cancel call itself fails, do not optimistically flip state:
+      // the scan may still finish on its own, whose done event settles
+      // `scanning` either way.
+      this.toastError(t('toast.scanCancelFailed', [String(error)]));
+      return;
+    }
     this.scanning = false;
     this.toast(t('toast.scanCancelled'), 'info');
   }
@@ -697,7 +719,13 @@ class AppStore {
     if (event.epoch !== this.scanEpoch) return;
 
     this.scanning = false;
-    if (event.cancelled) return;
+    if (event.cancelled) {
+      // The current scope has no complete result; selecting it again must
+      // rescan rather than hit the redundant-scope early return.
+      this.rescanRequested = true;
+      return;
+    }
+    this.rescanRequested = false;
     if (this.analysedScan) return;
     this.analysedScan = true;
     await this.runAnalysis();
