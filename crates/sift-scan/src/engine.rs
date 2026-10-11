@@ -503,7 +503,6 @@ impl ScanEngine {
                     root_ino,
                     root_path: request.root.clone(),
                     focus_path: request.focus.clone(),
-                    volume_used: request.volume_used_bytes,
                     tree: tree_co,
                     cancel: cancel_co,
                     paused: paused_co,
@@ -555,7 +554,6 @@ struct CoordinatorInputs {
     root_ino: u64,
     root_path: PathBuf,
     focus_path: PathBuf,
-    volume_used: Option<u64>,
     tree: Arc<Mutex<ScanTree>>,
     cancel: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
@@ -588,6 +586,11 @@ struct CoordinatorState {
     /// Tracked directory nodes currently open (created but not yet closed),
     /// including the root and parked/awaiting directories.
     open_dirs: u64,
+    /// Total number of directories discovered for this scan so far, i.e. the
+    /// progress denominator: every closed, open, queued, in-flight and
+    /// budget-refused (size-only) directory. Grows while the frontier expands;
+    /// the scan reaches 100% exactly when every discovered directory settles.
+    discovered_dirs: u64,
     /// Highest coverage published so far; keeps the percent monotonic even
     /// when listing an open directory discovers a large new subtree.
     percent_peak: f64,
@@ -607,7 +610,6 @@ struct CoordinatorState {
     focus_processed: bool,
     cancelled: bool,
     paused: bool,
-    volume_used: Option<u64>,
     event_tx: mpsc::Sender<ScanEvent>,
     scan_id: ScanId,
     /// Device of the scan root; subdirectories on another device are skipped.
@@ -676,7 +678,6 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         root_ino,
         root_path,
         focus_path,
-        volume_used,
         tree,
         cancel,
         paused,
@@ -699,6 +700,10 @@ fn run_coordinator(inputs: CoordinatorInputs) {
     // Root (index 0) is open from the start; every adopted node whose subtree
     // was unfinished is also open and will be re-walked.
     let seed_open = 1 + adopted_nodes.iter().filter(|node| !node.closed).count() as u64;
+    // The progress denominator counts the root plus every restored node once;
+    // the re-walk reuses adopted nodes (no re-discovery increments), and newly
+    // reached directories enlarge it as normal.
+    let seed_discovered = 1 + adopted_nodes.len() as u64;
 
     let mut state = CoordinatorState {
         queue: BinaryHeap::new(),
@@ -714,6 +719,7 @@ fn run_coordinator(inputs: CoordinatorInputs) {
             progress
         },
         open_dirs: seed_open,
+        discovered_dirs: seed_discovered,
         percent_peak: 0.0,
         seq: 0,
         in_flight: 0,
@@ -726,7 +732,6 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         focus_processed: focus_path == root_path,
         cancelled: false,
         paused: false,
-        volume_used,
         event_tx,
         scan_id,
         root_dev,
@@ -1139,6 +1144,10 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
             if finished_all {
                 state.size_only_pending.remove(&parent);
             }
+            // One size-only job settles one budget-refused directory: count
+            // it as a settled work unit (it was added to discovered_dirs when
+            // enqueued), keeping progress denominator and numerator aligned.
+            state.progress.dirs += 1;
             state
                 .unrecorded
                 .entry(parent)
@@ -1456,12 +1465,13 @@ fn process_dir_entries(
                     // Closed subtree: skip it entirely. Its aggregate already
                     // pre-charged the (open) parent at adoption, and the node is
                     // already closed, so do not recount or re-enqueue it.
-                    state.progress.dirs += 1;
+                    // `dirs`/`discovered_dirs` were seeded for it once at adopt.
                     continue;
                 }
                 // Open adopted subtree: re-walk it at its existing node so its
                 // unfinished contents are discovered. It was counted as pending
-                // at adoption; that single pending slot is reused.
+                // at adoption; that single pending slot is reused, and its
+                // directory was already included in the discovered seed.
                 if let Some(existing_index) = state.adopted_index.get(&key_text).copied() {
                     let preopened = child_fds.take(&entry.name);
                     let child_seq = state.next_seq();
@@ -1482,7 +1492,6 @@ fn process_dir_entries(
                         preopened,
                     });
                     child_dirs += 1;
-                    state.progress.dirs += 1;
                 }
                 continue;
             }
@@ -1534,7 +1543,6 @@ fn process_dir_entries(
                         preopened,
                     });
                     child_dirs += 1;
-                    state.progress.dirs += 1;
                     dir_entries.push(DirectoryEntry::new(
                         child_key,
                         name_string,
@@ -1564,6 +1572,11 @@ fn process_dir_entries(
                 tree.open_dir(index, child_key, &entry.name, mtime_ms, deletable, false)
             {
                 state.open_dirs += 1;
+                // A fresh (non-refresh) directory is one more unit of work the
+                // scan must settle; refresh walks reuse already-counted nodes.
+                if !in_refresh {
+                    state.discovered_dirs += 1;
+                }
                 if in_refresh {
                     // The new node belongs to the refresh walk; record it so the
                     // cache knows the child now exists for later lookups.
@@ -1608,6 +1621,9 @@ fn process_dir_entries(
                 ));
             } else {
                 // Budget refused: still count the bytes via a size-only job.
+                // It is still one directory the scan must settle, so it stays
+                // in the progress denominator.
+                state.discovered_dirs += 1;
                 let count = state.size_only_pending.entry(index).or_insert(0);
                 *count += 1;
                 let size_seq = state.next_seq();
@@ -1831,7 +1847,9 @@ fn finish_refresh_root(state: &mut CoordinatorState, tree: &mut ScanTree, index:
     let changed = tree.refresh_propagate(index, measured, files);
 
     state.open_dirs = state.open_dirs.saturating_sub(1);
-    state.progress.dirs += 1;
+    // Do not increment progress.dirs here: this directory was already counted
+    // when it first closed in the main walk; a refresh re-settles the same
+    // work unit. Counting it again would push coverage past its denominator.
     state.dirty.insert(index);
 
     let _ = state.event_tx.send(ScanEvent::DirectoryClosed {
@@ -1883,31 +1901,34 @@ fn flush_progress(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>) {
     let tree_guard = tree.lock().unwrap();
     let total = tree_guard.total();
 
-    // Byte coverage: how much of the volume's used space has been measured.
-    let byte_coverage = match state.volume_used {
-        Some(used) if used > 0 => {
-            (state.progress.bytes.dominant() as f64 / used as f64).clamp(0.0, 1.0)
-        }
-        _ => 0.0,
-    };
-    // Frontier coverage: fraction of known directories already closed. This
-    // prevents a resumed scan (whose seeded bytes already equal the whole
-    // volume) from showing 100% while its open frontier is still walking.
-    let known_dirs = state.progress.dirs + state.open_dirs;
-    let dir_coverage = if known_dirs > 0 {
-        state.progress.dirs as f64 / known_dirs as f64
+    // Progress is the fraction of *discovered directories already settled*.
+    // It deliberately does NOT divide measured bytes by the volume's used
+    // space: a scan may target one folder (then the denominator dwarfs the
+    // numerator and the ring sits at 0% until the end), and the scanner cannot
+    // see other mounts, permission-denied trees or APFS snapshots, so byte
+    // coverage would never reach 100% in step with the real finish.
+    //
+    // `dirs` counts settled directories (closed tracked nodes plus returned
+    // size-only jobs); `discovered_dirs` is every work unit, including dirs
+    // still open, queued, in flight or in a size-only walk. The denominator
+    // grows as the frontier expands; the ratio climbs as subtrees close and
+    // reaches exactly 1.0 only when nothing remains open.
+    let dir_coverage = if state.discovered_dirs > 0 {
+        (state.progress.dirs as f64 / state.discovered_dirs as f64).clamp(0.0, 1.0)
     } else {
         0.0
     };
-    let mut coverage = byte_coverage.min(dir_coverage);
-    if state.open_dirs > 0 {
+    let coverage = if state.open_dirs > 0 {
         // 100% is reserved for a fully closed tree.
-        coverage = coverage.min(0.99);
+        dir_coverage.min(0.99)
     } else {
-        coverage = 1.0;
-    }
-    // Hold the peak: newly discovered subtrees enlarge the denominator and
-    // would otherwise make the percent visibly move backwards.
+        1.0
+    };
+    // Hold the peak. Discovery is breadth-driven: once a parent closes its
+    // children, the ratio advances and never permanently falls, because
+    // settled directories stay settled and any newly discovered subtree was
+    // reached from a directory whose closure has not completed yet. The fully
+    // closed tree overrides the peak with exactly 1.0.
     state.percent_peak = state.percent_peak.max(coverage);
     state.progress.coverage = state.percent_peak;
 
@@ -2719,6 +2740,60 @@ mod tests {
         assert_eq!(tree.total().logical, 1000);
         assert_eq!(tree.node(0).unwrap().size.logical, 1000);
         drop(tree);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn progress_is_driven_by_directories_without_a_volume_byte_hint() {
+        // No `with_volume_used_bytes`: a single-folder or focus scan has no
+        // trustworthy whole-volume denominator. Progress must still start at
+        // zero, advance strictly inside (0,1) while walking, and end at
+        // exactly 1.0 on completion — it must not sit at 0% and jump to 100.
+        let tag = "pct-dirlen";
+        let base =
+            std::env::temp_dir().join(format!("sift-scan-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        const DIRS: u32 = 8000;
+        for i in 0..DIRS {
+            let dir = base.join(format!("d{i}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            // A few files each: scan time is dominated by thousands of
+            // directory enumerations, while keeping fixture creation cheap.
+            for j in 0..3u32 {
+                std::fs::write(dir.join(format!("f{j}")), vec![5u8; 100]).unwrap();
+            }
+        }
+
+        // One worker keeps many directories open at once, so a mid-scan flush
+        // sees both settled and unsettled work units.
+        let engine = ScanEngine::with_workers(1);
+        let handle = engine
+            .scan(ScanRequest::new(ScanId(81), base.clone()))
+            .unwrap();
+
+        let mut interim = Vec::new();
+        let mut final_cov = None;
+        while let Ok(event) = handle.events.recv_timeout(Duration::from_secs(30)) {
+            match event {
+                ScanEvent::Progress { progress, .. } => interim.push(progress.coverage),
+                ScanEvent::Finished { progress, .. } => {
+                    final_cov = Some(progress.coverage);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        handle.join();
+
+        assert_eq!(final_cov, Some(1.0), "completion must align with 100%");
+        assert!(
+            interim.iter().any(|&c| c > 0.0 && c < 1.0),
+            "progress must advance through the middle, got {interim:?}"
+        );
+        for c in &interim {
+            assert!((0.0..=1.0).contains(c), "coverage out of range: {c}");
+        }
 
         let _ = std::fs::remove_dir_all(&base);
     }
