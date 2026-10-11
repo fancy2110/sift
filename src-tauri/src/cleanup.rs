@@ -13,6 +13,11 @@ pub struct DeleteResultItem {
     pub path: String,
     pub ok: bool,
     pub error: Option<String>,
+    /// True for items never attempted because the user cancelled the batch.
+    /// They remain on disk; the front end should keep their rows rather than
+    /// showing them as failures.
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 #[cfg(test)]
@@ -25,9 +30,11 @@ mod tests {
             path: "/tmp/x".into(),
             ok: false,
             error: Some("locked".into()),
+            cancelled: false,
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("\"path\""));
         assert!(json.contains("\"ok\":false"));
+        assert!(json.contains("\"cancelled\":false"));
     }
 }

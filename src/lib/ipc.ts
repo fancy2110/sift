@@ -104,6 +104,8 @@ export interface DeleteResultItem {
   path: string;
   ok: boolean;
   error: string | null;
+  /** True for items never attempted because the user cancelled the batch. */
+  cancelled?: boolean;
 }
 
 export function watchFs(root: string, recursive: boolean): Promise<void> {
@@ -138,6 +140,11 @@ export function forgetCleanable(id: string): Promise<boolean> {
 
 export function cleanPaths(paths: string[]): Promise<DeleteResultItem[]> {
   return call('clean_paths', { paths });
+}
+
+/** Ask a running interactive cleanup to stop after its current item. */
+export function cancelCleanup(): Promise<boolean> {
+  return call<boolean>('cancel_cleanup');
 }
 
 export function monitorStatus(): Promise<MonitorStatus> {

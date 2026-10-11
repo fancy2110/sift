@@ -46,7 +46,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sift_core::id::{FileId, NodeKey};
 use sift_core::tree::NONE;
@@ -930,7 +930,7 @@ fn coordinator_loop(
     workers: usize,
 ) -> ScanOutcome {
     let mut outcome = ScanOutcome::Completed;
-    loop {
+    'outer: loop {
         // Re-prioritise if the focus moved.
         let generation = focus_generation.load(AtomicOrdering::SeqCst);
         if generation != state.focus_seen_generation {
@@ -1019,15 +1019,42 @@ fn coordinator_loop(
             break;
         }
 
-        let result = match result_rx.recv() {
-            Ok(result) => result,
-            Err(_) => {
-                outcome = if state.cancelled {
-                    ScanOutcome::Cancelled
-                } else {
-                    ScanOutcome::Failed
-                };
-                break;
+        // Wait for the next worker result, but never block past a short slice:
+        // a worker can spend seconds in one giant directory (getattrlistbulk on
+        // a flat million-entry folder, or a size-only subtree walk), and a
+        // blocking `recv()` would delay cancellation/stop for all of it. Poll
+        // the flags on each slice while still parking the thread otherwise.
+        let result = 'wait: loop {
+            match result_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(result) => break 'wait result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if cancel.load(AtomicOrdering::SeqCst)
+                        || state.stop.load(AtomicOrdering::SeqCst)
+                    {
+                        state.cancelled = true;
+                        outcome = ScanOutcome::Cancelled;
+                        break 'outer;
+                    }
+                    // Re-prioritise on a focus move and pick up authorization
+                    // decisions while waiting, same as the loop top does.
+                    let generation = focus_generation.load(AtomicOrdering::SeqCst);
+                    if generation != state.focus_seen_generation {
+                        state.focus_seen_generation = generation;
+                        state.focus = normalize(&focus.lock().unwrap());
+                        rebuild_categories(state);
+                    }
+                    while let Ok(decision) = state.permission_rx.try_recv() {
+                        apply_permission_decision(state, tree, decision);
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    outcome = if state.cancelled {
+                        ScanOutcome::Cancelled
+                    } else {
+                        ScanOutcome::Failed
+                    };
+                    break 'outer;
+                }
             }
         };
         state.in_flight -= 1;
@@ -2712,6 +2739,56 @@ mod tests {
             _ => None,
         });
         assert_eq!(outcome, Some(ScanOutcome::Cancelled));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Cancellation while workers are busy must reach `Finished(Cancelled)`
+    /// promptly: the coordinator polls the flag on every 50 ms wait slice and
+    /// workers observe it between directories, so a cancel pressed mid-scan must
+    /// never wait for the whole volume walk to finish.
+    #[test]
+    fn cancel_during_an_active_scan_finishes_within_a_short_bound() {
+        // A wide flat directory keeps a worker inside one bulk enumeration,
+        // reproducing the "cancel pressed while reading a huge folder" case.
+        let tag = "cancel-latency";
+        let base =
+            std::env::temp_dir().join(format!("sift-scan-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let big = base.join("big");
+        std::fs::create_dir_all(&big).unwrap();
+        for i in 0..20_000u32 {
+            std::fs::write(big.join(format!("f{i}")), b"x").unwrap();
+        }
+
+        let engine = ScanEngine::with_workers(2);
+        let handle = engine
+            .scan(ScanRequest::new(ScanId(71), base.clone()))
+            .unwrap();
+
+        // Let the scan actually start reading before cancelling.
+        std::thread::sleep(Duration::from_millis(30));
+        handle.cancel();
+        let started = Instant::now();
+        let mut cancelled = false;
+        while let Ok(event) = handle.events.recv_timeout(Duration::from_secs(5)) {
+            if let ScanEvent::Finished {
+                outcome: ScanOutcome::Cancelled,
+                ..
+            } = event
+            {
+                cancelled = true;
+                break;
+            }
+        }
+        let elapsed = started.elapsed();
+        handle.join();
+
+        assert!(cancelled, "the scan must end as Cancelled");
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "cancel took {elapsed:?}, longer than the responsiveness bound"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

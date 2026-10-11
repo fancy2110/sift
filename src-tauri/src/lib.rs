@@ -59,6 +59,7 @@ pub fn run() {
             analyze::approve_structural,
             analyze::forget_cleanable,
             analyze::clean_paths,
+            analyze::cancel_cleanup,
             analyze::monitor_status,
             analyze::start_monitor,
             analyze::stop_monitor,

@@ -2,6 +2,7 @@ import { pickDirectory } from './dialog';
 import { isTauri } from './runtime';
 import {
   analyzeCurrent,
+  cancelCleanup,
   cancelScan,
   cleanPaths,
   getAiConfig,
@@ -145,6 +146,8 @@ class AppStore {
   /** Selected finding ids (deletion candidates). */
   selectedIds = $state<Set<string>>(new Set());
   cleaning = $state(false);
+  /** Set while the user asked a running cleanup to stop. */
+  cleanupCancelled = $state(false);
 
   /** Bumped on scope switch so transitions can reset. */
   treeVersion = $state(0);
@@ -160,6 +163,12 @@ class AppStore {
    * new scan is starting, so late events from the previous scan are dropped.
    */
   private scanEpoch = 0;
+  /**
+   * Set when the current scope's scan was cancelled (or never completed).
+   * Selecting the same disk then starts a fresh scan instead of being treated
+   * as a redundant scope switch and no-op-ing. Cleared when a scan starts.
+   */
+  private rescanRequested = true;
   /** Resolvers waiting for a specific scan's done event during a scope switch. */
   private scanStopWaiters = new Map<number, () => void>();
 
@@ -353,7 +362,14 @@ class AppStore {
   }
 
   private async startScope(id: string) {
-    if (id === this.scopeId && this.rootId && !this.scanning) return;
+    // Same scope already fully scanned and idle, with no rescan pending:
+    // nothing to do. A cancelled scan sets rescanRequested, so re-selecting
+    // the same disk (or pressing the home CTA) starts a fresh scan instead of
+    // being treated as a redundant scope switch and no-op-ing.
+    if (id === this.scopeId && this.rootId && !this.scanning && !this.rescanRequested) {
+      return;
+    }
+    this.rescanRequested = false;
 
     // Stop the current scan before switching: the backend rejects a second
     // concurrent start with "scan already running", and late batches from the
@@ -409,7 +425,16 @@ class AppStore {
   /** Cancel the running scan from the UI. */
   async cancelCurrentScan() {
     if (!this.scanning) return;
-    await cancelScan();
+    this.rescanRequested = true;
+    try {
+      await cancelScan();
+    } catch (error) {
+      // If the cancel call itself fails, do not optimistically flip state:
+      // the scan may still finish on its own, whose done event settles
+      // `scanning` either way.
+      this.toastError(t('toast.scanCancelFailed', [String(error)]));
+      return;
+    }
     this.scanning = false;
     this.toast(t('toast.scanCancelled'), 'info');
   }
@@ -694,7 +719,13 @@ class AppStore {
     if (event.epoch !== this.scanEpoch) return;
 
     this.scanning = false;
-    if (event.cancelled) return;
+    if (event.cancelled) {
+      // The current scope has no complete result; selecting it again must
+      // rescan rather than hit the redundant-scope early return.
+      this.rescanRequested = true;
+      return;
+    }
+    this.rescanRequested = false;
     if (this.analysedScan) return;
     this.analysedScan = true;
     await this.runAnalysis();
@@ -764,6 +795,7 @@ class AppStore {
     const targets = this.candidates;
     if (this.cleaning || targets.length === 0) return 0;
     this.cleaning = true;
+    this.cleanupCancelled = false;
 
     const paths = targets.map((f) => f.path);
     let results: DeleteResultItem[] = [];
@@ -776,6 +808,7 @@ class AppStore {
     }
 
     const removed = new Set<string>();
+    const cancelledPaths = new Set<string>();
     let bytes = 0;
     for (const result of results) {
       if (result.ok) {
@@ -784,6 +817,10 @@ class AppStore {
           removed.add(target.id);
           bytes += target.size;
         }
+      } else if (result.cancelled) {
+        // Stopped before the attempt: leave the row (and its selection)
+        // exactly as it was; it is neither a success nor a failure.
+        cancelledPaths.add(result.path);
       } else {
         this.toastError(t('toast.cannotDelete', [result.path, tr(result.error ?? '')]));
       }
@@ -791,17 +828,47 @@ class AppStore {
 
     this.pruneIds(removed);
     this.findings = this.findings.filter((f) => !removed.has(f.id));
-    this.selectedIds = new Set();
+    const wasCancelled = this.cleanupCancelled || cancelledPaths.size > 0;
+    // Keep selection only for items that were not attempted, so pressing
+    // "clean" again resumes with the remainder. Build from the original
+    // targets (which still exist as findings) instead of the filtered list.
+    const keptSelected = new Set<string>();
+    for (const target of targets) {
+      if (!removed.has(target.id) && cancelledPaths.has(target.path)) {
+        keptSelected.add(target.id);
+      }
+    }
+    this.selectedIds = keptSelected;
 
     this.cleaning = false;
+    this.cleanupCancelled = false;
     await this.loadHistory();
     await this.loadRoutines();
-    this.toast(
-      automatic
-        ? t('toast.autoCleanDone', [formatSize(bytes)])
-        : t('toast.cleanDone', [formatSize(bytes)])
-    );
+    if (wasCancelled) {
+      this.toast(
+        t('toast.cleanCancelled', [formatSize(bytes), String(cancelledPaths.size)]),
+        'info'
+      );
+    } else {
+      this.toast(
+        automatic
+          ? t('toast.autoCleanDone', [formatSize(bytes)])
+          : t('toast.cleanDone', [formatSize(bytes)])
+      );
+    }
     return bytes;
+  }
+
+  /** Stop the running interactive cleanup after its current item. */
+  async cancelCurrentCleanup() {
+    if (!this.cleaning) return;
+    this.cleanupCancelled = true;
+    try {
+      await cancelCleanup();
+    } catch {
+      // The batch may finish between the click and the call; the await on
+      // cleanPaths resolves normally either way.
+    }
   }
 
   /**

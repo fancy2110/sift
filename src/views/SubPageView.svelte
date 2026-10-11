@@ -40,6 +40,11 @@
   }
 
   async function confirmSift() {
+    // One button: while a cleanup runs it is the stop control.
+    if (store.cleaning) {
+      await store.cancelCurrentCleanup();
+      return;
+    }
     await store.clean(false);
   }
 
@@ -140,12 +145,13 @@
     <button
       type="button"
       class="sp-confirm"
-      disabled={store.selectedIds.size === 0 || store.cleaning}
+      class:sp-confirm-stop={store.cleaning}
+      disabled={!store.cleaning && store.selectedIds.size === 0}
       onclick={confirmSift}
     >
       {#if store.cleaning}
-        <span class="spin" style="display: inline-flex"><Icon name="refresh" size={14} /></span>
-        {t('sub.cleaning')}
+        <Icon name="x" size={14} stroke={2.4} />
+        {t('sub.stopClean')}
       {:else}
         <Icon name="trash" size={14} />
         {t('sub.confirm')}
@@ -656,6 +662,13 @@
     opacity: 0.45;
     cursor: default;
   }
+  /* Stop role: the same button while a cleanup runs. */
+  .sp-confirm-stop {
+    gap: 6px;
+    background: color-mix(in oklch, var(--color-danger) 16%, var(--color-surface-2));
+    color: var(--color-danger);
+    box-shadow: 0 14px 30px -16px color-mix(in oklch, var(--color-danger) 60%, transparent);
+  }
   .sp-tabbar {
     padding: 0 clamp(14px, 2.6vw, 32px);
     flex: none;
@@ -758,14 +771,6 @@
   }
   .status-link:hover {
     color: var(--color-fg);
-  }
-  .spin {
-    animation: spin 0.9s linear infinite;
-  }
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
   }
   .panel-empty {
     height: 100%;

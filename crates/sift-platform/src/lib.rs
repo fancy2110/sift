@@ -21,7 +21,7 @@ pub mod walk;
 pub mod watch;
 
 pub use dir::{DirReader, RawEntry, ReadErrorKind, ReaderKind};
-pub use trash::{trash_paths, TrashResult};
+pub use trash::{trash_paths, trash_paths_cancellable, TrashCancel, TrashResult};
 pub use volume::{device_id, is_same_volume, list_volumes, system_volume};
 pub use walk::walk_dirs;
 pub use watch::{watch_root, FsEvent, FsWatcherHandle};
