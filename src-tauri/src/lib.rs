@@ -15,7 +15,7 @@ mod tray;
 mod watcher;
 
 use analyze::AppServices;
-use disks::list_volumes;
+use disks::{home_dir, list_volumes};
 use scanner::{
     cancel_scan, list_dir_files, pause_scan, resolve_permission, resume_scan, scan_running,
     set_scan_focus, start_scan, ScanManager,
@@ -40,6 +40,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // volumes and scanning
             list_volumes,
+            home_dir,
             start_scan,
             cancel_scan,
             pause_scan,

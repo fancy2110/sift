@@ -17,6 +17,28 @@
     store.selectedIds = new Set();
   }
 
+  // Family-driven icon: never infer from a (possibly localized) path string.
+  function kindIcon(item: { kind: string; isDir: boolean; safety: string }): string {
+    switch (item.kind) {
+      case 'packageInstaller':
+        return 'download';
+      case 'archive':
+        return 'layers';
+      case 'trash':
+        return 'trash';
+      case 'log':
+        return 'info';
+      case 'duplicateGroup':
+        return 'layers';
+      case 'rebuildableCache':
+      case 'cacheDirectory':
+      case 'tempFile':
+        return 'bolt';
+      default:
+        return item.isDir ? 'folder' : item.safety === 'safe' ? 'bolt' : 'file';
+    }
+  }
+
   async function confirmSift() {
     await store.clean(false);
   }
@@ -84,6 +106,17 @@
 
   const tabIndex = { smart: 0, explorer: 1, history: 2, routines: 3 } as const;
   const pagerOffset = $derived(tabIndex[store.subTab] * (100 / 4));
+
+  // Escape dismisses the open context menu; without this the only way out is
+  // choosing an item.
+  $effect(() => {
+    if (!listCtx) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') listCtx = null;
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   const TABS: [SubTab, string, string][] = [
     ['smart', 'spark', t('sub.tab.smart')],
@@ -167,7 +200,7 @@
                 style="color: {item.safety === 'safe' ? 'var(--color-ok)' : 'var(--color-warn)'}"
               >
                 <Icon
-                  name={item.path.includes('Movie') || item.path.includes('Video') ? 'film' : item.safety === 'safe' ? 'bolt' : 'file'}
+                  name={kindIcon(item)}
                   size={16}
                 />
               </span>
@@ -345,6 +378,12 @@
           </div>
 
           {#if listCtx}
+            <button
+              type="button"
+              aria-label={t('common.close')}
+              class="list-ctx-backdrop"
+              onclick={() => (listCtx = null)}
+            ></button>
             <div
               class="list-ctx"
               style="left: {listCtx.x}px; top: {listCtx.y}px"
@@ -1116,7 +1155,7 @@
   }
   .list-ctx {
     position: absolute;
-    z-index: 40;
+    z-index: 41;
     width: 196px;
     padding: 5px;
     border-radius: 12px;
@@ -1126,6 +1165,17 @@
       0 2px 8px -2px oklch(0% 0 0 / 0.5),
       0 18px 44px -12px oklch(0% 0 0 / 0.6);
     transform-origin: top left;
+  }
+  .list-ctx-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    width: 100%;
+    height: 100%;
+    border: none;
+    padding: 0;
+    background: transparent;
+    cursor: default;
   }
   .list-ctx-item {
     display: flex;

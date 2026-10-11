@@ -53,6 +53,11 @@ export function listVolumes(): Promise<VolumeInfo[]> {
   return call<VolumeInfo[]>('list_volumes');
 }
 
+/** The user's home directory, or null when the platform cannot tell. */
+export function homeDir(): Promise<string | null> {
+  return call<string | null>('home_dir');
+}
+
 export function startScan(root: string, focus: string): Promise<number> {
   // Returns the scan epoch (P0-7); the mock transport reports the same shape.
   return call<number>('start_scan', { root, focus });

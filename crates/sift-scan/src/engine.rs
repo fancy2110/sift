@@ -45,7 +45,7 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use sift_core::id::{FileId, NodeKey};
@@ -106,8 +106,40 @@ pub struct ScanHandle {
     focus_generation: Arc<AtomicU64>,
     permission_tx: crossbeam_channel::Sender<PermissionDecision>,
     stop: Arc<AtomicBool>,
-    /// Set when the coordinator thread exits.
+    /// Set when the coordinator thread exits. Kept public for cheap polling;
+    /// [`ScanHandle::join`] blocks on the paired signal instead of spinning.
     pub finished: Arc<AtomicBool>,
+    completion: Arc<CompletionSignal>,
+}
+
+/// A parking-lot completion signal: waiters block on a condvar instead of
+/// burning a core with `yield_now` while a full-volume scan runs.
+struct CompletionSignal {
+    done: Mutex<bool>,
+    notified: Condvar,
+}
+
+impl CompletionSignal {
+    fn new() -> Self {
+        Self {
+            done: Mutex::new(false),
+            notified: Condvar::new(),
+        }
+    }
+
+    /// Idempotent; safe to call from every coordinator exit path.
+    fn mark(&self) {
+        let mut done = self.done.lock().unwrap();
+        *done = true;
+        self.notified.notify_all();
+    }
+
+    fn wait(&self) {
+        let mut done = self.done.lock().unwrap();
+        while !*done {
+            done = self.notified.wait(done).unwrap();
+        }
+    }
 }
 
 /// A cloneable control handle for a running scan.
@@ -242,11 +274,11 @@ impl ScanHandle {
         self.control().set_focus(focus);
     }
 
-    /// Block until the coordinator thread finishes. Returns the outcome.
+    /// Block until the coordinator finishes. Returns the outcome.
     pub fn join(&self) -> ScanOutcome {
-        while !self.finished.load(AtomicOrdering::SeqCst) {
-            std::thread::yield_now();
-        }
+        // Park on the condvar; a yield-loop here pins a (possibly main)
+        // thread at 100% CPU for the minutes a full-volume scan takes.
+        self.completion.wait();
         // The last event carries the outcome.
         let mut last = ScanOutcome::Failed;
         while let Ok(event) = self.events.try_recv() {
@@ -399,6 +431,7 @@ impl ScanEngine {
         let focus = Arc::new(Mutex::new(request.focus.clone()));
         let focus_generation = Arc::new(AtomicU64::new(0));
         let finished = Arc::new(AtomicBool::new(false));
+        let completion = Arc::new(CompletionSignal::new());
         let stop = Arc::new(AtomicBool::new(false));
 
         // One shared multi-producer/multi-consumer queue. Every idle worker
@@ -447,6 +480,7 @@ impl ScanEngine {
         let focus_co = Arc::clone(&focus);
         let focus_generation_co = Arc::clone(&focus_generation);
         let finished_co = Arc::clone(&finished);
+        let completion_co = Arc::clone(&completion);
         let stop_co = Arc::clone(&stop);
         std::thread::Builder::new()
             .name("sift-coordinator".into())
@@ -481,6 +515,7 @@ impl ScanEngine {
                     permission_rx,
                     stop: stop_co,
                     finished: finished_co,
+                    completion: completion_co,
                 });
             })?;
 
@@ -495,6 +530,7 @@ impl ScanEngine {
             permission_tx,
             stop: Arc::clone(&stop),
             finished,
+            completion,
         })
     }
 }
@@ -533,6 +569,8 @@ struct CoordinatorInputs {
     /// Set once the main walk finishes and `Finished` is published, even while
     /// the coordinator lingers for post-completion grants.
     finished: Arc<AtomicBool>,
+    /// Parks [`ScanHandle::join`] until `finished` flips.
+    completion: Arc<CompletionSignal>,
 }
 
 struct CoordinatorState {
@@ -650,6 +688,7 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         permission_rx,
         stop,
         finished,
+        completion,
     } = inputs;
 
     // Every path comparison below assumes one spelling per directory:
@@ -838,6 +877,7 @@ fn run_coordinator(inputs: CoordinatorInputs) {
     // The main walk is over even though this thread lingers; `join()` may
     // return and the UI may present results.
     finished.store(true, AtomicOrdering::SeqCst);
+    completion.mark();
 
     // Linger for post-completion authorization grants. Unauthorized dirs were
     // settled at zero during the walk; a grant now starts a small refresh walk,
@@ -2199,10 +2239,38 @@ mod tests {
     fn drain(handle: &ScanHandle) -> Vec<ScanEvent> {
         let mut events = Vec::new();
         while let Ok(event) = handle.events.recv() {
-            let is_finished = matches!(event, ScanEvent::Finished { .. });
+            let finished = matches!(event, ScanEvent::Finished { .. });
             events.push(event);
-            if is_finished {
+            if finished {
                 break;
+            }
+        }
+        events
+    }
+
+    /// Permission decisions can be handled by the coordinator's post-completion
+    /// linger loop, whose warning/denied-close can land *after* `Finished` (the
+    /// main walk is done but the thread waits on the permission channel). Drain
+    /// those trailing events with a bounded deadline instead of racing them.
+    fn drain_including_lingering(handle: &ScanHandle) -> Vec<ScanEvent> {
+        let mut events = drain(handle);
+        let deadline = Instant::now() + Duration::from_millis(1_500);
+        while Instant::now() < deadline {
+            match handle.events.recv_timeout(Duration::from_millis(50)) {
+                Ok(event) => events.push(event),
+                Err(_) => {
+                    // Stop once the denied close and its warning are both seen,
+                    // so the common path never pays the full deadline.
+                    let closed = events
+                        .iter()
+                        .any(|e| matches!(e, ScanEvent::DirectoryClosed { .. }));
+                    let warned = events
+                        .iter()
+                        .any(|e| matches!(e, ScanEvent::Warning { .. }));
+                    if closed && warned {
+                        break;
+                    }
+                }
             }
         }
         events
@@ -2455,7 +2523,7 @@ mod tests {
             .control()
             .resolve_permission(key.to_string(), false, None)
             .unwrap();
-        let events = drain(&handle);
+        let events = drain_including_lingering(&handle);
 
         assert!(events.iter().any(|e| matches!(
             e,

@@ -28,9 +28,72 @@ pub fn start(app: &AppHandle) {
         .expect("spawn scheduler");
 }
 
-fn run(app: AppHandle) {
-    let mut last_fired = String::new();
+/// What the scheduler should do on one wake-up. Kept pure so missed-slot
+/// handling can be tested without a clock or a running app.
+#[derive(Debug, PartialEq, Eq)]
+enum SchedAction {
+    /// Nothing due (switch off, wrong hour, or already fired for this slot).
+    Wait,
+    /// The current local day's slot is due now.
+    RunToday { day_key: String },
+    /// The app was closed (or asleep) through the slot and restarted inside
+    /// the catch-up window; run once and stamp the missed day.
+    RunMissed { day_key: String },
+    /// The missed slot is older than the catch-up window; stamp it so the
+    /// same day is not reconsidered, but do not run an unattended cleanup.
+    SkipMissed { day_key: String },
+}
 
+/// Decide the scheduler action.
+///
+/// * `now_ordinal` / `now_hour` — local calendar day key (`year-ordinal`) and
+///   hour of the wake-up.
+/// * `scheduled_hour` — configured slot hour.
+/// * `catchup_hours` — how long after the slot a missed run may still be made
+///   up; 0 disables catch-up.
+/// * `last_run` — persisted day key of the previous successful fire.
+fn decide(
+    now_ordinal: i32,
+    now_hour: u32,
+    scheduled_hour: u32,
+    catchup_hours: u32,
+    last_run: Option<&str>,
+) -> SchedAction {
+    let day_key = ordinal_key(now_ordinal);
+
+    // Already handled today.
+    if last_run == Some(day_key.as_str()) {
+        return SchedAction::Wait;
+    }
+
+    if now_hour == scheduled_hour {
+        return SchedAction::RunToday { day_key };
+    }
+
+    if now_hour > scheduled_hour {
+        // Today's slot passed while the process was not alive (or not firing).
+        // Make it up once if still inside the catch-up window.
+        let hours_after_slot = now_hour - scheduled_hour;
+        if catchup_hours > 0 && hours_after_slot <= catchup_hours {
+            return SchedAction::RunMissed { day_key };
+        }
+        if catchup_hours == 0 || hours_after_slot > catchup_hours {
+            return SchedAction::SkipMissed { day_key };
+        }
+    }
+
+    // now_hour < scheduled_hour: the slot is still ahead today.
+    SchedAction::Wait
+}
+
+/// Convert a CE-ordinal day number to the persisted `year-ordinal` key.
+fn ordinal_key(ordinal: i32) -> String {
+    chrono::NaiveDate::from_num_days_from_ce_opt(ordinal)
+        .map(|date| format!("{}-{}", date.year(), date.ordinal()))
+        .unwrap_or_default()
+}
+
+fn run(app: AppHandle) {
     loop {
         std::thread::sleep(Duration::from_secs(20));
 
@@ -46,18 +109,34 @@ fn run(app: AppHandle) {
         }
 
         let now = chrono::Local::now();
-        if now.hour() != settings.monitor.scheduled_hour || now.minute() >= 2 {
-            continue;
-        }
+        let ordinal = now.date_naive().num_days_from_ce();
+        let action = decide(
+            ordinal,
+            now.hour(),
+            settings.monitor.scheduled_hour,
+            settings.monitor.scheduled_catchup_hours,
+            settings.monitor.scheduled_last_run.as_deref(),
+        );
 
-        let day_key = format!("{}-{}", now.year(), now.ordinal());
-        if day_key == last_fired {
-            continue;
-        }
-        last_fired = day_key.clone();
+        let day_key = match &action {
+            SchedAction::Wait => continue,
+            SchedAction::RunToday { day_key }
+            | SchedAction::RunMissed { day_key }
+            | SchedAction::SkipMissed { day_key } => day_key.clone(),
+        };
 
-        if let Err(error) = run_daily(&app) {
-            eprintln!("scheduled cleanup failed: {error}");
+        // Stamp before running: a crash during a multi-minute scan must not
+        // make the next wake-up start a second unattended cleanup.
+        let stamped = day_key.clone();
+        services.store.update_settings(|settings| {
+            settings.monitor.scheduled_last_run = Some(stamped);
+        });
+        let _ = services.store.flush_if_dirty();
+
+        if matches!(action, SchedAction::RunToday { .. } | SchedAction::RunMissed { .. }) {
+            if let Err(error) = run_daily(&app) {
+                eprintln!("scheduled cleanup failed: {error}");
+            }
         }
     }
 }
@@ -82,7 +161,7 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
         std::thread::sleep(Duration::from_secs(5));
         waited += 5;
         if waited > 60 * 60 {
-            return Err("scan timed out".into());
+            return Err("err.scanTimedOut".into());
         }
     }
 
@@ -169,5 +248,60 @@ mod tests {
     fn missing_home_selects_nothing() {
         let entries = vec![entry("a", "/Users/me/a", Safety::Safe, true)];
         assert!(select_approved_paths(&entries, None).is_empty());
+    }
+
+    #[test]
+    fn fires_in_the_scheduled_hour_once_per_day() {
+        // 2026-03-10 is ordinal 739_138 (2026-01-01 = 739_140 - 69).
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 3, 10)
+            .unwrap()
+            .num_days_from_ce();
+        assert_eq!(
+            decide(day, 4, 4, 12, None),
+            SchedAction::RunToday {
+                day_key: "2026-69".into()
+            }
+        );
+        assert_eq!(
+            decide(day, 4, 4, 12, Some("2026-69")),
+            SchedAction::Wait,
+            "a second wake in the same hour must not fire again"
+        );
+    }
+
+    #[test]
+    fn missed_slot_is_made_up_inside_the_catchup_window() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 3, 10)
+            .unwrap()
+            .num_days_from_ce();
+        // App starts at 09:00; slot was 04:00, 5 hours ago, window 12h.
+        assert_eq!(
+            decide(day, 9, 4, 12, Some("2026-68")),
+            SchedAction::RunMissed {
+                day_key: "2026-69".into()
+            }
+        );
+        // Outside the window: skip but stamp, so it is never reconsidered.
+        assert_eq!(
+            decide(day, 20, 4, 12, Some("2026-68")),
+            SchedAction::SkipMissed {
+                day_key: "2026-69".into()
+            }
+        );
+        // Catch-up disabled: the missed slot is simply skipped.
+        assert_eq!(
+            decide(day, 9, 4, 0, Some("2026-68")),
+            SchedAction::SkipMissed {
+                day_key: "2026-69".into()
+            }
+        );
+    }
+
+    #[test]
+    fn before_the_slot_it_waits() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 3, 10)
+            .unwrap()
+            .num_days_from_ce();
+        assert_eq!(decide(day, 2, 4, 12, None), SchedAction::Wait);
     }
 }

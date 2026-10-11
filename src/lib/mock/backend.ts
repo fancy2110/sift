@@ -509,6 +509,9 @@ export function createMockBackend(bus: EventBus): MockBackend {
         case 'list_volumes':
           resolve(VOLUMES as unknown as T);
           break;
+        case 'home_dir':
+          resolve('/Users/demo' as unknown as T);
+          break;
         case 'start_scan':
           resolve(startScan(String(args.root ?? '/')) as unknown as T);
           break;

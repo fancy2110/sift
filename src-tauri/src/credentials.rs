@@ -186,11 +186,33 @@ mod imp {
     pub fn set_token(token: &str) -> Result<(), String> {
         let path = token_path().ok_or_else(|| "no data directory".to_string())?;
         fs::create_dir_all(path.parent().unwrap()).map_err(|err| err.to_string())?;
-        fs::write(&path, token).map_err(|err| err.to_string())?;
+        // Create the file with 0600 *before* anything sensitive is written:
+        // writing first and chmod-ing afterwards leaves a world-readable token
+        // in the file system for a (short) window, and umask never loosens an
+        // explicit mode set at creation.
+        use std::io::Write;
         #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)
+                .and_then(|mut file| {
+                    file.write_all(token.as_bytes())?;
+                    file.sync_all()
+                })
+                .map_err(|err| err.to_string())?;
+            // Defense in depth for a pre-existing file with looser bits:
+            // set the mode explicitly if creation kept the old one.
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(&path, token).map_err(|err| err.to_string())?;
         }
         Ok(())
     }

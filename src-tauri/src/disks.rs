@@ -44,6 +44,14 @@ pub fn list_volumes() -> Vec<VolumeInfo> {
         .collect()
 }
 
+/// The current user's home directory, or null when the platform cannot
+/// determine it. The front end uses it for home-scoped UI; the backend's
+/// safety checks keep resolving the home directory independently.
+#[command]
+pub fn home_dir() -> Option<String> {
+    dirs::home_dir().map(|path| path.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,12 +2,21 @@
   import Icon from './Icon.svelte';
   import { store } from '../store.svelte';
   import { fly } from 'svelte/transition';
+
+  const toneIcon = { success: 'check', error: 'alert', info: 'info' } as const;
+  const toneColor = {
+    success: 'var(--color-ok)',
+    error: 'var(--color-danger)',
+    info: 'var(--color-warn)'
+  } as const;
 </script>
 
 <div class="pointer-events-none fixed bottom-6 right-6 z-50 flex flex-col items-end gap-2">
   {#each store.toasts as toast (toast.id)}
     <div
       class="pointer-events-auto flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-[13px]"
+      role="status"
+      aria-live={toast.tone === 'error' ? 'assertive' : 'polite'}
       style="
         background: color-mix(in oklch, var(--color-surface-2) 94%, transparent);
         border-color: var(--color-border-strong);
@@ -18,8 +27,8 @@
       in:fly={{ duration: 200, x: 40 }}
       out:fly={{ duration: 220, x: 60 }}
     >
-      <span class="text-[var(--color-ok)]">
-        <Icon name="check" size={15} />
+      <span style="color: {toneColor[toast.tone]}">
+        <Icon name={toneIcon[toast.tone]} size={15} />
       </span>
       {toast.message}
     </div>

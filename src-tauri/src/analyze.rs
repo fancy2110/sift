@@ -228,10 +228,15 @@ pub(crate) fn analyze_current_with(
 
     let cleanable = services.store.cleanable();
     {
-        // Remember every analyzed item by its real path so clean_paths can
-        // distinguish a confirmed review item from an unknown path.
+        // Merge the fresh report into the remembered path map instead of
+        // replacing it. Clearing first made every item that disappeared from
+        // one analysis (a different focus subtree, a transient enumeration
+        // error, a rule threshold change) temporarily un-cleanable: the user
+        // sees the row from a previous scan but the cleanup guard refuses an
+        // "unknown path". Old entries are only evicted when their path shows
+        // up in a new report with a different verdict, so stale safety claims
+        // can never survive an explicit re-analysis.
         let mut last_report = services.last_report.lock().unwrap();
-        last_report.clear();
         for item in &report.items {
             last_report.insert(
                 item.candidate.path.clone(),
