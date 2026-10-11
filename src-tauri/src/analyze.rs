@@ -60,7 +60,12 @@ pub struct AppServices {
 
 impl AppServices {
     pub fn new() -> Self {
+        let open_started = std::time::Instant::now();
         let (store, warnings) = Store::open_default();
+        crate::startup_trace::mark(&format!(
+            "services:store-open ({} ms)",
+            open_started.elapsed().as_millis()
+        ));
         Self {
             store: Arc::new(store),
             monitor: Mutex::new(None),

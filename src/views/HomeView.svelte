@@ -2,12 +2,33 @@
   import { store } from '../lib/store.svelte';
   import { formatSize, formatSizeParts } from '../lib/format';
   import Icon from '../lib/components/Icon.svelte';
-  import SettingsDialog from '../lib/components/SettingsDialog.svelte';
+  import { onMount } from 'svelte';
   import { fade, fly, scale } from 'svelte/transition';
+  import type { Component } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import { t } from '../lib/i18n.svelte';
+  import { firstBoot } from '../lib/startup';
 
   let reviewRequested = $state(false);
+
+  // Cold-start perceived speed: the staggered intro (last card animates in at
+  // 620 ms + 520 ms) delays the fully visible home screen by over a second.
+  // On the first mount of the process every intro plays instantly; later
+  // navigations into Home keep the designed motion.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const intro = (params: any): any =>
+    firstBoot.value ? { duration: 0, delay: 0 } : params;
+
+  // The settings sheet is a secondary surface. Load its component only when
+  // first opened so it stays out of the startup chunk.
+  let SettingsDialog = $state<Component | null>(null);
+  $effect(() => {
+    if (store.settingsOpen && !SettingsDialog) {
+      import('../lib/components/SettingsDialog.svelte').then((module) => {
+        SettingsDialog = module.default;
+      });
+    }
+  });
 
   // Measure the whole text stack so the dashed ring wraps everything (eyebrow,
   // number, state, button) with generous padding — adapting to the real content.
@@ -105,15 +126,21 @@
     const rest = (secs % 60).toString().padStart(2, '0');
     return `${mins}:${rest}`;
   });
+
+  // Transitions were configured during component init; clear the one-shot
+  // flag after mount so navigating back to Home later plays the real intro.
+  onMount(() => {
+    firstBoot.value = false;
+  });
 </script>
 
 <div class="hub">
   <!-- corner meta -->
-  <div class="hub-meta hub-meta-l" in:fly={{ y: -8, duration: 420, delay: 60 }}>
+  <div class="hub-meta hub-meta-l" in:fly={intro({ y: -8, duration: 420, delay: 60 })}>
     <span class="hub-mark"><Icon name="spark" size={13} /></span>
     {t('home.siftAi')}
   </div>
-  <div class="hub-meta hub-meta-r" in:fly={{ y: -8, duration: 420, delay: 60 }}>
+  <div class="hub-meta hub-meta-r" in:fly={intro({ y: -8, duration: 420, delay: 60 })}>
     <span class="engine-dot"></span>
     {t('home.engineActive')}
     <button
@@ -138,7 +165,7 @@
     <div
       class="ring-stage"
       class:scanning={store.scanning}
-      in:fade={{ duration: 640, delay: 120 }}
+      in:fade={intro({ duration: 640, delay: 120 })}
       aria-hidden="true"
     >
       {#if store.scanning}
@@ -200,7 +227,7 @@
       class="hub-stack"
       bind:this={stackEl}
     >
-    <p class="hub-eyebrow" in:fade={{ duration: 480, delay: 120 }}>
+    <p class="hub-eyebrow" in:fade={intro({ duration: 480, delay: 120 })}>
       {store.scanning
         ? (store.progress.awaiting > 0
             ? t('home.awaitingAuth')
@@ -219,7 +246,7 @@
       {/if}
     {:else}
       {@const main = formatSizeParts(store.totalReclaimable)}
-      <h1 class="hub-total num" in:fly={{ y: 16, duration: 620, delay: 180, easing: cubicOut }}>
+      <h1 class="hub-total num" in:fly={intro({ y: 16, duration: 620, delay: 180, easing: cubicOut })}>
         {main.value}<span class="hub-unit">{main.unit}</span>
       </h1>
     {/if}
@@ -243,7 +270,7 @@
       class:hub-cta-stop={store.scanning}
       type="button"
       onclick={handleCta}
-      in:scale={{ duration: 480, delay: 380, easing: cubicOut }}
+      in:scale={intro({ duration: 480, delay: 380, easing: cubicOut })}
     >
       {#if store.scanning}
         <Icon name="x" size={15} stroke={2.4} />
@@ -258,28 +285,28 @@
 
   <!-- entry cards -->
   <div class="hub-cards">
-    <button class="hub-card" onclick={() => store.go('dashboard')} in:fly={{ y: 26, duration: 520, delay: 420, easing: cubicOut }}>
+    <button class="hub-card" onclick={() => store.go('dashboard')} in:fly={intro({ y: 26, duration: 520, delay: 420, easing: cubicOut })}>
       <span class="card-glyph glyph-blue"><Icon name="gauge" size={19} /></span>
       <span class="card-title">{t('home.card.dashboard')}</span>
       <span class="card-big num">{formatSize(store.totalReclaimable)}</span>
       <span class="card-sub">{t('home.card.dashboardSub')}</span>
     </button>
 
-    <button class="hub-card" onclick={() => store.goSub('smart')} in:fly={{ y: 26, duration: 520, delay: 480, easing: cubicOut }}>
+    <button class="hub-card" onclick={() => store.goSub('smart')} in:fly={intro({ y: 26, duration: 520, delay: 480, easing: cubicOut })}>
       <span class="card-glyph glyph-violet"><Icon name="brain" size={19} /></span>
       <span class="card-title">{t('home.card.smart')}</span>
       <span class="card-big num">{formatSize(store.safeReclaimable)}</span>
       <span class="card-sub">{t('home.card.smartSub', [store.pendingReviewCount])}</span>
     </button>
 
-    <button class="hub-card" onclick={() => store.goSub('explorer')} in:fly={{ y: 26, duration: 520, delay: 540, easing: cubicOut }}>
+    <button class="hub-card" onclick={() => store.goSub('explorer')} in:fly={intro({ y: 26, duration: 520, delay: 540, easing: cubicOut })}>
       <span class="card-glyph glyph-blue"><Icon name="layers" size={19} /></span>
       <span class="card-title">{t('home.card.explorer')}</span>
       <span class="card-big">{t('home.browse')}</span>
       <span class="card-sub">{t('home.card.explorerSub')}</span>
     </button>
 
-    <button class="hub-card" onclick={() => store.goSub('history')} in:fly={{ y: 26, duration: 520, delay: 620, easing: cubicOut }}>
+    <button class="hub-card" onclick={() => store.goSub('history')} in:fly={intro({ y: 26, duration: 520, delay: 620, easing: cubicOut })}>
       <span class="card-glyph glyph-emerald"><Icon name="clock" size={19} /></span>
       <span class="card-title">{t('home.card.history')}</span>
       <span class="card-big num">{formatSize(store.allTimeReclaimed)}</span>
@@ -287,7 +314,10 @@
     </button>
   </div>
 
-  <SettingsDialog />
+  {#if SettingsDialog}
+    {@const SettingsSheet = SettingsDialog}
+    <SettingsSheet />
+  {/if}
 </div>
 
 <style>
