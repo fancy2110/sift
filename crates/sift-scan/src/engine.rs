@@ -594,6 +594,9 @@ struct CoordinatorState {
     /// Highest coverage published so far; keeps the percent monotonic even
     /// when listing an open directory discovers a large new subtree.
     percent_peak: f64,
+    /// Whether the initial 0%-ish progress frame after dispatching the first
+    /// jobs has already been emitted.
+    initial_progress_sent: bool,
     seq: u64,
     in_flight: usize,
     started: Instant,
@@ -721,6 +724,7 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         open_dirs: seed_open,
         discovered_dirs: seed_discovered,
         percent_peak: 0.0,
+        initial_progress_sent: false,
         seq: 0,
         in_flight: 0,
         started: Instant::now(),
@@ -1004,6 +1008,17 @@ fn coordinator_loop(
             state.in_flight += 1;
         }
 
+        // Emit an initial progress frame right after the first jobs are
+        // dispatched, before any directory read returns. Without this the UI
+        // stays frozen while a worker is blocked inside the first (possibly
+        // very large or permission-gated) readdir, which reads as "nothing is
+        // happening for the first few seconds".
+        if !state.initial_progress_sent {
+            state.initial_progress_sent = true;
+            flush_progress(state, tree);
+            state.last_flush = Instant::now();
+        }
+
         if state.in_flight == 0 {
             if state.paused {
                 // Paused with every in-flight job settled. Do not treat the
@@ -1101,6 +1116,12 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
                         child_fds,
                     );
                     drop(tree_guard);
+                    // A directory is one readdir work unit and is "done" the
+                    // moment its listing is in hand — not when its whole
+                    // subtree has closed (BFS makes that much later). Counting
+                    // reads keeps the progress fraction advancing steadily
+                    // with the workers instead of stalling then jumping.
+                    state.progress.dirs += 1;
                 }
                 // Parked pending a user decision: do not close the directory
                 // and do not touch pending_children, so its parent stays open.
@@ -1115,11 +1136,15 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
                         child_fds,
                         matches!(kind, ReadErrorKind::PermissionTcc),
                     );
+                    // The read finished (denied); count the unit so progress
+                    // is not held open forever by an unresolved directory.
+                    state.progress.dirs += 1;
                 }
                 // NotFound, Other, or any future variant: settle at zero.
                 Err(_) => {
                     let mut tree_guard = tree.lock().unwrap();
                     state.progress.denied += 1;
+                    state.progress.dirs += 1;
                     // Unreadable directory: mark it and settle it at zero.
                     if let Some(node) = tree_guard.node_mut(index) {
                         node.set_denied(true);
@@ -1775,7 +1800,9 @@ fn close_and_cascade(state: &mut CoordinatorState, tree: &mut ScanTree, index: u
         tree.close_dir(cursor);
         state.open_dirs = state.open_dirs.saturating_sub(1);
         state.dirty.insert(cursor);
-        state.progress.dirs += 1;
+        // `progress.dirs` already counted this directory when its readdir
+        // completed (in the Tracked result handler); closing is bookkeeping,
+        // not another work unit.
         newly_closed.push(ClosedDir::new(
             key.to_string(),
             final_size.logical,
