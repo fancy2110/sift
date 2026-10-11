@@ -241,6 +241,16 @@
     >
       {store.scanning ? t('home.ctaScanning') : t('home.ctaScan')}
     </button>
+    {#if store.scanning}
+      <button
+        class="hub-stop"
+        type="button"
+        onclick={() => store.cancelCurrentScan()}
+      >
+        <Icon name="x" size={13} stroke={2.2} />
+        {t('home.stopScan')}
+      </button>
+    {/if}
     </div>
    </div>
   </div>
@@ -563,6 +573,30 @@
   .hub-cta:focus-visible {
     outline: 2px solid color-mix(in oklch, var(--color-accent) 70%, transparent);
     outline-offset: 3px;
+  }
+  .hub-stop {
+    margin-top: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 14px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--color-muted);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .hub-stop:hover {
+    color: var(--color-danger);
+    border-color: color-mix(in oklch, var(--color-danger) 55%, transparent);
+    background: color-mix(in oklch, var(--color-danger) 8%, transparent);
+  }
+  .hub-stop:active {
+    transform: translateY(0.5px);
   }
 
   .hub-cards {

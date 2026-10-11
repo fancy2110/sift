@@ -4,6 +4,8 @@
 //! erased, and every failure is reported per item so one locked file cannot
 //! block the rest of a batch.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +18,10 @@ pub struct TrashResult {
     pub path: PathBuf,
     pub ok: bool,
     pub error: Option<String>,
+    /// True when the batch stopped *before* this path because the caller
+    /// requested cancellation. Such items were never attempted and remain on
+    /// disk, unlike a failed removal.
+    pub cancelled: bool,
 }
 
 impl TrashResult {
@@ -26,6 +32,7 @@ impl TrashResult {
             path,
             ok: true,
             error: None,
+            cancelled: false,
         }
     }
 
@@ -35,7 +42,47 @@ impl TrashResult {
             path,
             ok: false,
             error: Some(error.into()),
+            cancelled: false,
         }
+    }
+
+    /// An item never attempted because its batch was cancelled.
+    pub fn cancelled(path: PathBuf) -> Self {
+        Self {
+            path,
+            ok: false,
+            error: Some("err.cleanupCancelled".into()),
+            cancelled: true,
+        }
+    }
+}
+
+/// A cooperative cancellation flag shared with a running trash batch.
+///
+/// Deletion cannot be aborted mid-system-call: once `trash::delete` handed a
+/// path to Finder/Explorer, that one item is moving to the trash and the
+/// result must be observed. The flag is therefore checked **between** items,
+/// which is the only safe granularity. A batch of thousands of small files
+/// stops within one item of the flag flipping; an individual Finder Apple
+/// Event on a network volume still runs to completion.
+#[derive(Clone, Default)]
+pub struct TrashCancel {
+    stop: Arc<AtomicBool>,
+}
+
+impl TrashCancel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ask every batch holding a clone to stop after the in-flight item.
+    pub fn cancel(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether cancellation has been requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
     }
 }
 
@@ -46,11 +93,44 @@ impl TrashResult {
 /// this function does not re-check, so it is also the safety net for the
 /// backend.
 pub fn trash_paths(paths: &[PathBuf]) -> Vec<TrashResult> {
+    trash_paths_cancellable(paths, None)
+}
+
+/// Like [`trash_paths`], but stops between items once `cancel` is set.
+///
+/// Paths not yet attempted come back as [`TrashResult::cancelled`]. The result
+/// vector always has one entry per input path (in the original order), so a
+/// position-based zip alignment cannot desync.
+pub fn trash_paths_cancellable(
+    paths: &[PathBuf],
+    cancel: Option<&TrashCancel>,
+) -> Vec<TrashResult> {
+    trash_paths_impl(paths, cancel, |path| {
+        trash::delete(path).map_err(|err| err.to_string())
+    })
+}
+
+/// Core batch loop with the per-item removal injected, so the cancellation
+/// contract (order, one result per input, stop-between-items) can be tested
+/// without driving the platform trash (which needs Finder/Explorer access).
+fn trash_paths_impl<F>(
+    paths: &[PathBuf],
+    cancel: Option<&TrashCancel>,
+    delete_one: F,
+) -> Vec<TrashResult>
+where
+    F: Fn(&Path) -> Result<(), String>,
+{
     paths
         .iter()
-        .map(|path| match trash::delete(path) {
-            Ok(()) => TrashResult::success(path.clone()),
-            Err(err) => TrashResult::failure(path.clone(), err.to_string()),
+        .map(|path| {
+            if cancel.is_some_and(TrashCancel::is_cancelled) {
+                return TrashResult::cancelled(path.clone());
+            }
+            match delete_one(path) {
+                Ok(()) => TrashResult::success(path.clone()),
+                Err(err) => TrashResult::failure(path.clone(), err),
+            }
         })
         .collect()
 }
@@ -80,6 +160,102 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(!results[0].ok);
         assert!(results[0].error.is_some());
+        assert!(!results[0].cancelled);
+    }
+
+    #[test]
+    fn cancellation_leaves_every_remaining_path_untouched() {
+        // An injected deleter records attempts but does not touch the real
+        // platform trash (which needs Finder/Explorer permission).
+        let attempted = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let attempted2 = attempted.clone();
+        let fake_delete = move |path: &Path| {
+            attempted2.lock().unwrap().push(path.to_path_buf());
+            Ok(())
+        };
+        let paths = vec![PathBuf::from("/tmp/sift-a"), PathBuf::from("/tmp/sift-b")];
+
+        let cancel = TrashCancel::new();
+        cancel.cancel();
+        let results = trash_paths_impl(&paths, Some(&cancel), fake_delete);
+
+        assert_eq!(results.len(), 2, "one result per input, in order");
+        for result in &results {
+            assert!(!result.ok);
+            assert!(result.cancelled);
+        }
+        assert!(
+            attempted.lock().unwrap().is_empty(),
+            "no item may be attempted after cancellation"
+        );
+    }
+
+    #[test]
+    fn cancellation_after_some_items_keeps_order_and_shape() {
+        // First item succeeds; the fake deleter then flips cancel. The flag is
+        // polled before every following item, so both remaining items come back
+        // un-attempted in their original positions.
+        let paths = vec![
+            PathBuf::from("/tmp/sift-ok"),
+            PathBuf::from("/tmp/sift-b"),
+            PathBuf::from("/tmp/sift-c"),
+        ];
+        let cancel = TrashCancel::new();
+        let cancel2 = cancel.clone();
+        let attempted = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let attempted2 = attempted.clone();
+        let fake_delete = move |path: &Path| {
+            attempted2.lock().unwrap().push(path.to_path_buf());
+            if path.ends_with("sift-ok") {
+                cancel2.cancel();
+            }
+            Ok(())
+        };
+        let results = trash_paths_impl(&paths, Some(&cancel), fake_delete);
+        assert_eq!(results.len(), 3);
+        assert!(results[0].ok);
+        assert!(!results[0].cancelled);
+        assert!(!results[1].ok && results[1].cancelled);
+        assert!(!results[2].ok && results[2].cancelled);
+        assert_eq!(
+            *attempted.lock().unwrap(),
+            vec![PathBuf::from("/tmp/sift-ok")],
+            "only the first item is attempted"
+        );
+    }
+
+    #[test]
+    fn a_per_item_failure_is_not_a_cancellation() {
+        // Without a cancel token, the second item's failure is reported normally
+        // and processing continues to the third.
+        let paths = vec![
+            PathBuf::from("/tmp/sift-ok"),
+            PathBuf::from("/tmp/sift-missing"),
+            PathBuf::from("/tmp/sift-rest"),
+        ];
+        let fake_delete = |path: &Path| {
+            if path.ends_with("sift-missing") {
+                Err("not found".to_string())
+            } else {
+                Ok(())
+            }
+        };
+        let results = trash_paths_impl(&paths, None, fake_delete);
+        assert!(results[0].ok);
+        assert!(!results[1].ok);
+        assert!(
+            !results[1].cancelled,
+            "a failure is distinct from cancellation"
+        );
+        assert!(results[2].ok, "a failure never aborts the rest of the batch");
+    }
+
+    #[test]
+    fn without_a_cancel_token_every_item_is_attempted() {
+        let paths = vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")];
+        let results = trash_paths_impl(&paths, None, |_| Ok(()));
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.ok && !result.cancelled));
     }
 
     #[test]
@@ -100,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires macOS Finder Automation permission"]
+    #[ignore = "requires macOS Finder Automation (System Settings → Privacy → Automation) permission"]
     fn batch_preserves_order_and_independence() {
         let base = std::env::temp_dir().join(format!("sift-trash-batch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);

@@ -2,6 +2,7 @@ import { pickDirectory } from './dialog';
 import { isTauri } from './runtime';
 import {
   analyzeCurrent,
+  cancelCleanup,
   cancelScan,
   cleanPaths,
   getAiConfig,
@@ -145,6 +146,8 @@ class AppStore {
   /** Selected finding ids (deletion candidates). */
   selectedIds = $state<Set<string>>(new Set());
   cleaning = $state(false);
+  /** Set while the user asked a running cleanup to stop. */
+  cleanupCancelled = $state(false);
 
   /** Bumped on scope switch so transitions can reset. */
   treeVersion = $state(0);
@@ -764,6 +767,7 @@ class AppStore {
     const targets = this.candidates;
     if (this.cleaning || targets.length === 0) return 0;
     this.cleaning = true;
+    this.cleanupCancelled = false;
 
     const paths = targets.map((f) => f.path);
     let results: DeleteResultItem[] = [];
@@ -776,6 +780,7 @@ class AppStore {
     }
 
     const removed = new Set<string>();
+    const cancelledPaths = new Set<string>();
     let bytes = 0;
     for (const result of results) {
       if (result.ok) {
@@ -784,6 +789,10 @@ class AppStore {
           removed.add(target.id);
           bytes += target.size;
         }
+      } else if (result.cancelled) {
+        // Stopped before the attempt: leave the row (and its selection)
+        // exactly as it was; it is neither a success nor a failure.
+        cancelledPaths.add(result.path);
       } else {
         this.toastError(t('toast.cannotDelete', [result.path, tr(result.error ?? '')]));
       }
@@ -791,17 +800,47 @@ class AppStore {
 
     this.pruneIds(removed);
     this.findings = this.findings.filter((f) => !removed.has(f.id));
-    this.selectedIds = new Set();
+    const wasCancelled = this.cleanupCancelled || cancelledPaths.size > 0;
+    // Keep selection only for items that were not attempted, so pressing
+    // "clean" again resumes with the remainder. Build from the original
+    // targets (which still exist as findings) instead of the filtered list.
+    const keptSelected = new Set<string>();
+    for (const target of targets) {
+      if (!removed.has(target.id) && cancelledPaths.has(target.path)) {
+        keptSelected.add(target.id);
+      }
+    }
+    this.selectedIds = keptSelected;
 
     this.cleaning = false;
+    this.cleanupCancelled = false;
     await this.loadHistory();
     await this.loadRoutines();
-    this.toast(
-      automatic
-        ? t('toast.autoCleanDone', [formatSize(bytes)])
-        : t('toast.cleanDone', [formatSize(bytes)])
-    );
+    if (wasCancelled) {
+      this.toast(
+        t('toast.cleanCancelled', [formatSize(bytes), String(cancelledPaths.size)]),
+        'info'
+      );
+    } else {
+      this.toast(
+        automatic
+          ? t('toast.autoCleanDone', [formatSize(bytes)])
+          : t('toast.cleanDone', [formatSize(bytes)])
+      );
+    }
     return bytes;
+  }
+
+  /** Stop the running interactive cleanup after its current item. */
+  async cancelCurrentCleanup() {
+    if (!this.cleaning) return;
+    this.cleanupCancelled = true;
+    try {
+      await cancelCleanup();
+    } catch {
+      // The batch may finish between the click and the call; the await on
+      // cleanPaths resolves normally either way.
+    }
   }
 
   /**
