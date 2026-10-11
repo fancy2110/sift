@@ -53,9 +53,12 @@ import type {
 } from './types';
 import { t, tr, renderStoreWarning } from './i18n.svelte';
 
+export type ToastTone = 'success' | 'error' | 'info';
+
 export interface Toast {
   id: number;
   message: string;
+  tone: ToastTone;
 }
 
 /**
@@ -307,7 +310,7 @@ class AppStore {
     this.started = true;
 
     this.browserMode = !isTauri();
-    if (this.browserMode) this.toast(t('toast.browserMode'));
+    if (this.browserMode) this.toast(t('toast.browserMode'), 'info');
 
     await Promise.all([
       onScanBatch((batch) => this.handleBatch(batch)),
@@ -328,7 +331,7 @@ class AppStore {
     }
 
     for (const warning of await takeStoreWarnings()) {
-      this.toast(renderStoreWarning(warning));
+      this.toast(renderStoreWarning(warning), 'info');
     }
 
     this.volumes = await listVolumes();
@@ -372,7 +375,7 @@ class AppStore {
       epoch = await startScan(root, root);
     } catch (error) {
       this.scanning = false;
-      this.toast(t('toast.scanStartFailed', [String(error)]));
+      this.toastError(t('toast.scanStartFailed', [String(error)]));
       return;
     }
     this.scanEpoch = epoch;
@@ -408,7 +411,7 @@ class AppStore {
     if (!this.scanning) return;
     await cancelScan();
     this.scanning = false;
-    this.toast(t('toast.scanCancelled'));
+    this.toast(t('toast.scanCancelled'), 'info');
   }
 
   private resetScanState() {
@@ -507,10 +510,10 @@ class AppStore {
     };
     switch (data.kind) {
       case 'notify':
-        this.toast(t('toast.lowSpace'));
+        this.toast(t('toast.lowSpace'), 'info');
         break;
       case 'confirmationNeeded':
-        this.toast(t('toast.confirmationNeeded'));
+        this.toast(t('toast.confirmationNeeded'), 'info');
         break;
       case 'cleanupFinished': {
         const removed = new Set<string>();
@@ -534,7 +537,7 @@ class AppStore {
         break;
       }
       case 'warning':
-        if (data.message) this.toast(tr(data.message));
+        if (data.message) this.toast(tr(data.message), 'info');
         break;
       default:
         break;
@@ -627,14 +630,14 @@ class AppStore {
     try {
       picked = await pickDirectory(req.path);
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
       return;
     }
     // Panel cancelled: stay parked.
     if (!picked) return;
 
     if (!pathIsWithin(req.path, picked)) {
-      this.toast(t('permission.mismatch'));
+      this.toastError(t('permission.mismatch'));
       return;
     }
 
@@ -643,7 +646,7 @@ class AppStore {
     try {
       await resolvePermission(req.id, true, picked);
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
       return;
     }
     const covered = this.permissionRequests.filter((other) =>
@@ -658,7 +661,7 @@ class AppStore {
     try {
       await resolvePermission(req.id, false);
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
       return;
     }
     this.removePermissionRequest(req.id);
@@ -673,7 +676,7 @@ class AppStore {
         await resolvePermission(req.id, false);
         this.removePermissionRequest(req.id);
       } catch (error) {
-        this.toast(t('toast.settingsFailed', [String(error)]));
+        this.toastError(t('toast.settingsFailed', [String(error)]));
         return;
       }
     }
@@ -722,7 +725,7 @@ class AppStore {
       }
       this.selectedIds = next;
     } catch (error) {
-      this.toast(t('toast.analyzeFailed', [String(error)]));
+      this.toastError(t('toast.analyzeFailed', [String(error)]));
     }
   }
 
@@ -750,7 +753,7 @@ class AppStore {
       this.toast(t('settings.aiSaved'));
       return true;
     } catch (error) {
-      this.toast(t('toast.aiSaveFailed', [tr(String(error))]));
+      this.toastError(t('toast.aiSaveFailed', [tr(String(error))]));
       return false;
     }
   }
@@ -767,7 +770,7 @@ class AppStore {
     try {
       results = await cleanPaths(paths);
     } catch (error) {
-      this.toast(t('toast.deleteFailed', [String(error)]));
+      this.toastError(t('toast.deleteFailed', [String(error)]));
       this.cleaning = false;
       return 0;
     }
@@ -782,7 +785,7 @@ class AppStore {
           bytes += target.size;
         }
       } else {
-        this.toast(t('toast.cannotDelete', [result.path, tr(result.error ?? '')]));
+        this.toastError(t('toast.cannotDelete', [result.path, tr(result.error ?? '')]));
       }
     }
 
@@ -889,7 +892,7 @@ class AppStore {
   /** Add a node to the deletion queue via the backend user-mark path. */
   async addManualCandidate(node: Node) {
     if (!node.deletable) {
-      this.toast(t('toast.noDeletePermission', [node.name]));
+      this.toastError(t('toast.noDeletePermission', [node.name]));
       return;
     }
     const existing = this.findingsById.get(node.id);
@@ -910,7 +913,7 @@ class AppStore {
       this.selectedIds = next;
       this.toast(t('toast.addedToQueue', [node.name]));
     } catch (error) {
-      this.toast(t('toast.cannotAdd', [node.name, String(error)]));
+      this.toastError(t('toast.cannotAdd', [node.name, String(error)]));
     }
   }
 
@@ -947,7 +950,7 @@ class AppStore {
         (s) => !(s.name === name && s.kind === kind)
       );
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -958,7 +961,7 @@ class AppStore {
         (s) => !(s.name === name && s.kind === kind)
       );
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -967,7 +970,7 @@ class AppStore {
       await deleteRoutine(id);
       await this.loadRoutines();
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -976,7 +979,7 @@ class AppStore {
       await toggleRoutineMode(id);
       await this.loadRoutines();
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -986,7 +989,7 @@ class AppStore {
       await this.loadHistory();
       await this.loadRoutines();
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -997,7 +1000,7 @@ class AppStore {
       await this.loadRoutines();
       this.toast(t('toast.routineSaved', [finding.name]));
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -1008,7 +1011,7 @@ class AppStore {
       await this.loadRoutines();
       this.toast(t('toast.routineSaved', [node.name]));
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -1029,7 +1032,7 @@ class AppStore {
         this.toast(t('toast.autoOff'));
       }
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -1051,7 +1054,7 @@ class AppStore {
       this.scheduledOn = enabled;
       this.scheduledHour = hour;
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -1065,12 +1068,17 @@ class AppStore {
 
   // ---- misc ----
 
-  toast(message: string) {
+  toast(message: string, tone: ToastTone = 'success') {
     const id = ++this.toastSeq;
-    this.toasts = [...this.toasts, { id, message }];
+    this.toasts = [...this.toasts, { id, message, tone }];
     setTimeout(() => {
       this.toasts = this.toasts.filter((t) => t.id !== id);
-    }, 3200);
+    }, tone === 'error' ? 5000 : 3200);
+  }
+
+  /** Convenience for failure toasts; keeps call sites terse. */
+  toastError(message: string) {
+    this.toast(message, 'error');
   }
 }
 

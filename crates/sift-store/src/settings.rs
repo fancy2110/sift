@@ -63,6 +63,18 @@ pub struct MonitorSettings {
     /// Local hour the daily cleanup runs at.
     #[serde(default = "default_scheduled_hour")]
     pub scheduled_hour: u32,
+    /// Local ordinal day (`year-ordinal`) on which the scheduled cleanup last
+    /// fired. Persisted (rather than held in scheduler memory) so a slot missed
+    /// while the app was closed is visible on the next launch and can be made
+    /// up once. `None` means "never fired on this machine".
+    #[serde(default)]
+    pub scheduled_last_run: Option<String>,
+    /// How long after the scheduled slot the app still makes up a missed run.
+    /// Past this window the missed day is recorded and skipped: running
+    /// yesterday's unattended cleanup days later is more surprising than
+    /// skipping it.
+    #[serde(default = "default_scheduled_catchup_hours")]
+    pub scheduled_catchup_hours: u32,
     /// How long a notification stays relevant before the monitor may repeat it.
     pub notify_cooldown_secs: u64,
 }
@@ -73,6 +85,14 @@ fn default_scheduled_cleanup() -> bool {
 
 fn default_scheduled_hour() -> u32 {
     4
+}
+
+/// A slot missed while the app was closed is made up only if the app starts
+/// within this many hours of it. Default 12: a cleanup scheduled for 04:00
+/// still runs on a 09:00 laptop open, but a Friday slot is not silently
+/// executed on Monday.
+fn default_scheduled_catchup_hours() -> u32 {
+    12
 }
 
 impl Default for MonitorSettings {
@@ -90,6 +110,8 @@ impl Default for MonitorSettings {
             auto_approve_structural: false,
             scheduled_cleanup_enabled: false,
             scheduled_hour: 4,
+            scheduled_last_run: None,
+            scheduled_catchup_hours: 12,
             notify_cooldown_secs: 1800,
         }
     }
@@ -113,6 +135,7 @@ impl MonitorSettings {
             self.critical_free_ratio = (self.warn_free_ratio / 2.0).max(0.001);
         }
         self.scheduled_hour = self.scheduled_hour.clamp(0, 23);
+        self.scheduled_catchup_hours = self.scheduled_catchup_hours.clamp(0, 48);
         self
     }
 }

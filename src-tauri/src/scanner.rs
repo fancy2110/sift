@@ -271,7 +271,7 @@ pub fn start_scan_with(
     let _gate = manager.start_gate.lock().unwrap();
 
     if manager.is_running() {
-        return Err("scan already running".into());
+        return Err("err.scanAlreadyRunning".into());
     }
 
     // A previous scan's coordinator may be lingering so its authorization
@@ -397,7 +397,7 @@ pub fn resolve_permission(
 ) -> Result<(), String> {
     let control = manager.control.lock().unwrap();
     let Some(control) = control.as_ref() else {
-        return Err("no active scan".into());
+        return Err("err.noActiveScan".into());
     };
     control
         .resolve_permission(id, granted, granted_path)

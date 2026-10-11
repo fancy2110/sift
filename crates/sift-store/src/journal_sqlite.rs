@@ -19,6 +19,13 @@ use sift_scan::{ClosedDir, DiscoveredDir, RestoredDir, RestoredScan, ScanJournal
 /// of a single commit; further messages go into the next drain immediately.
 const MAX_DRAIN: usize = 4096;
 
+/// Current on-disk schema version, stored in `PRAGMA user_version`. Bump and
+/// add a step in [`migrate_schema`] whenever a table or column changes. An
+/// older database opened by a newer binary migrates forward; a newer database
+/// (version above this constant) is refused so an old binary can never run
+/// against columns it does not understand.
+const SCHEMA_VERSION: i64 = 1;
+
 /// A durable, SQLite-backed scan journal. Cheap to clone (state is shared).
 pub struct SqliteScanJournal {
     cmd: Sender<WriterMsg>,
@@ -59,8 +66,8 @@ impl SqliteScanJournal {
         Self::with_conn(rusqlite::Connection::open_in_memory()?)
     }
 
-    fn with_conn(conn: rusqlite::Connection) -> rusqlite::Result<Self> {
-        init_schema(&conn)?;
+    fn with_conn(mut conn: rusqlite::Connection) -> rusqlite::Result<Self> {
+        init_schema(&mut conn)?;
         let (cmd, rx) = channel::<WriterMsg>();
         let stats = Arc::<WriterStats>::default();
         let writer_stats = Arc::clone(&stats);
@@ -219,34 +226,75 @@ impl Drop for SqliteScanJournal {
     }
 }
 
-fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;\n\
-         PRAGMA synchronous=NORMAL;\n\
-         CREATE TABLE IF NOT EXISTS scans (\n\
-             root TEXT PRIMARY KEY,\n\
-             running INTEGER NOT NULL DEFAULT 1\n\
-         );\n\
-         CREATE TABLE IF NOT EXISTS dirs (\n\
-             root TEXT NOT NULL,\n\
-             key TEXT NOT NULL,\n\
-             parent_key TEXT NOT NULL,\n\
-             name BLOB NOT NULL,\n\
-             path TEXT NOT NULL,\n\
-             depth INTEGER NOT NULL,\n\
-             mtime_ms INTEGER NOT NULL,\n\
-             dev INTEGER NOT NULL,\n\
-             ino INTEGER NOT NULL,\n\
-             is_symlink INTEGER NOT NULL,\n\
-             deletable INTEGER NOT NULL,\n\
-             closed INTEGER NOT NULL DEFAULT 0,\n\
-             logical INTEGER NOT NULL DEFAULT 0,\n\
-             physical INTEGER NOT NULL DEFAULT 0,\n\
-             files INTEGER NOT NULL DEFAULT 0,\n\
-             PRIMARY KEY (root, key)\n\
-         );\n\
-         CREATE INDEX IF NOT EXISTS dirs_root_depth ON dirs(root, depth);",
-    )
+fn init_schema(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > SCHEMA_VERSION {
+        // No dedicated rusqlite variant for "database is from a newer build";
+        // carry the message through the conversion-failure channel, which
+        // open() surfaces to the caller unchanged.
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "journal schema version {version} is newer than this build supports ({SCHEMA_VERSION})"
+                ),
+            )
+            .into(),
+        ));
+    }
+    migrate_schema(conn, version)?;
+    Ok(())
+}
+
+/// Bring a database at `version` up to [`SCHEMA_VERSION`]. Each step runs in a
+/// transaction and stamps `user_version` before the next step begins, so an
+/// interrupted migration leaves a consistent (old or next-version) database.
+fn migrate_schema(conn: &mut rusqlite::Connection, version: i64) -> rusqlite::Result<()> {
+    let mut current = version;
+
+    // Version 1: the original scans/dirs layout.
+    if current < 1 {
+        // journal_mode cannot be switched inside a transaction.
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS scans (\n\
+                 root TEXT PRIMARY KEY,\n\
+                 running INTEGER NOT NULL DEFAULT 1\n\
+             );\n\
+             CREATE TABLE IF NOT EXISTS dirs (\n\
+                 root TEXT NOT NULL,\n\
+                 key TEXT NOT NULL,\n\
+                 parent_key TEXT NOT NULL,\n\
+                 name BLOB NOT NULL,\n\
+                 path TEXT NOT NULL,\n\
+                 depth INTEGER NOT NULL,\n\
+                 mtime_ms INTEGER NOT NULL,\n\
+                 dev INTEGER NOT NULL,\n\
+                 ino INTEGER NOT NULL,\n\
+                 is_symlink INTEGER NOT NULL,\n\
+                 deletable INTEGER NOT NULL,\n\
+                 closed INTEGER NOT NULL DEFAULT 0,\n\
+                 logical INTEGER NOT NULL DEFAULT 0,\n\
+                 physical INTEGER NOT NULL DEFAULT 0,\n\
+                 files INTEGER NOT NULL DEFAULT 0,\n\
+                 PRIMARY KEY (root, key)\n\
+             );\n\
+             CREATE INDEX IF NOT EXISTS dirs_root_depth ON dirs(root, depth);",
+        )?;
+        // `PRAGMA user_version` cannot use a bound parameter.
+        tx.execute_batch("PRAGMA user_version=1;")?;
+        tx.commit()?;
+        current = 1;
+    }
+
+    // Future migrations follow the same shape:
+    //   if current < 2 { ...; PRAGMA user_version=2; ...; current = 2; }
+
+    debug_assert_eq!(current, SCHEMA_VERSION);
+    // Durability settings are cheap to re-assert on an already-migrated DB.
+    conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
+    Ok(())
 }
 
 fn upsert_discovered(
@@ -501,5 +549,71 @@ mod tests {
 
         drop(saboteur);
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn fresh_database_is_stamped_with_schema_version() {
+        let scratch = unique_scratch("schema-stamp");
+        let db = scratch.join("journal.db");
+        {
+            let _journal = SqliteScanJournal::open(&db).unwrap();
+        }
+        let probe = rusqlite::Connection::open(&db).unwrap();
+        let version: i64 = probe
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn opening_twice_migrates_idempotently_and_keeps_rows() {
+        let scratch = unique_scratch("schema-reopen");
+        let db = scratch.join("journal.db");
+        {
+            let journal = SqliteScanJournal::open(&db).unwrap();
+            journal.begin(&dir("R", "", "root", "/root", 0));
+            // load() is a synchronous request/reply that happens after the
+            // begin write, so the row is durable before the writer is dropped.
+            assert_eq!(journal.load("/root").dirs.len(), 1);
+        }
+        // Reopening the existing v1 database must not error or duplicate.
+        let journal = SqliteScanJournal::open(&db).unwrap();
+        let restored = journal.load("/root");
+        assert_eq!(restored.dirs.len(), 1);
+        assert_eq!(journal.failed_write_count(), 0);
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn a_newer_schema_is_refused() {
+        let scratch = unique_scratch("schema-future");
+        let db = scratch.join("journal.db");
+        {
+            let probe = rusqlite::Connection::open(&db).unwrap();
+            probe.execute_batch("PRAGMA user_version=999;").unwrap();
+        }
+        let err = match SqliteScanJournal::open(&db) {
+            Ok(_) => panic!("a newer schema must be refused"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("newer than this build"),
+            "unexpected error: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    fn unique_scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sift-journal-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }

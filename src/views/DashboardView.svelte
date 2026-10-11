@@ -67,8 +67,8 @@
 
         <div class="vol-list">
           {#each store.volumes as vol, i}
-            {@const used = vol.totalBytes - vol.availableBytes}
-            {@const pct = Math.min(Math.round((used / vol.totalBytes) * 100), 100)}
+            {@const used = Math.max(0, vol.totalBytes - vol.availableBytes)}
+            {@const pct = vol.totalBytes > 0 ? Math.min(Math.round((used / vol.totalBytes) * 100), 100) : 0}
             {@const tone = pct > 88 ? 'var(--color-danger)' : pct > 72 ? 'var(--color-warn)' : 'var(--color-ok)'}
             <div class="vol" style="animation-delay: {i * 70}ms">
               <div class="vol-top">
