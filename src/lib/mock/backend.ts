@@ -363,6 +363,8 @@ export function createMockBackend(bus: EventBus): MockBackend {
     },
     /** Absolute paths "moved to trash"; hidden from later scans. */
     deletedPaths: new Set<string>(),
+    /** Interactive cleanup cancellation requested via cancel_cleanup. */
+    cleanupCancelled: false,
     /** Directories closed (sized) in the current scan. */
     sizedDirs: 0,
     /** Start timestamp of the current scan, for the simulated rate. */
@@ -603,7 +605,12 @@ export function createMockBackend(bus: EventBus): MockBackend {
         }
         case 'clean_paths': {
           const paths = (args.paths as string[]) ?? [];
-          for (const path of paths) {
+          const results = paths.map((path) => {
+            // The mock cancel flag is only true for the batch that follows a
+            // cancel_cleanup call; emulate stop-before-attempt.
+            if (state.cleanupCancelled) {
+              return { path, ok: false, error: 'err.cleanupCancelled', cancelled: true };
+            }
             state.deletedPaths.add(path);
             const slash = path.lastIndexOf('/');
             const dir = path.slice(0, slash);
@@ -613,12 +620,16 @@ export function createMockBackend(bus: EventBus): MockBackend {
             state.scanDirs = state.scanDirs.filter(
               (d) => d.path !== path && !d.path.startsWith(`${path}/`)
             );
-          }
-          resolve(
-            paths.map((path) => ({ path, ok: true, error: null })) as unknown as T
-          );
+            return { path, ok: true, error: null, cancelled: false };
+          });
+          state.cleanupCancelled = false;
+          resolve(results as unknown as T);
           break;
         }
+        case 'cancel_cleanup':
+          state.cleanupCancelled = true;
+          resolve(true as unknown as T);
+          break;
 
         // ---- monitor ----
         case 'monitor_status': {

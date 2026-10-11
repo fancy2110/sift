@@ -51,6 +51,11 @@ pub struct AppServices {
     /// Items from the most recent analysis keyed by real path, so a cleanup can
     /// tell an explicitly confirmed review item from an unknown path.
     last_report: Mutex<HashMap<PathBuf, ReportItem>>,
+    /// Cancellation flag for the currently running *interactive* cleanup.
+    /// `None` when no interactive cleanup is in flight; automatic/scheduled
+    /// cleanups never install a token and therefore cannot be cancelled by the
+    /// UI (the user is not waiting on them and may not be present).
+    cleanup_cancel: Mutex<Option<sift_platform::trash::TrashCancel>>,
 }
 
 impl AppServices {
@@ -61,6 +66,7 @@ impl AppServices {
             monitor: Mutex::new(None),
             warnings: Mutex::new(warnings),
             last_report: Mutex::new(HashMap::new()),
+            cleanup_cancel: Mutex::new(None),
         }
     }
 
@@ -347,7 +353,34 @@ pub async fn clean_paths(
 ) -> Result<Vec<crate::cleanup::DeleteResultItem>, String> {
     let store = services.store();
     let last_report = services.last_report.lock().unwrap().clone();
-    Ok(cleanup_off_thread(store, last_report, paths, false).await)
+
+    // Install a fresh cancel token for this interactive run, replacing any
+    // stale one from a previous completed cleanup.
+    let cancel = sift_platform::trash::TrashCancel::new();
+    *services.cleanup_cancel.lock().unwrap() = Some(cancel.clone());
+
+    let results =
+        cleanup_off_thread(store, last_report, paths, false, Some(Arc::new(cancel))).await;
+
+    // Clear the token only if it is still ours.
+    services.cleanup_cancel.lock().unwrap().take();
+    Ok(results)
+}
+
+/// Ask the running interactive cleanup to stop after its current item.
+/// Returns true when a cleanup was in flight to stop.
+#[tauri::command]
+pub fn cancel_cleanup(services: State<'_, AppServices>) -> bool {
+    services
+        .cleanup_cancel
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|cancel| {
+            cancel.cancel();
+            true
+        })
+        .unwrap_or(false)
 }
 
 /// Run the blocking cleanup on a blocking-task thread, never on the async
@@ -357,11 +390,12 @@ async fn cleanup_off_thread(
     last_report: HashMap<PathBuf, ReportItem>,
     paths: Vec<String>,
     automatic: bool,
+    cancel: Option<Arc<sift_platform::trash::TrashCancel>>,
 ) -> Vec<crate::cleanup::DeleteResultItem> {
     // Kept for the panic fallback: the closure takes ownership of `paths`.
     let requested = paths.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        perform_cleanup_with(&store, &last_report, &paths, automatic)
+        perform_cleanup_with(&store, &last_report, &paths, automatic, cancel.as_deref())
     })
     .await
     .unwrap_or_else(|_| {
@@ -373,6 +407,7 @@ async fn cleanup_off_thread(
                 path: path.clone(),
                 ok: false,
                 error: Some("err.cleanupInterrupted".to_string()),
+                cancelled: false,
             })
             .collect()
     })
@@ -389,7 +424,9 @@ pub(crate) fn perform_cleanup(
 ) -> Vec<crate::cleanup::DeleteResultItem> {
     let store = services.store();
     let last_report = services.last_report.lock().unwrap();
-    perform_cleanup_with(&store, &last_report, paths, automatic)
+    // Only interactive invocations install a token; automatic runs pass None
+    // and run to completion (the user is not waiting on them).
+    perform_cleanup_with(&store, &last_report, paths, automatic, None)
 }
 
 /// The blocking cleanup over owned/shared data. Split out so the same work can
@@ -401,6 +438,7 @@ fn perform_cleanup_with(
     last_report: &HashMap<PathBuf, ReportItem>,
     paths: &[String],
     automatic: bool,
+    cancel: Option<&sift_platform::trash::TrashCancel>,
 ) -> Vec<crate::cleanup::DeleteResultItem> {
     let cleanable = store.cleanable();
     let now = now_ms();
@@ -415,6 +453,19 @@ fn perform_cleanup_with(
     let mut results: Vec<crate::cleanup::DeleteResultItem> = Vec::new();
 
     for text in paths {
+        // Stop admitting new items once cancellation was requested. Items
+        // already `allowed` are still attempted (the trash layer itself stops
+        // between items); every other requested path is reported as
+        // cancelled so the front end can keep its row.
+        if cancel.is_some_and(sift_platform::trash::TrashCancel::is_cancelled) {
+            results.push(crate::cleanup::DeleteResultItem {
+                path: text.clone(),
+                ok: false,
+                error: Some("err.cleanupCancelled".into()),
+                cancelled: true,
+            });
+            continue;
+        }
         let path = PathBuf::from(text);
         let on_cleanable = cleanable.entries().iter().find(|entry| entry.path == path);
 
@@ -436,6 +487,7 @@ fn perform_cleanup_with(
                 path: text.clone(),
                 ok: false,
                 error: Some("err.deleteNotConfirmed".into()),
+                cancelled: false,
             });
             continue;
         };
@@ -445,6 +497,7 @@ fn perform_cleanup_with(
                 path: text.clone(),
                 ok: false,
                 error: Some("err.keepRefused".into()),
+                cancelled: false,
             });
             continue;
         }
@@ -461,6 +514,7 @@ fn perform_cleanup_with(
                 path: text.clone(),
                 ok: false,
                 error: Some("err.fingerprintChanged".into()),
+                cancelled: false,
             });
             continue;
         }
@@ -472,7 +526,8 @@ fn perform_cleanup_with(
     }
 
     let as_paths: Vec<PathBuf> = allowed.iter().map(|entry| entry.path.clone()).collect();
-    let trash_results = sift_platform::trash::trash_paths(&as_paths);
+    let trash_results =
+        sift_platform::trash::trash_paths_cancellable(&as_paths, cancel);
 
     let mut session_bytes: u64 = 0;
     let mut session_titles: Vec<String> = Vec::new();
@@ -512,6 +567,7 @@ fn perform_cleanup_with(
             path: result.path.to_string_lossy().into_owned(),
             ok: result.ok,
             error: result.error,
+            cancelled: result.cancelled,
         });
     }
     if !session_titles.is_empty() {
@@ -1231,7 +1287,7 @@ pub async fn run_routine(
     // Finder IPC runs on a blocking-task thread, like clean_paths.
     let store = services.store();
     let last_report = services.last_report.lock().unwrap().clone();
-    Ok(cleanup_off_thread(store, last_report, paths, true).await)
+    Ok(cleanup_off_thread(store, last_report, paths, true, None).await)
 }
 
 /// Select remembered entries a "run routine now" may act on: matching the

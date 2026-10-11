@@ -151,6 +151,16 @@
         {t('sub.confirm')}
       {/if}
     </button>
+    {#if store.cleaning}
+      <button
+        type="button"
+        class="sp-stop"
+        onclick={() => store.cancelCurrentCleanup()}
+      >
+        <Icon name="x" size={13} stroke={2.2} />
+        {t('sub.stopClean')}
+      </button>
+    {/if}
   </header>
 
   <div class="sp-tabbar">
@@ -655,6 +665,28 @@
   .sp-confirm:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+  .sp-stop {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 34px;
+    padding: 0 13px;
+    margin-left: 8px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--color-muted);
+    font-size: 12.5px;
+    font-weight: 550;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .sp-stop:hover {
+    color: var(--color-danger);
+    border-color: color-mix(in oklch, var(--color-danger) 55%, transparent);
+    background: color-mix(in oklch, var(--color-danger) 8%, transparent);
   }
   .sp-tabbar {
     padding: 0 clamp(14px, 2.6vw, 32px);
