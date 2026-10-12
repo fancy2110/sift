@@ -2,12 +2,33 @@
   import { store } from '../lib/store.svelte';
   import { formatSize, formatSizeParts } from '../lib/format';
   import Icon from '../lib/components/Icon.svelte';
-  import SettingsDialog from '../lib/components/SettingsDialog.svelte';
+  import { onMount } from 'svelte';
   import { fade, fly, scale } from 'svelte/transition';
+  import type { Component } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import { t } from '../lib/i18n.svelte';
+  import { firstBoot } from '../lib/startup';
 
   let reviewRequested = $state(false);
+
+  // Cold-start perceived speed: the staggered intro (last card animates in at
+  // 620 ms + 520 ms) delays the fully visible home screen by over a second.
+  // On the first mount of the process every intro plays instantly; later
+  // navigations into Home keep the designed motion.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const intro = (params: any): any =>
+    firstBoot.value ? { duration: 0, delay: 0 } : params;
+
+  // The settings sheet is a secondary surface. Load its component only when
+  // first opened so it stays out of the startup chunk.
+  let SettingsDialog = $state<Component | null>(null);
+  $effect(() => {
+    if (store.settingsOpen && !SettingsDialog) {
+      import('../lib/components/SettingsDialog.svelte').then((module) => {
+        SettingsDialog = module.default;
+      });
+    }
+  });
 
   // Measure the whole text stack so the dashed ring wraps everything (eyebrow,
   // number, state, button) with generous padding — adapting to the real content.
@@ -63,7 +84,12 @@
   });
 
   async function handleCta() {
-    if (store.scanning) return;
+    // One button: stop while scanning; otherwise review existing findings or
+    // start a fresh scan of the preferred disk.
+    if (store.scanning) {
+      await store.cancelCurrentScan();
+      return;
+    }
     if (store.hasFindings) {
       store.goSub('smart');
       return;
@@ -73,15 +99,15 @@
     if (preferred) await store.selectDisk(preferred.id);
   }
 
-  // r = 92 → circumference of the progress arc.
+  // r = 92 → circumference of the progress ring.
   const RING_C = 2 * Math.PI * 92;
-  // Byte-coverage percent is available once the volume capacity is known.
-  let hasPercent = $derived(store.progress.totalBytes > 0);
-  let arcLen = $derived(
-    hasPercent
-      ? Math.max(2, (RING_C * store.progress.percent) / 100)
-      : 260
+  // While scanning, clamp to 99 so the ring and number can never read 100%
+  // before the backend's Finished event; the scan-completion state (when
+  // scanning flips false after the done event) shows a full ring/100.
+  const shownPercent = $derived(
+    store.scanning ? Math.min(99, Math.max(0, store.progress.percent)) : 100
   );
+  let arcLen = $derived((RING_C * shownPercent) / 100);
 
   // Elapsed-time counter inside the ring: starts with the scan and ticks until
   // it ends (including while parked on a permission request).
@@ -100,15 +126,21 @@
     const rest = (secs % 60).toString().padStart(2, '0');
     return `${mins}:${rest}`;
   });
+
+  // Transitions were configured during component init; clear the one-shot
+  // flag after mount so navigating back to Home later plays the real intro.
+  onMount(() => {
+    firstBoot.value = false;
+  });
 </script>
 
 <div class="hub">
   <!-- corner meta -->
-  <div class="hub-meta hub-meta-l" in:fly={{ y: -8, duration: 420, delay: 60 }}>
+  <div class="hub-meta hub-meta-l" in:fly={intro({ y: -8, duration: 420, delay: 60 })}>
     <span class="hub-mark"><Icon name="spark" size={13} /></span>
     {t('home.siftAi')}
   </div>
-  <div class="hub-meta hub-meta-r" in:fly={{ y: -8, duration: 420, delay: 60 }}>
+  <div class="hub-meta hub-meta-r" in:fly={intro({ y: -8, duration: 420, delay: 60 })}>
     <span class="engine-dot"></span>
     {t('home.engineActive')}
     <button
@@ -133,13 +165,12 @@
     <div
       class="ring-stage"
       class:scanning={store.scanning}
-      in:fade={{ duration: 640, delay: 120 }}
+      in:fade={intro({ duration: 640, delay: 120 })}
       aria-hidden="true"
     >
       {#if store.scanning}
         <svg
           class="prog-ring"
-          class:spin-slow={!hasPercent}
           viewBox="0 0 200 200"
         >
           <circle class="prog-track" cx="100" cy="100" r="92" />
@@ -195,7 +226,7 @@
       class="hub-stack"
       bind:this={stackEl}
     >
-    <p class="hub-eyebrow" in:fade={{ duration: 480, delay: 120 }}>
+    <p class="hub-eyebrow" in:fade={intro({ duration: 480, delay: 120 })}>
       {store.scanning
         ? (store.progress.awaiting > 0
             ? t('home.awaitingAuth')
@@ -203,18 +234,12 @@
         : t('home.total')}
     </p>
     {#if store.scanning}
-      {#if hasPercent}
-        <h1 class="hub-total num">
-          {Math.round(store.progress.percent)}<span class="hub-pct">%</span>
-        </h1>
-      {:else}
-        <h1 class="hub-total num">
-          {store.scannedFiles.toLocaleString()}<span class="hub-pct">{t('home.itemsUnit')}</span>
-        </h1>
-      {/if}
+      <h1 class="hub-total num">
+        {Math.round(shownPercent)}<span class="hub-pct">%</span>
+      </h1>
     {:else}
       {@const main = formatSizeParts(store.totalReclaimable)}
-      <h1 class="hub-total num" in:fly={{ y: 16, duration: 620, delay: 180, easing: cubicOut }}>
+      <h1 class="hub-total num" in:fly={intro({ y: 16, duration: 620, delay: 180, easing: cubicOut })}>
         {main.value}<span class="hub-unit">{main.unit}</span>
       </h1>
     {/if}
@@ -235,11 +260,17 @@
 
     <button
       class="hub-cta"
+      class:hub-cta-stop={store.scanning}
+      type="button"
       onclick={handleCta}
-      disabled={store.scanning}
-      in:scale={{ duration: 480, delay: 380, easing: cubicOut }}
+      in:scale={intro({ duration: 480, delay: 380, easing: cubicOut })}
     >
-      {store.scanning ? t('home.ctaScanning') : t('home.ctaScan')}
+      {#if store.scanning}
+        <Icon name="x" size={15} stroke={2.4} />
+        {t('home.stopScan')}
+      {:else}
+        {t('home.ctaScan')}
+      {/if}
     </button>
     </div>
    </div>
@@ -247,28 +278,28 @@
 
   <!-- entry cards -->
   <div class="hub-cards">
-    <button class="hub-card" onclick={() => store.go('dashboard')} in:fly={{ y: 26, duration: 520, delay: 420, easing: cubicOut }}>
+    <button class="hub-card" onclick={() => store.go('dashboard')} in:fly={intro({ y: 26, duration: 520, delay: 420, easing: cubicOut })}>
       <span class="card-glyph glyph-blue"><Icon name="gauge" size={19} /></span>
       <span class="card-title">{t('home.card.dashboard')}</span>
       <span class="card-big num">{formatSize(store.totalReclaimable)}</span>
       <span class="card-sub">{t('home.card.dashboardSub')}</span>
     </button>
 
-    <button class="hub-card" onclick={() => store.goSub('smart')} in:fly={{ y: 26, duration: 520, delay: 480, easing: cubicOut }}>
+    <button class="hub-card" onclick={() => store.goSub('smart')} in:fly={intro({ y: 26, duration: 520, delay: 480, easing: cubicOut })}>
       <span class="card-glyph glyph-violet"><Icon name="brain" size={19} /></span>
       <span class="card-title">{t('home.card.smart')}</span>
       <span class="card-big num">{formatSize(store.safeReclaimable)}</span>
       <span class="card-sub">{t('home.card.smartSub', [store.pendingReviewCount])}</span>
     </button>
 
-    <button class="hub-card" onclick={() => store.goSub('explorer')} in:fly={{ y: 26, duration: 520, delay: 540, easing: cubicOut }}>
+    <button class="hub-card" onclick={() => store.goSub('explorer')} in:fly={intro({ y: 26, duration: 520, delay: 540, easing: cubicOut })}>
       <span class="card-glyph glyph-blue"><Icon name="layers" size={19} /></span>
       <span class="card-title">{t('home.card.explorer')}</span>
       <span class="card-big">{t('home.browse')}</span>
       <span class="card-sub">{t('home.card.explorerSub')}</span>
     </button>
 
-    <button class="hub-card" onclick={() => store.goSub('history')} in:fly={{ y: 26, duration: 520, delay: 620, easing: cubicOut }}>
+    <button class="hub-card" onclick={() => store.goSub('history')} in:fly={intro({ y: 26, duration: 520, delay: 620, easing: cubicOut })}>
       <span class="card-glyph glyph-emerald"><Icon name="clock" size={19} /></span>
       <span class="card-title">{t('home.card.history')}</span>
       <span class="card-big num">{formatSize(store.allTimeReclaimed)}</span>
@@ -276,7 +307,10 @@
     </button>
   </div>
 
-  <SettingsDialog />
+  {#if SettingsDialog}
+    {@const SettingsSheet = SettingsDialog}
+    <SettingsSheet />
+  {/if}
 </div>
 
 <style>
@@ -420,9 +454,6 @@
     stroke-linecap: round;
     filter: drop-shadow(0 0 7px color-mix(in oklch, var(--color-violet) 70%, transparent));
   }
-  .spin-slow {
-    animation: ring-spin 1.3s linear infinite;
-  }
   .ring-stage.scanning .ring-glow {
     inset: 8%;
     background: radial-gradient(
@@ -467,8 +498,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .ring-arc,
-    .ring-dash,
-    .spin-slow {
+    .ring-dash {
       animation: none;
     }
   }
@@ -563,6 +593,18 @@
   .hub-cta:focus-visible {
     outline: 2px solid color-mix(in oklch, var(--color-accent) 70%, transparent);
     outline-offset: 3px;
+  }
+  /* Stop role: same button while a scan runs. */
+  .hub-cta-stop {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: color-mix(in oklch, var(--color-danger) 16%, var(--color-surface-2));
+    color: var(--color-danger);
+    box-shadow: 0 18px 40px -18px color-mix(in oklch, var(--color-danger) 60%, transparent);
+  }
+  .hub-cta-stop:hover {
+    box-shadow: 0 26px 52px -20px color-mix(in oklch, var(--color-danger) 70%, transparent);
   }
 
   .hub-cards {

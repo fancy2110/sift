@@ -51,16 +51,27 @@ pub struct AppServices {
     /// Items from the most recent analysis keyed by real path, so a cleanup can
     /// tell an explicitly confirmed review item from an unknown path.
     last_report: Mutex<HashMap<PathBuf, ReportItem>>,
+    /// Cancellation flag for the currently running *interactive* cleanup.
+    /// `None` when no interactive cleanup is in flight; automatic/scheduled
+    /// cleanups never install a token and therefore cannot be cancelled by the
+    /// UI (the user is not waiting on them and may not be present).
+    cleanup_cancel: Mutex<Option<sift_platform::trash::TrashCancel>>,
 }
 
 impl AppServices {
     pub fn new() -> Self {
+        let open_started = std::time::Instant::now();
         let (store, warnings) = Store::open_default();
+        crate::startup_trace::mark(&format!(
+            "services:store-open ({} ms)",
+            open_started.elapsed().as_millis()
+        ));
         Self {
             store: Arc::new(store),
             monitor: Mutex::new(None),
             warnings: Mutex::new(warnings),
             last_report: Mutex::new(HashMap::new()),
+            cleanup_cancel: Mutex::new(None),
         }
     }
 
@@ -228,10 +239,15 @@ pub(crate) fn analyze_current_with(
 
     let cleanable = services.store.cleanable();
     {
-        // Remember every analyzed item by its real path so clean_paths can
-        // distinguish a confirmed review item from an unknown path.
+        // Merge the fresh report into the remembered path map instead of
+        // replacing it. Clearing first made every item that disappeared from
+        // one analysis (a different focus subtree, a transient enumeration
+        // error, a rule threshold change) temporarily un-cleanable: the user
+        // sees the row from a previous scan but the cleanup guard refuses an
+        // "unknown path". Old entries are only evicted when their path shows
+        // up in a new report with a different verdict, so stale safety claims
+        // can never survive an explicit re-analysis.
         let mut last_report = services.last_report.lock().unwrap();
-        last_report.clear();
         for item in &report.items {
             last_report.insert(
                 item.candidate.path.clone(),
@@ -342,7 +358,34 @@ pub async fn clean_paths(
 ) -> Result<Vec<crate::cleanup::DeleteResultItem>, String> {
     let store = services.store();
     let last_report = services.last_report.lock().unwrap().clone();
-    Ok(cleanup_off_thread(store, last_report, paths, false).await)
+
+    // Install a fresh cancel token for this interactive run, replacing any
+    // stale one from a previous completed cleanup.
+    let cancel = sift_platform::trash::TrashCancel::new();
+    *services.cleanup_cancel.lock().unwrap() = Some(cancel.clone());
+
+    let results =
+        cleanup_off_thread(store, last_report, paths, false, Some(Arc::new(cancel))).await;
+
+    // Clear the token only if it is still ours.
+    services.cleanup_cancel.lock().unwrap().take();
+    Ok(results)
+}
+
+/// Ask the running interactive cleanup to stop after its current item.
+/// Returns true when a cleanup was in flight to stop.
+#[tauri::command]
+pub fn cancel_cleanup(services: State<'_, AppServices>) -> bool {
+    services
+        .cleanup_cancel
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|cancel| {
+            cancel.cancel();
+            true
+        })
+        .unwrap_or(false)
 }
 
 /// Run the blocking cleanup on a blocking-task thread, never on the async
@@ -352,11 +395,12 @@ async fn cleanup_off_thread(
     last_report: HashMap<PathBuf, ReportItem>,
     paths: Vec<String>,
     automatic: bool,
+    cancel: Option<Arc<sift_platform::trash::TrashCancel>>,
 ) -> Vec<crate::cleanup::DeleteResultItem> {
     // Kept for the panic fallback: the closure takes ownership of `paths`.
     let requested = paths.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        perform_cleanup_with(&store, &last_report, &paths, automatic)
+        perform_cleanup_with(&store, &last_report, &paths, automatic, cancel.as_deref())
     })
     .await
     .unwrap_or_else(|_| {
@@ -368,6 +412,7 @@ async fn cleanup_off_thread(
                 path: path.clone(),
                 ok: false,
                 error: Some("err.cleanupInterrupted".to_string()),
+                cancelled: false,
             })
             .collect()
     })
@@ -384,7 +429,9 @@ pub(crate) fn perform_cleanup(
 ) -> Vec<crate::cleanup::DeleteResultItem> {
     let store = services.store();
     let last_report = services.last_report.lock().unwrap();
-    perform_cleanup_with(&store, &last_report, paths, automatic)
+    // Only interactive invocations install a token; automatic runs pass None
+    // and run to completion (the user is not waiting on them).
+    perform_cleanup_with(&store, &last_report, paths, automatic, None)
 }
 
 /// The blocking cleanup over owned/shared data. Split out so the same work can
@@ -396,6 +443,7 @@ fn perform_cleanup_with(
     last_report: &HashMap<PathBuf, ReportItem>,
     paths: &[String],
     automatic: bool,
+    cancel: Option<&sift_platform::trash::TrashCancel>,
 ) -> Vec<crate::cleanup::DeleteResultItem> {
     let cleanable = store.cleanable();
     let now = now_ms();
@@ -410,6 +458,19 @@ fn perform_cleanup_with(
     let mut results: Vec<crate::cleanup::DeleteResultItem> = Vec::new();
 
     for text in paths {
+        // Stop admitting new items once cancellation was requested. Items
+        // already `allowed` are still attempted (the trash layer itself stops
+        // between items); every other requested path is reported as
+        // cancelled so the front end can keep its row.
+        if cancel.is_some_and(sift_platform::trash::TrashCancel::is_cancelled) {
+            results.push(crate::cleanup::DeleteResultItem {
+                path: text.clone(),
+                ok: false,
+                error: Some("err.cleanupCancelled".into()),
+                cancelled: true,
+            });
+            continue;
+        }
         let path = PathBuf::from(text);
         let on_cleanable = cleanable.entries().iter().find(|entry| entry.path == path);
 
@@ -431,6 +492,7 @@ fn perform_cleanup_with(
                 path: text.clone(),
                 ok: false,
                 error: Some("err.deleteNotConfirmed".into()),
+                cancelled: false,
             });
             continue;
         };
@@ -440,6 +502,7 @@ fn perform_cleanup_with(
                 path: text.clone(),
                 ok: false,
                 error: Some("err.keepRefused".into()),
+                cancelled: false,
             });
             continue;
         }
@@ -456,6 +519,7 @@ fn perform_cleanup_with(
                 path: text.clone(),
                 ok: false,
                 error: Some("err.fingerprintChanged".into()),
+                cancelled: false,
             });
             continue;
         }
@@ -467,7 +531,8 @@ fn perform_cleanup_with(
     }
 
     let as_paths: Vec<PathBuf> = allowed.iter().map(|entry| entry.path.clone()).collect();
-    let trash_results = sift_platform::trash::trash_paths(&as_paths);
+    let trash_results =
+        sift_platform::trash::trash_paths_cancellable(&as_paths, cancel);
 
     let mut session_bytes: u64 = 0;
     let mut session_titles: Vec<String> = Vec::new();
@@ -507,6 +572,7 @@ fn perform_cleanup_with(
             path: result.path.to_string_lossy().into_owned(),
             ok: result.ok,
             error: result.error,
+            cancelled: result.cancelled,
         });
     }
     if !session_titles.is_empty() {
@@ -651,7 +717,11 @@ pub fn set_auto_clean_mode(services: State<'_, AppServices>, mode: String) -> Re
 /// refused here. User-marked items are `Review` — a manual choice never
 /// becomes a standing `Safe` approval.
 #[tauri::command]
-pub fn mark_path(services: State<'_, AppServices>, path: String) -> Result<FindingDto, String> {
+pub fn mark_path(
+    services: State<'_, AppServices>,
+    path: String,
+    bytes: Option<u64>,
+) -> Result<FindingDto, String> {
     use sift_core::deletable::classify_with_permissions;
 
     let as_path = PathBuf::from(&path);
@@ -665,12 +735,20 @@ pub fn mark_path(services: State<'_, AppServices>, path: String) -> Result<Findi
     let is_dir = meta.is_dir();
 
     #[cfg(unix)]
-    let size = {
+    let measured = {
         use std::os::unix::fs::MetadataExt;
         meta.len().max(meta.blocks() * 512)
     };
     #[cfg(not(unix))]
-    let size = meta.len();
+    let measured = meta.len();
+    // For a directory, `symlink_metadata` only yields the directory inode's
+    // own size, not its subtree. The caller supplies the measured subtree
+    // size (display/accounting only; deletion is gated by mtime + type).
+    let size = if is_dir {
+        measured.max(bytes.unwrap_or(0))
+    } else {
+        measured
+    };
 
     let mtime_ms = meta
         .modified()
@@ -1021,6 +1099,8 @@ pub struct RoutineDto {
     pub average_bytes: u64,
     /// `auto` | `approve`.
     pub mode: String,
+    /// Explicit targets of a path-based routine; empty for a kind-based one.
+    pub paths: Vec<String>,
 }
 
 /// Read the user-facing cleanup timeline, newest first.
@@ -1057,6 +1137,7 @@ pub fn list_routines(services: State<'_, AppServices>) -> Vec<RoutineDto> {
             cadence: entry.cadence.clone(),
             average_bytes: entry.average_bytes,
             mode: routine_mode_token(entry.mode).to_string(),
+            paths: entry.paths.clone(),
         })
         .collect()
 }
@@ -1084,10 +1165,71 @@ pub fn accept_routine_suggestion(
         cadence: suggestion.cadence.label_key().to_string(),
         average_bytes: suggestion.average_bytes,
         mode: sift_store::RoutineMode::Approve,
+        paths: Vec::new(),
     });
     let _ = services.store.flush_if_dirty();
     Ok(())
 }
+
+/// Save a routine directly from the Smart list (a finding's cleanable family)
+/// or from the Explorer (one explicit path). New routines start in approve
+/// mode, so nothing is ever removed without a later confirmation.
+#[tauri::command]
+pub fn save_routine(
+    services: State<'_, AppServices>,
+    title: String,
+    kind: String,
+    average_bytes: u64,
+    path: Option<String>,
+) -> Result<(), String> {
+    if let Some(path) = path {
+        // One path-based routine per target, so adding it again updates rather
+        // than duplicates.
+        let key = sift_core::NodeKey::from_path(std::path::Path::new(&path));
+        let id = format!("custom:{key}");
+        services.store.upsert_routine(sift_store::RoutineEntry {
+            id,
+            title,
+            kind: CUSTOM_PATH_KIND.to_string(),
+            cadence: "cadence.weekly".to_string(),
+            average_bytes,
+            mode: sift_store::RoutineMode::Approve,
+            paths: vec![path],
+        });
+    } else {
+        if kind.is_empty() {
+            return Err("err.routineKindMissing".to_string());
+        }
+        let id = sift_store::suggestion_key(&title, &kind);
+        services.store.upsert_routine(sift_store::RoutineEntry {
+            id,
+            title,
+            kind: kind.clone(),
+            cadence: "cadence.weekly".to_string(),
+            average_bytes,
+            mode: sift_store::RoutineMode::Approve,
+            paths: Vec::new(),
+        });
+        // The user chose this family as a routine; let a later manual run act on
+        // its currently known Safe conclusions without another approval prompt.
+        let safe_keys: Vec<sift_core::NodeKey> = services
+            .store
+            .cleanable()
+            .entries()
+            .iter()
+            .filter(|entry| entry.kind_token == kind && entry.safety == Safety::Safe)
+            .map(|entry| entry.key())
+            .collect();
+        for key in safe_keys {
+            services.store.set_auto_approval(key, true);
+        }
+    }
+    let _ = services.store.flush_if_dirty();
+    Ok(())
+}
+
+/// Family token for a routine that targets explicit user-chosen paths.
+pub(crate) const CUSTOM_PATH_KIND: &str = "customPath";
 
 /// Dismiss one mined suggestion; it is not suggested again.
 #[tauri::command]
@@ -1131,7 +1273,18 @@ pub async fn run_routine(
         .cloned()
         .ok_or_else(|| "err.routineNotFound".to_string())?;
 
-    let paths = select_routine_paths(services.store.cleanable().entries(), &routine.kind);
+    let paths = if !routine.paths.is_empty() {
+        // A path-based routine: act only on targets that still exist, leaving
+        // the stored paths intact so missing ones are simply skipped.
+        routine
+            .paths
+            .iter()
+            .filter(|path| std::path::Path::new(path).exists())
+            .cloned()
+            .collect()
+    } else {
+        select_routine_paths(services.store.cleanable().entries(), &routine.kind)
+    };
 
     if paths.is_empty() {
         return Ok(Vec::new());
@@ -1139,7 +1292,7 @@ pub async fn run_routine(
     // Finder IPC runs on a blocking-task thread, like clean_paths.
     let store = services.store();
     let last_report = services.last_report.lock().unwrap().clone();
-    Ok(cleanup_off_thread(store, last_report, paths, true).await)
+    Ok(cleanup_off_thread(store, last_report, paths, true, None).await)
 }
 
 /// Select remembered entries a "run routine now" may act on: matching the

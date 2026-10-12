@@ -81,8 +81,20 @@ impl Decision {
 
     /// The local day this decision fell on, used to require that a habit
     /// repeats over time rather than in one enthusiastic afternoon.
+    ///
+    /// Bucketing on a raw Unix-millis floor (`ms / 86_400_000`) rolls the day
+    /// over at 00:00 UTC: for a UTC+8 user everything between 08:00 local and
+    /// the next 08:00 collapses onto the wrong bucket, so an evening cleanup
+    /// and the following morning's count as different days. Use the local
+    /// ordinal instead. Days before the common era are clamped to zero, which
+    /// only matters for bogus timestamps.
     pub fn day(&self) -> i64 {
-        self.decided_at_ms.div_euclid(86_400_000)
+        use chrono::{Datelike, TimeZone};
+        chrono::Local
+            .timestamp_millis_opt(self.decided_at_ms)
+            .single()
+            .map(|when| when.date_naive().num_days_from_ce() as i64)
+            .unwrap_or_else(|| self.decided_at_ms.div_euclid(86_400_000))
     }
 }
 
@@ -486,7 +498,23 @@ mod tests {
     use sift_core::{ByteSize, NodeKey};
     use std::path::PathBuf;
 
-    const DAY: i64 = 86_400_000;
+    /// Noon on local day `day` (days since 1970-01-01 local). Noon is safely
+    /// away from the midnight boundary in every real UTC offset, so the
+    /// bucket under test is the local calendar day regardless of where CI
+    /// runs — unlike a raw `day * 86_400_000`, which is midnight UTC.
+    fn local_noon(day: i64) -> i64 {
+        use chrono::{Offset, TimeZone};
+        let offset = chrono::Local
+            .timestamp_millis_opt(0)
+            .single()
+            .map(|when| when.offset().fix())
+            .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
+        // 719_162 is the CE ordinal of 1970-01-01.
+        let date = chrono::NaiveDate::from_num_days_from_ce_opt(day as i32 + 719_162)
+            .unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
+        let noon = date.and_hms_opt(12, 0, 0).unwrap();
+        offset.from_local_datetime(&noon).unwrap().timestamp_millis()
+    }
 
     fn decision(name: &str, kind: &str, outcome: DecisionOutcome, day: i64, size: u64) -> Decision {
         Decision::new(
@@ -496,8 +524,61 @@ mod tests {
             kind,
             size,
             outcome,
-            day * DAY,
+            local_noon(day),
         )
+    }
+
+    #[test]
+    fn day_buckets_by_local_midnight_not_utc() {
+        use chrono::{Datelike, Offset, TimeZone};
+        // A fixed moment: 2026-03-10 23:30 local time, in whatever zone the
+        // test machine lives.
+        let offset = chrono::Local
+            .timestamp_millis_opt(0)
+            .single()
+            .map(|when| when.offset().fix())
+            .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
+        let late = offset
+            .from_local_datetime(
+                &chrono::NaiveDate::from_ymd_opt(2026, 3, 10)
+                    .unwrap()
+                    .and_hms_opt(23, 30, 0)
+                    .unwrap(),
+            )
+            .unwrap()
+            .timestamp_millis();
+        // Twenty minutes later, same local calendar day (23:50).
+        let late2 = late + 20 * 60_000;
+        // Forty minutes later crosses local midnight into the next day.
+        let next_day = late + 40 * 60_000;
+        // The same clock time one local day earlier (2026-03-09 23:30).
+        let early = late - 86_400_000;
+
+        let key = NodeKey::from_bytes(b"/x");
+        let mk = |at: i64| {
+            Decision::new(
+                PathFingerprint::new(key, 1, 0, true),
+                "~/x",
+                "x",
+                "x",
+                1,
+                DecisionOutcome::Removed,
+                at,
+            )
+            .day()
+        };
+
+        assert_eq!(mk(late), mk(late2), "23:30 and 23:50 local share a day");
+        assert_ne!(mk(late), mk(next_day), "local midnight rolls the bucket");
+        assert_ne!(mk(early), mk(late), "consecutive local days differ");
+        // Sanity: the bucket is the CE ordinal of the local date.
+        let expected = chrono::Local
+            .timestamp_millis_opt(late)
+            .single()
+            .unwrap()
+            .date_naive()
+            .num_days_from_ce() as i64;
+        assert_eq!(mk(late), expected);
     }
 
     #[test]
@@ -713,7 +794,7 @@ mod tests {
                 "userMarked",
                 100,
                 DecisionOutcome::Kept,
-                day * DAY,
+                local_noon(day),
             ));
         }
         assert!(log.is_habitually_kept(key, 3));
@@ -728,7 +809,7 @@ mod tests {
                 "x",
                 1,
                 DecisionOutcome::Removed,
-                day * DAY,
+                local_noon(day),
             ));
             mixed.record(Decision::new(
                 PathFingerprint::new(other, 2, 0, true),
@@ -737,7 +818,7 @@ mod tests {
                 "x",
                 1,
                 DecisionOutcome::Kept,
-                (day + 5) * DAY,
+                local_noon(day + 5),
             ));
         }
         assert!(!mixed.is_habitually_kept(other, 2));
@@ -772,7 +853,7 @@ mod tests {
                 "x",
                 100,
                 DecisionOutcome::Removed,
-                day * DAY,
+                local_noon(day),
             ));
         }
         assert!(log.is_habitually_removed(key, 3));

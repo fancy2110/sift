@@ -1,14 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { isTauri } from './runtime';
-import { createEventBus } from './mock/events';
-import { createMockBackend } from './mock/backend';
 import type {
   AiConfig,
   AnalysisSummary,
   MonitorStatus,
   Node,
-  Place,
   Routine,
   RoutineSuggestion,
   StoreWarning,
@@ -22,36 +19,49 @@ import type {
 // (e.g. opening the Vite URL during `pnpm dev`) they fall back to an
 // in-process mock backend sharing the exact same command/event shapes, so the
 // whole UI stays exercisable without a native build.
+//
+// The mock is dev-only simulation (~900 lines). It is imported lazily so the
+// production initial chunk — which never routes here, because
+// `__TAURI_INTERNALS__` is always present in the webview — does not pay its
+// parse/compile cost during cold start.
 
-let mockBus: ReturnType<typeof createEventBus> | null = null;
-let mockBackend: ReturnType<typeof createMockBackend> | null = null;
+let mockBusPromise: Promise<import('./mock/events').EventBus> | null = null;
+let mockBackendPromise: Promise<import('./mock/backend').MockBackend> | null = null;
 
-function ensureBus(): ReturnType<typeof createEventBus> {
-  mockBus ??= createEventBus();
-  return mockBus;
+function ensureBus(): Promise<import('./mock/events').EventBus> {
+  mockBusPromise ??= import('./mock/events').then(({ createEventBus }) => createEventBus());
+  return mockBusPromise;
 }
 
-function ensureMock() {
-  mockBackend ??= createMockBackend(ensureBus());
-  return mockBackend;
+function ensureMock(): Promise<import('./mock/backend').MockBackend> {
+  mockBackendPromise ??= ensureBus().then((bus) =>
+    import('./mock/backend').then(({ createMockBackend }) => createMockBackend(bus)),
+  );
+  return mockBackendPromise;
 }
 
 function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri()) return invoke<T>(command, args);
-  return ensureMock().invoke<T>(command, args);
+  return ensureMock().then((mock) => mock.invoke<T>(command, args));
 }
 
-function subscribe<T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> {
+async function subscribe<T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> {
   if (isTauri()) {
     return listen<T>(event, (e) => cb(e.payload));
   }
-  return Promise.resolve(ensureBus().listen<T>(event, cb) as unknown as UnlistenFn);
+  const bus = await ensureBus();
+  return bus.listen<T>(event, cb) as unknown as UnlistenFn;
 }
 
 // ---- commands: volumes & scanning ------------------------------------------
 
 export function listVolumes(): Promise<VolumeInfo[]> {
   return call<VolumeInfo[]>('list_volumes');
+}
+
+/** The user's home directory, or null when the platform cannot tell. */
+export function homeDir(): Promise<string | null> {
+  return call<string | null>('home_dir');
 }
 
 export function startScan(root: string, focus: string): Promise<number> {
@@ -100,6 +110,8 @@ export interface DeleteResultItem {
   path: string;
   ok: boolean;
   error: string | null;
+  /** True for items never attempted because the user cancelled the batch. */
+  cancelled?: boolean;
 }
 
 export function watchFs(root: string, recursive: boolean): Promise<void> {
@@ -136,6 +148,11 @@ export function cleanPaths(paths: string[]): Promise<DeleteResultItem[]> {
   return call('clean_paths', { paths });
 }
 
+/** Ask a running interactive cleanup to stop after its current item. */
+export function cancelCleanup(): Promise<boolean> {
+  return call<boolean>('cancel_cleanup');
+}
+
 export function monitorStatus(): Promise<MonitorStatus> {
   return call<MonitorStatus>('monitor_status');
 }
@@ -156,8 +173,8 @@ export function setScheduledCleanup(enabled: boolean, hour: number): Promise<voi
   return call('set_scheduled_cleanup', { enabled, hour });
 }
 
-export function markPath(path: string): Promise<import('./types').Finding> {
-  return call('mark_path', { path });
+export function markPath(path: string, sizeHint?: number): Promise<import('./types').Finding> {
+  return call('mark_path', { path, bytes: sizeHint ?? null });
 }
 
 export function takeStoreWarnings(): Promise<StoreWarning[]> {
@@ -170,12 +187,6 @@ export function storeLocation(): Promise<string> {
 
 export function routineSuggestions(): Promise<RoutineSuggestion[]> {
   return call<RoutineSuggestion[]>('routine_suggestions');
-}
-
-// ---- quick places ----------------------------------------------------------
-
-export function listPlaces(): Promise<Place[]> {
-  return call<Place[]>('list_places');
 }
 
 // ---- cleanup history -------------------------------------------------------
@@ -192,6 +203,15 @@ export function listRoutines(): Promise<Routine[]> {
 
 export function acceptRoutineSuggestion(name: string, kind: string): Promise<void> {
   return call('accept_routine_suggestion', { name, kind });
+}
+
+export function saveRoutine(
+  title: string,
+  kind: string,
+  averageBytes: number,
+  path?: string
+): Promise<void> {
+  return call('save_routine', { title, kind, averageBytes, path: path ?? null });
 }
 
 export function dismissRoutineSuggestion(name: string, kind: string): Promise<void> {

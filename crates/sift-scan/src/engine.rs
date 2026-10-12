@@ -45,8 +45,8 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Instant;
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use sift_core::id::{FileId, NodeKey};
 use sift_core::tree::NONE;
@@ -55,7 +55,7 @@ use sift_core::{
     ScanOutcome, ScanPolicy, ScanRequest, ScanTree, TreeConfig,
 };
 use sift_platform::dir::{
-    close_raw_fd, fd_size, path_size, read_with_children, BulkBuffer, ChildFdMap, DirReader,
+    close_raw_fd, read_with_children, BulkBuffer, ChildFdMap, DirReader,
     RawEntry, ReadErrorKind,
 };
 
@@ -106,8 +106,40 @@ pub struct ScanHandle {
     focus_generation: Arc<AtomicU64>,
     permission_tx: crossbeam_channel::Sender<PermissionDecision>,
     stop: Arc<AtomicBool>,
-    /// Set when the coordinator thread exits.
+    /// Set when the coordinator thread exits. Kept public for cheap polling;
+    /// [`ScanHandle::join`] blocks on the paired signal instead of spinning.
     pub finished: Arc<AtomicBool>,
+    completion: Arc<CompletionSignal>,
+}
+
+/// A parking-lot completion signal: waiters block on a condvar instead of
+/// burning a core with `yield_now` while a full-volume scan runs.
+struct CompletionSignal {
+    done: Mutex<bool>,
+    notified: Condvar,
+}
+
+impl CompletionSignal {
+    fn new() -> Self {
+        Self {
+            done: Mutex::new(false),
+            notified: Condvar::new(),
+        }
+    }
+
+    /// Idempotent; safe to call from every coordinator exit path.
+    fn mark(&self) {
+        let mut done = self.done.lock().unwrap();
+        *done = true;
+        self.notified.notify_all();
+    }
+
+    fn wait(&self) {
+        let mut done = self.done.lock().unwrap();
+        while !*done {
+            done = self.notified.wait(done).unwrap();
+        }
+    }
 }
 
 /// A cloneable control handle for a running scan.
@@ -242,11 +274,11 @@ impl ScanHandle {
         self.control().set_focus(focus);
     }
 
-    /// Block until the coordinator thread finishes. Returns the outcome.
+    /// Block until the coordinator finishes. Returns the outcome.
     pub fn join(&self) -> ScanOutcome {
-        while !self.finished.load(AtomicOrdering::SeqCst) {
-            std::thread::yield_now();
-        }
+        // Park on the condvar; a yield-loop here pins a (possibly main)
+        // thread at 100% CPU for the minutes a full-volume scan takes.
+        self.completion.wait();
         // The last event carries the outcome.
         let mut last = ScanOutcome::Failed;
         while let Ok(event) = self.events.try_recv() {
@@ -399,6 +431,7 @@ impl ScanEngine {
         let focus = Arc::new(Mutex::new(request.focus.clone()));
         let focus_generation = Arc::new(AtomicU64::new(0));
         let finished = Arc::new(AtomicBool::new(false));
+        let completion = Arc::new(CompletionSignal::new());
         let stop = Arc::new(AtomicBool::new(false));
 
         // One shared multi-producer/multi-consumer queue. Every idle worker
@@ -447,6 +480,7 @@ impl ScanEngine {
         let focus_co = Arc::clone(&focus);
         let focus_generation_co = Arc::clone(&focus_generation);
         let finished_co = Arc::clone(&finished);
+        let completion_co = Arc::clone(&completion);
         let stop_co = Arc::clone(&stop);
         std::thread::Builder::new()
             .name("sift-coordinator".into())
@@ -469,7 +503,6 @@ impl ScanEngine {
                     root_ino,
                     root_path: request.root.clone(),
                     focus_path: request.focus.clone(),
-                    volume_used: request.volume_used_bytes,
                     tree: tree_co,
                     cancel: cancel_co,
                     paused: paused_co,
@@ -481,6 +514,7 @@ impl ScanEngine {
                     permission_rx,
                     stop: stop_co,
                     finished: finished_co,
+                    completion: completion_co,
                 });
             })?;
 
@@ -495,6 +529,7 @@ impl ScanEngine {
             permission_tx,
             stop: Arc::clone(&stop),
             finished,
+            completion,
         })
     }
 }
@@ -519,7 +554,6 @@ struct CoordinatorInputs {
     root_ino: u64,
     root_path: PathBuf,
     focus_path: PathBuf,
-    volume_used: Option<u64>,
     tree: Arc<Mutex<ScanTree>>,
     cancel: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
@@ -533,6 +567,8 @@ struct CoordinatorInputs {
     /// Set once the main walk finishes and `Finished` is published, even while
     /// the coordinator lingers for post-completion grants.
     finished: Arc<AtomicBool>,
+    /// Parks [`ScanHandle::join`] until `finished` flips.
+    completion: Arc<CompletionSignal>,
 }
 
 struct CoordinatorState {
@@ -550,9 +586,17 @@ struct CoordinatorState {
     /// Tracked directory nodes currently open (created but not yet closed),
     /// including the root and parked/awaiting directories.
     open_dirs: u64,
+    /// Total number of directories discovered for this scan so far, i.e. the
+    /// progress denominator: every closed, open, queued, in-flight and
+    /// budget-refused (size-only) directory. Grows while the frontier expands;
+    /// the scan reaches 100% exactly when every discovered directory settles.
+    discovered_dirs: u64,
     /// Highest coverage published so far; keeps the percent monotonic even
     /// when listing an open directory discovers a large new subtree.
     percent_peak: f64,
+    /// Whether the initial 0%-ish progress frame after dispatching the first
+    /// jobs has already been emitted.
+    initial_progress_sent: bool,
     seq: u64,
     in_flight: usize,
     started: Instant,
@@ -569,7 +613,6 @@ struct CoordinatorState {
     focus_processed: bool,
     cancelled: bool,
     paused: bool,
-    volume_used: Option<u64>,
     event_tx: mpsc::Sender<ScanEvent>,
     scan_id: ScanId,
     /// Device of the scan root; subdirectories on another device are skipped.
@@ -590,8 +633,6 @@ struct CoordinatorState {
     /// Restored key → live index, so the re-list can re-enqueue adopted open
     /// dirs at their existing nodes.
     adopted_index: HashMap<String, u32>,
-    /// Predicted giant directories awaiting exact post-scan calibration.
-    calibrate: Vec<CalibrationJob>,
     /// Directories parked while the user decides an authorization prompt,
     /// keyed by their node-key string so decisions from a front end resolve
     /// without a key→index lookup.
@@ -640,7 +681,6 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         root_ino,
         root_path,
         focus_path,
-        volume_used,
         tree,
         cancel,
         paused,
@@ -652,6 +692,7 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         permission_rx,
         stop,
         finished,
+        completion,
     } = inputs;
 
     // Every path comparison below assumes one spelling per directory:
@@ -662,6 +703,10 @@ fn run_coordinator(inputs: CoordinatorInputs) {
     // Root (index 0) is open from the start; every adopted node whose subtree
     // was unfinished is also open and will be re-walked.
     let seed_open = 1 + adopted_nodes.iter().filter(|node| !node.closed).count() as u64;
+    // The progress denominator counts the root plus every restored node once;
+    // the re-walk reuses adopted nodes (no re-discovery increments), and newly
+    // reached directories enlarge it as normal.
+    let seed_discovered = 1 + adopted_nodes.len() as u64;
 
     let mut state = CoordinatorState {
         queue: BinaryHeap::new(),
@@ -677,7 +722,9 @@ fn run_coordinator(inputs: CoordinatorInputs) {
             progress
         },
         open_dirs: seed_open,
+        discovered_dirs: seed_discovered,
         percent_peak: 0.0,
+        initial_progress_sent: false,
         seq: 0,
         in_flight: 0,
         started: Instant::now(),
@@ -689,7 +736,6 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         focus_processed: focus_path == root_path,
         cancelled: false,
         paused: false,
-        volume_used,
         event_tx,
         scan_id,
         root_dev,
@@ -706,7 +752,6 @@ fn run_coordinator(inputs: CoordinatorInputs) {
             .collect(),
         adopted_closed,
         adopted_index,
-        calibrate: Vec::new(),
         awaiting: HashMap::new(),
         permission_rx,
         refresh_roots: HashSet::new(),
@@ -718,11 +763,53 @@ fn run_coordinator(inputs: CoordinatorInputs) {
     // Resume: publish restored nodes before normal discovery, and tell each
     // parent which adopted (open) children it is still waiting for. Closed
     // adopted children are not pending — they already pre-charged the parent.
+    //
+    // Restore in chunks with a Progress event between each one: a large resume
+    // can restore a million directories before the main walk emits anything,
+    // which otherwise looks like a frozen scan with items stuck at zero.
     if !adopted_nodes.is_empty() {
-        let _ = state.event_tx.send(ScanEvent::NodesAdopted {
-            scan: state.scan_id,
-            nodes: adopted_nodes,
-        });
+        let total = adopted_nodes.len();
+        let final_bytes = state.progress.bytes;
+        let final_files = state.progress.files;
+        let final_dirs = state.progress.dirs;
+        let open_frontier =
+            total - adopted_nodes.iter().filter(|node| node.closed).count();
+        let restored_peak = if final_dirs + open_frontier as u64 > 0 {
+            final_dirs as f64 / (final_dirs + open_frontier as u64) as f64
+        } else {
+            1.0
+        };
+        state.progress.bytes = ByteSize::ZERO;
+        state.progress.files = 0;
+        state.progress.dirs = 0;
+        const ADOPT_CHUNK: usize = 2_000;
+        for (i, chunk) in adopted_nodes.chunks(ADOPT_CHUNK).enumerate() {
+            let _ = state.event_tx.send(ScanEvent::NodesAdopted {
+                scan: state.scan_id,
+                nodes: chunk.to_vec(),
+            });
+            let fraction =
+                ((i + 1) * ADOPT_CHUNK).min(total) as f64 / total as f64;
+            state.progress.bytes = ByteSize::new(
+                (final_bytes.logical as f64 * fraction) as u64,
+                (final_bytes.physical as f64 * fraction) as u64,
+            );
+            state.progress.files = (final_files as f64 * fraction) as u64;
+            state.progress.dirs = (final_dirs as f64 * fraction) as u64;
+            state.progress.elapsed_secs = state.started.elapsed().as_secs_f64();
+            state.progress.coverage = restored_peak * fraction;
+            let _ = state.event_tx.send(ScanEvent::Progress {
+                scan: state.scan_id,
+                progress: state.progress,
+            });
+        }
+        // Exact seed state for the main walk; hold the peak so the percent
+        // cannot dip backwards between restoration and the first flush.
+        state.progress.bytes = final_bytes;
+        state.progress.files = final_files;
+        state.progress.dirs = final_dirs;
+        state.progress.coverage = restored_peak;
+        state.percent_peak = restored_peak;
     }
     for (parent, count) in seed_pending {
         *state.pending_children.entry(parent).or_insert(0) += count;
@@ -788,28 +875,6 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         state.journal.complete(&state.root_text);
     }
 
-    // Predicted giant directories are measured exactly after the main scan.
-    // The background thread holds its own event sender, so `Finished` below
-    // still precedes the `Calibrated` updates. Nothing is launched for a
-    // cancellation: estimates stay estimates until the next scan.
-    let calibrate = std::mem::take(&mut state.calibrate);
-    if matches!(outcome, ScanOutcome::Completed) && !calibrate.is_empty() {
-        let bg_tree = Arc::clone(&tree);
-        let bg_event_tx = state.event_tx.clone();
-        std::thread::Builder::new()
-            .name("sift-calibration".into())
-            .spawn(move || {
-                run_background_calibration(
-                    calibrate,
-                    bg_tree,
-                    bg_event_tx,
-                    scan_id,
-                    workers,
-                );
-            })
-            .ok();
-    }
-
     let final_progress = state.progress;
     let _ = (root_key,);
 
@@ -821,6 +886,7 @@ fn run_coordinator(inputs: CoordinatorInputs) {
     // The main walk is over even though this thread lingers; `join()` may
     // return and the UI may present results.
     finished.store(true, AtomicOrdering::SeqCst);
+    completion.mark();
 
     // Linger for post-completion authorization grants. Unauthorized dirs were
     // settled at zero during the walk; a grant now starts a small refresh walk,
@@ -873,7 +939,7 @@ fn coordinator_loop(
     workers: usize,
 ) -> ScanOutcome {
     let mut outcome = ScanOutcome::Completed;
-    loop {
+    'outer: loop {
         // Re-prioritise if the focus moved.
         let generation = focus_generation.load(AtomicOrdering::SeqCst);
         if generation != state.focus_seen_generation {
@@ -942,6 +1008,17 @@ fn coordinator_loop(
             state.in_flight += 1;
         }
 
+        // Emit an initial progress frame right after the first jobs are
+        // dispatched, before any directory read returns. Without this the UI
+        // stays frozen while a worker is blocked inside the first (possibly
+        // very large or permission-gated) readdir, which reads as "nothing is
+        // happening for the first few seconds".
+        if !state.initial_progress_sent {
+            state.initial_progress_sent = true;
+            flush_progress(state, tree);
+            state.last_flush = Instant::now();
+        }
+
         if state.in_flight == 0 {
             if state.paused {
                 // Paused with every in-flight job settled. Do not treat the
@@ -962,15 +1039,42 @@ fn coordinator_loop(
             break;
         }
 
-        let result = match result_rx.recv() {
-            Ok(result) => result,
-            Err(_) => {
-                outcome = if state.cancelled {
-                    ScanOutcome::Cancelled
-                } else {
-                    ScanOutcome::Failed
-                };
-                break;
+        // Wait for the next worker result, but never block past a short slice:
+        // a worker can spend seconds in one giant directory (getattrlistbulk on
+        // a flat million-entry folder, or a size-only subtree walk), and a
+        // blocking `recv()` would delay cancellation/stop for all of it. Poll
+        // the flags on each slice while still parking the thread otherwise.
+        let result = 'wait: loop {
+            match result_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(result) => break 'wait result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if cancel.load(AtomicOrdering::SeqCst)
+                        || state.stop.load(AtomicOrdering::SeqCst)
+                    {
+                        state.cancelled = true;
+                        outcome = ScanOutcome::Cancelled;
+                        break 'outer;
+                    }
+                    // Re-prioritise on a focus move and pick up authorization
+                    // decisions while waiting, same as the loop top does.
+                    let generation = focus_generation.load(AtomicOrdering::SeqCst);
+                    if generation != state.focus_seen_generation {
+                        state.focus_seen_generation = generation;
+                        state.focus = normalize(&focus.lock().unwrap());
+                        rebuild_categories(state);
+                    }
+                    while let Ok(decision) = state.permission_rx.try_recv() {
+                        apply_permission_decision(state, tree, decision);
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    outcome = if state.cancelled {
+                        ScanOutcome::Cancelled
+                    } else {
+                        ScanOutcome::Failed
+                    };
+                    break 'outer;
+                }
             }
         };
         state.in_flight -= 1;
@@ -1012,6 +1116,12 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
                         child_fds,
                     );
                     drop(tree_guard);
+                    // A directory is one readdir work unit and is "done" the
+                    // moment its listing is in hand — not when its whole
+                    // subtree has closed (BFS makes that much later). Counting
+                    // reads keeps the progress fraction advancing steadily
+                    // with the workers instead of stalling then jumping.
+                    state.progress.dirs += 1;
                 }
                 // Parked pending a user decision: do not close the directory
                 // and do not touch pending_children, so its parent stays open.
@@ -1026,11 +1136,15 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
                         child_fds,
                         matches!(kind, ReadErrorKind::PermissionTcc),
                     );
+                    // The read finished (denied); count the unit so progress
+                    // is not held open forever by an unresolved directory.
+                    state.progress.dirs += 1;
                 }
                 // NotFound, Other, or any future variant: settle at zero.
                 Err(_) => {
                     let mut tree_guard = tree.lock().unwrap();
                     state.progress.denied += 1;
+                    state.progress.dirs += 1;
                     // Unreadable directory: mark it and settle it at zero.
                     if let Some(node) = tree_guard.node_mut(index) {
                         node.set_denied(true);
@@ -1055,6 +1169,10 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
             if finished_all {
                 state.size_only_pending.remove(&parent);
             }
+            // One size-only job settles one budget-refused directory: count
+            // it as a settled work unit (it was added to discovered_dirs when
+            // enqueued), keeping progress denominator and numerator aligned.
+            state.progress.dirs += 1;
             state
                 .unrecorded
                 .entry(parent)
@@ -1070,21 +1188,6 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
             {
                 close_and_cascade(state, &mut tree_guard, parent);
             }
-            drop(tree_guard);
-        }
-        DirResult::Predicted { index } => {
-            // The worker skipped the read; queue exact calibration and close
-            // the node at zero so the main scan can complete.
-            let path = {
-                let mut tree_guard = tree.lock().unwrap();
-                tree_guard.path(index)
-            };
-            state.calibrate.push(CalibrationJob {
-                index,
-                path: PathBuf::from(&path),
-            });
-            let mut tree_guard = tree.lock().unwrap();
-            close_predicted(state, &mut tree_guard, index);
             drop(tree_guard);
         }
     }
@@ -1387,12 +1490,13 @@ fn process_dir_entries(
                     // Closed subtree: skip it entirely. Its aggregate already
                     // pre-charged the (open) parent at adoption, and the node is
                     // already closed, so do not recount or re-enqueue it.
-                    state.progress.dirs += 1;
+                    // `dirs`/`discovered_dirs` were seeded for it once at adopt.
                     continue;
                 }
                 // Open adopted subtree: re-walk it at its existing node so its
                 // unfinished contents are discovered. It was counted as pending
-                // at adoption; that single pending slot is reused.
+                // at adoption; that single pending slot is reused, and its
+                // directory was already included in the discovered seed.
                 if let Some(existing_index) = state.adopted_index.get(&key_text).copied() {
                     let preopened = child_fds.take(&entry.name);
                     let child_seq = state.next_seq();
@@ -1413,7 +1517,6 @@ fn process_dir_entries(
                         preopened,
                     });
                     child_dirs += 1;
-                    state.progress.dirs += 1;
                 }
                 continue;
             }
@@ -1465,7 +1568,6 @@ fn process_dir_entries(
                         preopened,
                     });
                     child_dirs += 1;
-                    state.progress.dirs += 1;
                     dir_entries.push(DirectoryEntry::new(
                         child_key,
                         name_string,
@@ -1495,6 +1597,11 @@ fn process_dir_entries(
                 tree.open_dir(index, child_key, &entry.name, mtime_ms, deletable, false)
             {
                 state.open_dirs += 1;
+                // A fresh (non-refresh) directory is one more unit of work the
+                // scan must settle; refresh walks reuse already-counted nodes.
+                if !in_refresh {
+                    state.discovered_dirs += 1;
+                }
                 if in_refresh {
                     // The new node belongs to the refresh walk; record it so the
                     // cache knows the child now exists for later lookups.
@@ -1539,6 +1646,9 @@ fn process_dir_entries(
                 ));
             } else {
                 // Budget refused: still count the bytes via a size-only job.
+                // It is still one directory the scan must settle, so it stays
+                // in the progress denominator.
+                state.discovered_dirs += 1;
                 let count = state.size_only_pending.entry(index).or_insert(0);
                 *count += 1;
                 let size_seq = state.next_seq();
@@ -1690,7 +1800,9 @@ fn close_and_cascade(state: &mut CoordinatorState, tree: &mut ScanTree, index: u
         tree.close_dir(cursor);
         state.open_dirs = state.open_dirs.saturating_sub(1);
         state.dirty.insert(cursor);
-        state.progress.dirs += 1;
+        // `progress.dirs` already counted this directory when its readdir
+        // completed (in the Tracked result handler); closing is bookkeeping,
+        // not another work unit.
         newly_closed.push(ClosedDir::new(
             key.to_string(),
             final_size.logical,
@@ -1762,7 +1874,9 @@ fn finish_refresh_root(state: &mut CoordinatorState, tree: &mut ScanTree, index:
     let changed = tree.refresh_propagate(index, measured, files);
 
     state.open_dirs = state.open_dirs.saturating_sub(1);
-    state.progress.dirs += 1;
+    // Do not increment progress.dirs here: this directory was already counted
+    // when it first closed in the main walk; a refresh re-settles the same
+    // work unit. Counting it again would push coverage past its denominator.
     state.dirty.insert(index);
 
     let _ = state.event_tx.send(ScanEvent::DirectoryClosed {
@@ -1797,137 +1911,6 @@ fn finish_refresh_root(state: &mut CoordinatorState, tree: &mut ScanTree, index:
     });
 }
 
-/// One predicted giant directory awaiting exact measurement.
-struct CalibrationJob {
-    index: u32,
-    path: PathBuf,
-}
-
-/// A directory at or above this own-size threshold is treated as a giant.
-///
-/// On APFS a directory's `st_size` grows roughly linearly with its entry count
-/// (~32 B/entry) once it spills out of inline storage, so 4 MiB predicts a
-/// directory on the order of 100k+ entries.
-const PREDICT_MIN_DIR_SIZE: u64 = 4 * 1024 * 1024;
-
-/// Tag the node as an estimate and close it at its current (zero) totals.
-fn close_predicted(state: &mut CoordinatorState, tree: &mut ScanTree, index: u32) {
-    if let Some(node) = tree.node_mut(index) {
-        node.set_estimated(true);
-    }
-    close_and_cascade(state, tree, index);
-}
-
-/// Measure every predicted giant subtree on a small thread pool, patching each
-/// exact result into the closed tree and publishing `Calibrated`.
-fn run_background_calibration(
-    jobs: Vec<CalibrationJob>,
-    tree: Arc<Mutex<ScanTree>>,
-    event_tx: mpsc::Sender<ScanEvent>,
-    scan_id: ScanId,
-    workers: usize,
-) {
-    let started = Instant::now();
-    let worker_count = workers.clamp(1, 16);
-    let (job_tx, job_rx) = crossbeam_channel::unbounded::<CalibrationJob>();
-    let (result_tx, result_rx) =
-        mpsc::channel::<(u32, ByteSize, u32)>();
-
-    let mut handles = Vec::new();
-    for _ in 0..worker_count {
-        let job_rx = job_rx.clone();
-        let result_tx = result_tx.clone();
-        let handle = std::thread::Builder::new()
-            .name("sift-calibrator".into())
-            .spawn(move || {
-                let mut buffer = BulkBuffer::new();
-                while let Ok(job) = job_rx.recv() {
-                    let (size, files) =
-                        measure_subtree(&job.path, &mut buffer);
-                    if result_tx.send((job.index, size, files)).is_err() {
-                        break;
-                    }
-                }
-            });
-        if let Ok(handle) = handle {
-            handles.push(handle);
-        }
-    }
-    drop(result_tx);
-    for job in jobs {
-        if job_tx.send(job).is_err() {
-            break;
-        }
-    }
-    drop(job_tx);
-
-    for (index, size, files) in result_rx {
-        let (key, new_size, new_files) = {
-            let mut guard = tree.lock().unwrap();
-            let key = guard
-                .node(index)
-                .map(|node| node.key)
-                .unwrap_or_else(|| NodeKey::from_path(Path::new("")));
-            guard.adjust_totals(index, size, files as u64);
-            if let Some(node) = guard.node_mut(index) {
-                node.set_estimated(false);
-            }
-            let node = guard.node(index).copied();
-            (
-                key,
-                node.map(|node| node.size).unwrap_or(size),
-                node.map(|node| node.file_count as u64).unwrap_or(files as u64),
-            )
-        };
-        let _ = event_tx.send(ScanEvent::Calibrated {
-            scan: scan_id,
-            key,
-            size: new_size,
-            files: new_files,
-        });
-    }
-
-    for handle in handles {
-        let _ = handle.join();
-    }
-    let _ = event_tx.send(ScanEvent::Warning {
-        scan: scan_id,
-        message: format!("大型目录校准完成（{:.1}s）", started.elapsed().as_secs_f64()),
-    });
-    let _ = event_tx.send(ScanEvent::CalibrationFinished { scan: scan_id });
-}
-
-/// Sum a whole subtree without building tree nodes, deduping hardlinks in a
-/// local set the same way the tracked walk does. Iterative so stack usage is
-/// bounded regardless of tree depth.
-fn measure_subtree(path: &Path, buffer: &mut BulkBuffer) -> (ByteSize, u32) {
-    let mut total = ByteSize::ZERO;
-    let mut files = 0u32;
-    let mut seen_links: HashSet<FileId> = HashSet::new();
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = DirReader::read_reusing(&dir, true, buffer) else {
-            continue;
-        };
-        for entry in entries {
-            if entry.is_dir && !entry.is_symlink {
-                stack.push(join_path(&dir, &entry.name));
-            } else if entry.is_file {
-                if entry.nlink > 1 {
-                    if let Some(id) = entry.file_id() {
-                        if !seen_links.insert(id) {
-                            continue;
-                        }
-                    }
-                }
-                total += entry.size();
-                files += 1;
-            }
-        }
-    }
-    (total, files)
-}
-
 /// Recompute every queued category against the current focus.
 fn rebuild_categories(state: &mut CoordinatorState) {
     let items: Vec<OrdDir> = state.queue.drain().collect();
@@ -1945,31 +1928,34 @@ fn flush_progress(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>) {
     let tree_guard = tree.lock().unwrap();
     let total = tree_guard.total();
 
-    // Byte coverage: how much of the volume's used space has been measured.
-    let byte_coverage = match state.volume_used {
-        Some(used) if used > 0 => {
-            (state.progress.bytes.dominant() as f64 / used as f64).clamp(0.0, 1.0)
-        }
-        _ => 0.0,
-    };
-    // Frontier coverage: fraction of known directories already closed. This
-    // prevents a resumed scan (whose seeded bytes already equal the whole
-    // volume) from showing 100% while its open frontier is still walking.
-    let known_dirs = state.progress.dirs + state.open_dirs;
-    let dir_coverage = if known_dirs > 0 {
-        state.progress.dirs as f64 / known_dirs as f64
+    // Progress is the fraction of *discovered directories already settled*.
+    // It deliberately does NOT divide measured bytes by the volume's used
+    // space: a scan may target one folder (then the denominator dwarfs the
+    // numerator and the ring sits at 0% until the end), and the scanner cannot
+    // see other mounts, permission-denied trees or APFS snapshots, so byte
+    // coverage would never reach 100% in step with the real finish.
+    //
+    // `dirs` counts settled directories (closed tracked nodes plus returned
+    // size-only jobs); `discovered_dirs` is every work unit, including dirs
+    // still open, queued, in flight or in a size-only walk. The denominator
+    // grows as the frontier expands; the ratio climbs as subtrees close and
+    // reaches exactly 1.0 only when nothing remains open.
+    let dir_coverage = if state.discovered_dirs > 0 {
+        (state.progress.dirs as f64 / state.discovered_dirs as f64).clamp(0.0, 1.0)
     } else {
         0.0
     };
-    let mut coverage = byte_coverage.min(dir_coverage);
-    if state.open_dirs > 0 {
+    let coverage = if state.open_dirs > 0 {
         // 100% is reserved for a fully closed tree.
-        coverage = coverage.min(0.99);
+        dir_coverage.min(0.99)
     } else {
-        coverage = 1.0;
-    }
-    // Hold the peak: newly discovered subtrees enlarge the denominator and
-    // would otherwise make the percent visibly move backwards.
+        1.0
+    };
+    // Hold the peak. Discovery is breadth-driven: once a parent closes its
+    // children, the ratio advances and never permanently falls, because
+    // settled directories stay settled and any newly discovered subtree was
+    // reached from a directory whose closure has not completed yet. The fully
+    // closed tree overrides the peak with exactly 1.0.
     state.percent_peak = state.percent_peak.max(coverage);
     state.progress.coverage = state.percent_peak;
 
@@ -2051,7 +2037,6 @@ enum DirResult {
         size: ByteSize,
         files: u32,
     },
-    Predicted { index: u32 },
 }
 
 fn read_job(
@@ -2067,26 +2052,13 @@ fn read_job(
             writable,
             preopened,
         } => {
-            // One fstat on the descriptor already in hand decides whether
-            // this is a giant flat directory, which is skipped during the
-            // main scan and measured exactly afterward. The scan root is
-            // exempt: never predict the whole walk away.
+            // Every directory — including giant flat ones — is read inline so
+            // the finished tree is exact with every parent equal to the sum of
+            // its children. A tied worker is hidden by the rest of the pool.
             let index = *index;
             let writable = *writable;
             let mut preopened = preopened.take();
             let path = std::mem::take(path);
-            let dir_size = match preopened {
-                Some(fd) => fd_size(fd),
-                None => path_size(&path),
-            };
-            if index != 0
-                && dir_size.is_some_and(|size| size >= PREDICT_MIN_DIR_SIZE)
-            {
-                if let Some(fd) = preopened {
-                    close_raw_fd(fd);
-                }
-                return DirResult::Predicted { index };
-            }
             let outcome =
                 read_with_children(preopened.take(), &path, want_physical, buffer);
             DirResult::Tracked {
@@ -2342,10 +2314,38 @@ mod tests {
     fn drain(handle: &ScanHandle) -> Vec<ScanEvent> {
         let mut events = Vec::new();
         while let Ok(event) = handle.events.recv() {
-            let is_finished = matches!(event, ScanEvent::Finished { .. });
+            let finished = matches!(event, ScanEvent::Finished { .. });
             events.push(event);
-            if is_finished {
+            if finished {
                 break;
+            }
+        }
+        events
+    }
+
+    /// Permission decisions can be handled by the coordinator's post-completion
+    /// linger loop, whose warning/denied-close can land *after* `Finished` (the
+    /// main walk is done but the thread waits on the permission channel). Drain
+    /// those trailing events with a bounded deadline instead of racing them.
+    fn drain_including_lingering(handle: &ScanHandle) -> Vec<ScanEvent> {
+        let mut events = drain(handle);
+        let deadline = Instant::now() + Duration::from_millis(1_500);
+        while Instant::now() < deadline {
+            match handle.events.recv_timeout(Duration::from_millis(50)) {
+                Ok(event) => events.push(event),
+                Err(_) => {
+                    // Stop once the denied close and its warning are both seen,
+                    // so the common path never pays the full deadline.
+                    let closed = events
+                        .iter()
+                        .any(|e| matches!(e, ScanEvent::DirectoryClosed { .. }));
+                    let warned = events
+                        .iter()
+                        .any(|e| matches!(e, ScanEvent::Warning { .. }));
+                    if closed && warned {
+                        break;
+                    }
+                }
             }
         }
         events
@@ -2598,7 +2598,7 @@ mod tests {
             .control()
             .resolve_permission(key.to_string(), false, None)
             .unwrap();
-        let events = drain(&handle);
+        let events = drain_including_lingering(&handle);
 
         assert!(events.iter().any(|e| matches!(
             e,
@@ -2772,6 +2772,60 @@ mod tests {
     }
 
     #[test]
+    fn progress_is_driven_by_directories_without_a_volume_byte_hint() {
+        // No `with_volume_used_bytes`: a single-folder or focus scan has no
+        // trustworthy whole-volume denominator. Progress must still start at
+        // zero, advance strictly inside (0,1) while walking, and end at
+        // exactly 1.0 on completion — it must not sit at 0% and jump to 100.
+        let tag = "pct-dirlen";
+        let base =
+            std::env::temp_dir().join(format!("sift-scan-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        const DIRS: u32 = 8000;
+        for i in 0..DIRS {
+            let dir = base.join(format!("d{i}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            // A few files each: scan time is dominated by thousands of
+            // directory enumerations, while keeping fixture creation cheap.
+            for j in 0..3u32 {
+                std::fs::write(dir.join(format!("f{j}")), vec![5u8; 100]).unwrap();
+            }
+        }
+
+        // One worker keeps many directories open at once, so a mid-scan flush
+        // sees both settled and unsettled work units.
+        let engine = ScanEngine::with_workers(1);
+        let handle = engine
+            .scan(ScanRequest::new(ScanId(81), base.clone()))
+            .unwrap();
+
+        let mut interim = Vec::new();
+        let mut final_cov = None;
+        while let Ok(event) = handle.events.recv_timeout(Duration::from_secs(30)) {
+            match event {
+                ScanEvent::Progress { progress, .. } => interim.push(progress.coverage),
+                ScanEvent::Finished { progress, .. } => {
+                    final_cov = Some(progress.coverage);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        handle.join();
+
+        assert_eq!(final_cov, Some(1.0), "completion must align with 100%");
+        assert!(
+            interim.iter().any(|&c| c > 0.0 && c < 1.0),
+            "progress must advance through the middle, got {interim:?}"
+        );
+        for c in &interim {
+            assert!((0.0..=1.0).contains(c), "coverage out of range: {c}");
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn cancel_stops_with_partial_results() {
         let base = temp_tree("cancel");
         let engine = ScanEngine::with_workers(4);
@@ -2787,6 +2841,56 @@ mod tests {
             _ => None,
         });
         assert_eq!(outcome, Some(ScanOutcome::Cancelled));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Cancellation while workers are busy must reach `Finished(Cancelled)`
+    /// promptly: the coordinator polls the flag on every 50 ms wait slice and
+    /// workers observe it between directories, so a cancel pressed mid-scan must
+    /// never wait for the whole volume walk to finish.
+    #[test]
+    fn cancel_during_an_active_scan_finishes_within_a_short_bound() {
+        // A wide flat directory keeps a worker inside one bulk enumeration,
+        // reproducing the "cancel pressed while reading a huge folder" case.
+        let tag = "cancel-latency";
+        let base =
+            std::env::temp_dir().join(format!("sift-scan-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let big = base.join("big");
+        std::fs::create_dir_all(&big).unwrap();
+        for i in 0..20_000u32 {
+            std::fs::write(big.join(format!("f{i}")), b"x").unwrap();
+        }
+
+        let engine = ScanEngine::with_workers(2);
+        let handle = engine
+            .scan(ScanRequest::new(ScanId(71), base.clone()))
+            .unwrap();
+
+        // Let the scan actually start reading before cancelling.
+        std::thread::sleep(Duration::from_millis(30));
+        handle.cancel();
+        let started = Instant::now();
+        let mut cancelled = false;
+        while let Ok(event) = handle.events.recv_timeout(Duration::from_secs(5)) {
+            if let ScanEvent::Finished {
+                outcome: ScanOutcome::Cancelled,
+                ..
+            } = event
+            {
+                cancelled = true;
+                break;
+            }
+        }
+        let elapsed = started.elapsed();
+        handle.join();
+
+        assert!(cancelled, "the scan must end as Cancelled");
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "cancel took {elapsed:?}, longer than the responsiveness bound"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -36,6 +36,11 @@ pub struct RoutineEntry {
     pub cadence: String,
     pub average_bytes: u64,
     pub mode: RoutineMode,
+    /// Explicit user-chosen targets for a path-based routine (e.g. a folder
+    /// picked from the explorer). Empty for a kind-based routine, whose targets
+    /// resolve from the cleanable list when the routine runs.
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 /// On-disk shape: definitions plus dismissed suggestion keys.

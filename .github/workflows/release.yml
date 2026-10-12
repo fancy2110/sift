@@ -1,0 +1,169 @@
+name: Release (3 platforms)
+
+# Builds installers for macOS / Windows / Linux whenever a v* tag is pushed,
+# and attaches them to a *draft* GitHub Release. The draft is never published
+# automatically: a human verifies artifacts and SHA256, then clicks Publish.
+#
+# Signing/notarization activates automatically when the matching secrets are
+# configured; without them unsigned packages are still produced (internal
+# testing only). See docs/release/packaging.md for every secret's meaning.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to (re)build, e.g. v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write # create the release and upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-14 # Apple Silicon; produces aarch64
+            rust_target: aarch64-apple-darwin
+            bundles: ''
+          - platform: windows
+            runner: windows-latest
+            rust_target: ''
+            bundles: '--bundles nsis'
+          - platform: linux
+            runner: ubuntu-22.04 # older glibc -> wider distro compatibility
+            rust_target: ''
+            bundles: '--bundles deb,appimage'
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf rpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust build cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify (type check + workspace tests)
+        shell: bash
+        run: |
+          pnpm check
+          cargo test --workspace --quiet
+
+      - name: Import Apple codesigning certificate
+        if: matrix.platform == 'macos'
+        # Secrets cannot be referenced directly in `if`; gate through env.
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No APPLE_CERTIFICATE secret configured; building an unsigned macOS app."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+        id: certgate
+
+      - name: Import certificate into keychain
+        if: matrix.platform == 'macos' && steps.certgate.outputs.skip == 'false'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Build and attach release bundle
+        uses: tauri-apps/tauri-action@v0
+        id: tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing/notarization — tauri-action skips when unset.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows signtool inputs (only present for the windows job).
+          TAURI_SIGNTOOL_SIGN_X509_DER: ${{ secrets.WINDOWS_CERTIFICATE }}
+          TAURI_SIGNTOOL_SIGN_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        with:
+          tagName: ${{ steps.meta.outputs.tag }}
+          releaseName: 'Sift ${{ steps.meta.outputs.tag }}'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.bundles }}
+
+      - name: Generate SHA256 checksums
+        id: checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/SHA256SUMS-${{ matrix.platform }}.txt"
+          : > "$OUT"
+          find src-tauri/target/release/bundle -type f \
+            \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*setup.exe' \
+               -o -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' \) \
+            -print0 | while IFS= read -r -d '' f; do
+            (cd "$(dirname "$f")" && shasum -a 256 "$(basename "$f")") >> "$OUT"
+          done
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+          cat "$OUT"
+
+      - name: Upload checksums to release
+        if: hashFiles(format('{0}/SHA256SUMS-{1}.txt', runner.temp, matrix.platform)) != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          files: ${{ steps.checksum.outputs.out }}
+          draft: true
+          prerelease: false

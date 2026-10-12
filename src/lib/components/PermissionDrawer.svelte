@@ -1,8 +1,3 @@
-<script module lang="ts">
-  // Persists across remounts (the drawer exists only on the home view).
-  let userCollapsed = false;
-</script>
-
 <script lang="ts">
   import { store } from '../store.svelte';
   import { t } from '../i18n.svelte';
@@ -17,26 +12,13 @@
   let readonly = $derived(
     store.permissionRequests.filter((req) => !req.tcc));
 
-  // Floating, collapsible panel on the right edge so the permission list never
-  // reflows the home layout. Auto-expands the first time requests appear; once
-  // the user collapses it manually, later arrivals leave it collapsed (the tab
-  // badge still updates). Reset when the queue drains.
+  // Floating panel on the right edge so the permission list never reflows the
+  // home layout. It stays collapsed by default — only the tab with the count
+  // badge is visible; the user opens it on demand.
   let open = $state(false);
-  let prevCount = 0;
-  $effect(() => {
-    const n = store.permissionRequests.length;
-    if (n === 0) {
-      userCollapsed = false;
-      open = false;
-    } else if (prevCount === 0 && !userCollapsed) {
-      open = true;
-    }
-    prevCount = n;
-  });
 
   function toggle() {
     open = !open;
-    if (!open) userCollapsed = true;
   }
 </script>
 

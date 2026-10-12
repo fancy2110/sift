@@ -36,19 +36,30 @@ impl From<&Volume> for VolumeInfo {
 }
 
 /// List every mounted volume, system volume first.
+///
+/// Async and on a blocking-task thread on purpose: `sysinfo` refreshes every
+/// disk's statistics (statfs/quota calls per mount), which takes tens of
+/// milliseconds — and far longer with a hung network mount. Tauri runs a
+/// synchronous command on the platform main thread, so an inline enumeration
+/// stalls window events during startup's first IPC wave.
 #[command]
-pub fn list_volumes() -> Vec<VolumeInfo> {
-    sift_platform::volume::list_volumes()
-        .iter()
-        .map(VolumeInfo::from)
-        .collect()
+pub async fn list_volumes() -> Result<Vec<VolumeInfo>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        sift_platform::volume::list_volumes()
+            .iter()
+            .map(VolumeInfo::from)
+            .collect()
+    })
+    .await
+    .map_err(|err| err.to_string())
 }
 
-/// The current user's home directory. The front end uses this as the deep-scan
-/// root for system volumes: system files are not cleanable.
+/// The current user's home directory, or null when the platform cannot
+/// determine it. The front end uses it for home-scoped UI; the backend's
+/// safety checks keep resolving the home directory independently.
 #[command]
 pub fn home_dir() -> Option<String> {
-    dirs::home_dir().map(|p| p.to_string_lossy().into_owned())
+    dirs::home_dir().map(|path| path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

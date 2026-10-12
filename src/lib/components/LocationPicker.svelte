@@ -11,10 +11,6 @@
     store.selectDisk(id);
     open = false;
   }
-  function pickPlace(id: string) {
-    store.selectPlace(id);
-    open = false;
-  }
 
   function onDocClick(event: MouseEvent) {
     if (open && panel && !panel.contains(event.target as Node)) open = false;
@@ -32,17 +28,12 @@
     aria-expanded={open}
     aria-haspopup="menu"
   >
-    {#if store.scopeKind === 'place'}
-      <Icon name={store.currentPlace?.icon ?? 'hardDrive'} size={14} />
-      <span class="max-w-[130px] truncate font-[550]">{t(store.currentPlace?.labelKey ?? 'common.disk')}</span>
-    {:else}
-      <Icon name={store.currentVolume?.isRemovable ? 'externalDrive' : 'hardDrive'} size={14} />
-      <span class="max-w-[130px] truncate font-[550]">{store.currentVolume?.name ?? t('common.disk')}</span>
-      {#if store.currentVolume}
-        <span class="num text-[11px]" style="color: var(--color-faint)">
-          {formatSize(store.currentVolume.availableBytes, 0)}
-        </span>
-      {/if}
+    <Icon name={store.currentVolume?.isRemovable ? 'externalDrive' : 'hardDrive'} size={14} />
+    <span class="max-w-[130px] truncate font-[550]">{store.currentVolume?.name ?? t('common.disk')}</span>
+    {#if store.currentVolume}
+      <span class="num text-[11px]" style="color: var(--color-faint)">
+        {formatSize(store.currentVolume.availableBytes, 0)}
+      </span>
     {/if}
     <Icon name="chevronUp" size={12} class="transition-transform duration-200" style={open ? '' : 'transform: rotate(180deg)'} />
   </button>
@@ -68,9 +59,9 @@
             <button
               type="button"
               role="menuitemradio"
-              aria-checked={store.scopeKind === 'disk' && vol.id === store.scopeId}
+              aria-checked={vol.id === store.scopeId}
               class="loc-item flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[12.5px] transition-colors"
-              style={store.scopeKind === 'disk' && vol.id === store.scopeId
+              style={vol.id === store.scopeId
                 ? 'background: color-mix(in oklch, var(--color-accent) 16%, var(--color-surface)); color: var(--color-fg)'
                 : 'color: var(--color-fg)'}
               onclick={() => pickDisk(vol.id)}
@@ -78,7 +69,7 @@
               <Icon
                 name={vol.isRemovable ? 'externalDrive' : 'hardDrive'}
                 size={15}
-                class={store.scopeKind === 'disk' && vol.id === store.scopeId
+                class={vol.id === store.scopeId
                   ? 'text-[var(--color-accent)]'
                   : 'text-[var(--color-muted)]'}
               />
@@ -88,39 +79,7 @@
                   {t('location.available', [formatSize(vol.availableBytes, 0)])}
                 </span>
               </span>
-              {#if store.scopeKind === 'disk' && vol.id === store.scopeId}
-                <Icon name="check" size={13} class="text-[var(--color-accent)]" stroke={2.2} />
-              {/if}
-            </button>
-          </li>
-        {/each}
-      </ul>
-
-      <p class="px-2.5 pb-1 pt-2.5 text-[10.5px] font-[600] uppercase tracking-[0.06em]" style="color: var(--color-faint)">
-        {t('location.places')}
-      </p>
-      <ul>
-        {#each store.places as place (place.id)}
-          <li>
-            <button
-              type="button"
-              role="menuitemradio"
-              aria-checked={store.scopeKind === 'place' && place.id === store.scopeId}
-              class="loc-item flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[12.5px] transition-colors"
-              style={store.scopeKind === 'place' && place.id === store.scopeId
-                ? 'background: color-mix(in oklch, var(--color-accent) 16%, var(--color-surface)); color: var(--color-fg)'
-                : 'color: var(--color-fg)'}
-              onclick={() => pickPlace(place.id)}
-            >
-              <Icon
-                name={place.icon}
-                size={15}
-                class={store.scopeKind === 'place' && place.id === store.scopeId
-                  ? 'text-[var(--color-accent)]'
-                  : 'text-[var(--color-muted)]'}
-              />
-              <span class="min-w-0 flex-1 truncate font-[550]">{t(place.labelKey)}</span>
-              {#if store.scopeKind === 'place' && place.id === store.scopeId}
+              {#if vol.id === store.scopeId}
                 <Icon name="check" size={13} class="text-[var(--color-accent)]" stroke={2.2} />
               {/if}
             </button>

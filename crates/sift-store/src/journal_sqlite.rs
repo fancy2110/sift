@@ -1,25 +1,34 @@
 //! SQLite implementation of [`ScanJournal`].
 //!
-//! Writes leave the scan hot path immediately: the coordinator hands records to
-//! one background writer that owns the connection, so directory discovery never
-//! waits on fsync. `load` is synchronous through request/reply so it observes
-//! committed data. WAL keeps writer and reader from contending.
+//! Writes never touch the scan hot path: the coordinator hands records to an
+//! unbounded queue and one background writer owns the connection, so directory
+//! discovery never waits on fsync. The writer drains everything queued and
+//! applies it in a single transaction, which keeps commit/fsync frequency flat
+//! no matter how fast the scan discovers directories. `load` is synchronous
+//! through request/reply, so it observes every earlier write. WAL keeps writer
+//! and reader from contending.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{channel, sync_channel, Sender, SyncSender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use sift_scan::{ClosedDir, DiscoveredDir, RestoredDir, RestoredScan, ScanJournal};
 
-/// Maximum queued writer messages. Beyond this the producer blocks: memory is
-/// bounded and back-pressure reaches the coordinator instead of an unbounded
-/// queue growing while a slow disk is fsyncing.
-const CHANNEL_CAPACITY: usize = 512;
+/// Maximum messages folded into one writer transaction. A cap bounds the work
+/// of a single commit; further messages go into the next drain immediately.
+const MAX_DRAIN: usize = 4096;
+
+/// Current on-disk schema version, stored in `PRAGMA user_version`. Bump and
+/// add a step in [`migrate_schema`] whenever a table or column changes. An
+/// older database opened by a newer binary migrates forward; a newer database
+/// (version above this constant) is refused so an old binary can never run
+/// against columns it does not understand.
+const SCHEMA_VERSION: i64 = 1;
 
 /// A durable, SQLite-backed scan journal. Cheap to clone (state is shared).
 pub struct SqliteScanJournal {
-    cmd: SyncSender<WriterMsg>,
+    cmd: Sender<WriterMsg>,
     stats: Arc<WriterStats>,
 }
 
@@ -59,50 +68,12 @@ impl SqliteScanJournal {
 
     fn with_conn(mut conn: rusqlite::Connection) -> rusqlite::Result<Self> {
         init_schema(&mut conn)?;
-        let (cmd, rx) = sync_channel::<WriterMsg>(CHANNEL_CAPACITY);
+        let (cmd, rx) = channel::<WriterMsg>();
         let stats = Arc::<WriterStats>::default();
         let writer_stats = Arc::clone(&stats);
         std::thread::Builder::new()
             .name("sift-journal".into())
-            .spawn(move || {
-                while let Ok(msg) = rx.recv() {
-                    match msg {
-                        WriterMsg::Begin(root) => {
-                            if let Err(err) = apply_begin(&conn, &root) {
-                                record_write_error(&writer_stats, "begin", err);
-                            }
-                        }
-                        WriterMsg::Discovered { root, dirs } => {
-                            if let Err(err) = apply_discovered(&conn, &root, dirs) {
-                                record_write_error(&writer_stats, "discovered", err);
-                            }
-                        }
-                        WriterMsg::Closed { root, updates } => {
-                            if let Err(err) = apply_closed(&conn, &root, updates) {
-                                record_write_error(&writer_stats, "closed", err);
-                            }
-                        }
-                        WriterMsg::Load { root, reply } => {
-                            let scan = load_scan(&conn, &root).unwrap_or_default();
-                            let _ = reply.send(scan);
-                        }
-                        WriterMsg::PruneOpen(root) => {
-                            if let Err(err) = conn.execute(
-                                "DELETE FROM dirs WHERE root=?1 AND closed=0",
-                                rusqlite::params![root],
-                            ) {
-                                record_write_error(&writer_stats, "prune_open", err);
-                            }
-                        }
-                        WriterMsg::Complete(root) => {
-                            if let Err(err) = apply_complete(&conn, &root) {
-                                record_write_error(&writer_stats, "complete", err);
-                            }
-                        }
-                        WriterMsg::Shutdown => break,
-                    }
-                }
-            })
+            .spawn(move || writer_loop(&conn, &rx, &writer_stats))
             .expect("spawn journal writer");
         Ok(Self { cmd, stats })
     }
@@ -123,6 +94,121 @@ impl SqliteScanJournal {
     }
 }
 
+/// Own the connection until every sender disconnects (or a shutdown arrives).
+/// Each pass applies all currently queued messages in one transaction.
+fn writer_loop(conn: &rusqlite::Connection, rx: &Receiver<WriterMsg>, stats: &WriterStats) {
+    while let Ok(first) = rx.recv() {
+        let mut batch = Vec::with_capacity(MAX_DRAIN.min(64));
+        batch.push(first);
+        while batch.len() < MAX_DRAIN {
+            match rx.try_recv() {
+                Ok(msg) => batch.push(msg),
+                Err(_) => break,
+            }
+        }
+        if apply_batch(conn, batch, stats) {
+            break;
+        }
+    }
+}
+
+/// Apply one drained batch. Returns true when the writer should exit.
+fn apply_batch(conn: &rusqlite::Connection, msgs: Vec<WriterMsg>, stats: &WriterStats) -> bool {
+    let mut tx = match conn.unchecked_transaction() {
+        Ok(tx) => tx,
+        // Without a transaction the records cannot be applied; count one
+        // failure per batch rather than per message and let the scan continue.
+        Err(err) => {
+            record_write_error(stats, "begin transaction", err);
+            return false;
+        }
+    };
+
+    let mut shutdown = false;
+    for msg in msgs {
+        match msg {
+            WriterMsg::Begin(root) => {
+                if let Err(err) = tx.execute(
+                    "INSERT INTO scans(root, running) VALUES (?1, 1)\n\
+                     ON CONFLICT(root) DO UPDATE SET running=1",
+                    rusqlite::params![root.path],
+                ) {
+                    record_write_error(stats, "begin", err);
+                }
+                if let Err(err) = upsert_discovered(&tx, &root.path, &root) {
+                    record_write_error(stats, "begin", err);
+                }
+            }
+            WriterMsg::Discovered { root, dirs } => {
+                for d in &dirs {
+                    if let Err(err) = upsert_discovered(&tx, &root, d) {
+                        record_write_error(stats, "discovered", err);
+                    }
+                }
+            }
+            WriterMsg::Closed { root, updates } => {
+                for c in &updates {
+                    if let Err(err) = tx.execute(
+                        "UPDATE dirs SET closed=1, logical=?3, physical=?4, files=?5\n\
+                         WHERE root=?1 AND key=?2",
+                        rusqlite::params![
+                            root,
+                            c.key,
+                            c.logical as i64,
+                            c.physical as i64,
+                            c.files as i64
+                        ],
+                    ) {
+                        record_write_error(stats, "closed", err);
+                    }
+                }
+            }
+            // A load must observe every write that preceded it: commit the
+            // in-flight transaction, answer, then reopen for later messages.
+            WriterMsg::Load { root, reply } => {
+                if let Err(err) = tx.commit() {
+                    record_write_error(stats, "commit before load", err);
+                }
+                let scan = load_scan(conn, &root).unwrap_or_default();
+                let _ = reply.send(scan);
+                tx = match conn.unchecked_transaction() {
+                    Ok(tx) => tx,
+                    Err(err) => {
+                        record_write_error(stats, "reopen transaction", err);
+                        return false;
+                    }
+                };
+            }
+            WriterMsg::PruneOpen(root) => {
+                if let Err(err) = tx.execute(
+                    "DELETE FROM dirs WHERE root=?1 AND closed=0",
+                    rusqlite::params![root],
+                ) {
+                    record_write_error(stats, "prune_open", err);
+                }
+            }
+            WriterMsg::Complete(root) => {
+                if let Err(err) =
+                    tx.execute("DELETE FROM dirs WHERE root=?1", rusqlite::params![root])
+                {
+                    record_write_error(stats, "complete", err);
+                }
+                if let Err(err) =
+                    tx.execute("DELETE FROM scans WHERE root=?1", rusqlite::params![root])
+                {
+                    record_write_error(stats, "complete", err);
+                }
+            }
+            WriterMsg::Shutdown => shutdown = true,
+        }
+    }
+
+    if let Err(err) = tx.commit() {
+        record_write_error(stats, "commit", err);
+    }
+    shutdown
+}
+
 /// Log and record one background write failure.
 fn record_write_error(stats: &WriterStats, stage: &str, err: rusqlite::Error) {
     eprintln!("sift journal: write failed during {stage}: {err}");
@@ -134,50 +220,80 @@ fn record_write_error(stats: &WriterStats, stage: &str, err: rusqlite::Error) {
 
 impl Drop for SqliteScanJournal {
     fn drop(&mut self) {
-        // Best effort and never blocking: when the queue is full the sender is
-        // dropped right after this, and the writer exits on disconnect once it
-        // drains the queued messages.
-        let _ = self.cmd.try_send(WriterMsg::Shutdown);
+        // The queue is unbounded, so send never blocks. The writer applies all
+        // messages ahead of the shutdown and exits immediately afterwards.
+        let _ = self.cmd.send(WriterMsg::Shutdown);
     }
 }
 
-fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;\n\
-         PRAGMA synchronous=NORMAL;\n\
-         CREATE TABLE IF NOT EXISTS scans (\n\
-             root TEXT PRIMARY KEY,\n\
-             running INTEGER NOT NULL DEFAULT 1\n\
-         );\n\
-         CREATE TABLE IF NOT EXISTS dirs (\n\
-             root TEXT NOT NULL,\n\
-             key TEXT NOT NULL,\n\
-             parent_key TEXT NOT NULL,\n\
-             name BLOB NOT NULL,\n\
-             path TEXT NOT NULL,\n\
-             depth INTEGER NOT NULL,\n\
-             mtime_ms INTEGER NOT NULL,\n\
-             dev INTEGER NOT NULL,\n\
-             ino INTEGER NOT NULL,\n\
-             is_symlink INTEGER NOT NULL,\n\
-             deletable INTEGER NOT NULL,\n\
-             closed INTEGER NOT NULL DEFAULT 0,\n\
-             logical INTEGER NOT NULL DEFAULT 0,\n\
-             physical INTEGER NOT NULL DEFAULT 0,\n\
-             files INTEGER NOT NULL DEFAULT 0,\n\
-             PRIMARY KEY (root, key)\n\
-         );\n\
-         CREATE INDEX IF NOT EXISTS dirs_root_depth ON dirs(root, depth);",
-    )
+fn init_schema(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > SCHEMA_VERSION {
+        // No dedicated rusqlite variant for "database is from a newer build";
+        // carry the message through the conversion-failure channel, which
+        // open() surfaces to the caller unchanged.
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "journal schema version {version} is newer than this build supports ({SCHEMA_VERSION})"
+                ),
+            )
+            .into(),
+        ));
+    }
+    migrate_schema(conn, version)?;
+    Ok(())
 }
 
-fn apply_begin(conn: &rusqlite::Connection, root: &DiscoveredDir) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO scans(root, running) VALUES (?1, 1)\n\
-         ON CONFLICT(root) DO UPDATE SET running=1",
-        rusqlite::params![root.path],
-    )?;
-    upsert_discovered(conn, &root.path, root)?;
+/// Bring a database at `version` up to [`SCHEMA_VERSION`]. Each step runs in a
+/// transaction and stamps `user_version` before the next step begins, so an
+/// interrupted migration leaves a consistent (old or next-version) database.
+fn migrate_schema(conn: &mut rusqlite::Connection, version: i64) -> rusqlite::Result<()> {
+    let mut current = version;
+
+    // Version 1: the original scans/dirs layout.
+    if current < 1 {
+        // journal_mode cannot be switched inside a transaction.
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS scans (\n\
+                 root TEXT PRIMARY KEY,\n\
+                 running INTEGER NOT NULL DEFAULT 1\n\
+             );\n\
+             CREATE TABLE IF NOT EXISTS dirs (\n\
+                 root TEXT NOT NULL,\n\
+                 key TEXT NOT NULL,\n\
+                 parent_key TEXT NOT NULL,\n\
+                 name BLOB NOT NULL,\n\
+                 path TEXT NOT NULL,\n\
+                 depth INTEGER NOT NULL,\n\
+                 mtime_ms INTEGER NOT NULL,\n\
+                 dev INTEGER NOT NULL,\n\
+                 ino INTEGER NOT NULL,\n\
+                 is_symlink INTEGER NOT NULL,\n\
+                 deletable INTEGER NOT NULL,\n\
+                 closed INTEGER NOT NULL DEFAULT 0,\n\
+                 logical INTEGER NOT NULL DEFAULT 0,\n\
+                 physical INTEGER NOT NULL DEFAULT 0,\n\
+                 files INTEGER NOT NULL DEFAULT 0,\n\
+                 PRIMARY KEY (root, key)\n\
+             );\n\
+             CREATE INDEX IF NOT EXISTS dirs_root_depth ON dirs(root, depth);",
+        )?;
+        // `PRAGMA user_version` cannot use a bound parameter.
+        tx.execute_batch("PRAGMA user_version=1;")?;
+        tx.commit()?;
+        current = 1;
+    }
+
+    // Future migrations follow the same shape:
+    //   if current < 2 { ...; PRAGMA user_version=2; ...; current = 2; }
+
+    debug_assert_eq!(current, SCHEMA_VERSION);
+    // Durability settings are cheap to re-assert on an already-migrated DB.
+    conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
     Ok(())
 }
 
@@ -186,7 +302,9 @@ fn upsert_discovered(
     scan_root: &str,
     d: &DiscoveredDir,
 ) -> rusqlite::Result<()> {
-    conn.execute(
+    // Cached across drain transactions: with millions of directories this
+    // avoids recompiling the statement for every row.
+    let mut stmt = conn.prepare_cached(
         "INSERT INTO dirs\n\
          (root, key, parent_key, name, path, depth, mtime_ms, dev, ino,\n\
           is_symlink, deletable, closed)\n\
@@ -196,54 +314,20 @@ fn upsert_discovered(
           depth=excluded.depth, mtime_ms=excluded.mtime_ms, dev=excluded.dev,\n\
           ino=excluded.ino, is_symlink=excluded.is_symlink,\n\
           deletable=excluded.deletable",
-        rusqlite::params![
-            scan_root,
-            d.key,
-            d.parent_key,
-            d.name,
-            d.path,
-            d.depth,
-            d.mtime_ms,
-            d.dev as i64,
-            d.ino as i64,
-            d.is_symlink as i64,
-            d.deletable as i64,
-        ],
     )?;
-    Ok(())
-}
-
-fn apply_discovered(
-    conn: &rusqlite::Connection,
-    root: &str,
-    dirs: Vec<DiscoveredDir>,
-) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
-    for d in &dirs {
-        upsert_discovered(&tx, root, d)?;
-    }
-    tx.commit()
-}
-
-fn apply_closed(
-    conn: &rusqlite::Connection,
-    root: &str,
-    updates: Vec<ClosedDir>,
-) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
-    for c in &updates {
-        tx.execute(
-            "UPDATE dirs SET closed=1, logical=?3, physical=?4, files=?5\n\
-             WHERE root=?1 AND key=?2",
-            rusqlite::params![root, c.key, c.logical as i64, c.physical as i64, c.files as i64],
-        )?;
-    }
-    tx.commit()
-}
-
-fn apply_complete(conn: &rusqlite::Connection, root: &str) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM dirs WHERE root=?1", rusqlite::params![root])?;
-    conn.execute("DELETE FROM scans WHERE root=?1", rusqlite::params![root])?;
+    stmt.execute(rusqlite::params![
+        scan_root,
+        d.key,
+        d.parent_key,
+        d.name,
+        d.path,
+        d.depth,
+        d.mtime_ms,
+        d.dev as i64,
+        d.ino as i64,
+        d.is_symlink as i64,
+        d.deletable as i64,
+    ])?;
     Ok(())
 }
 
@@ -398,6 +482,33 @@ mod tests {
         assert!(journal.load("/root").is_empty());
     }
 
+    /// Thousands of records queued back-to-back must all survive: this is the
+    /// case the old bounded channel blocked on, freezing the coordinator.
+    #[test]
+    fn a_burst_of_records_is_fully_persisted() {
+        let journal = SqliteScanJournal::memory().unwrap();
+        let scan_root = "/root";
+        journal.begin(&dir("R", "", "root", scan_root, 0));
+
+        const BURST: usize = 10_000;
+        let chunk: Vec<DiscoveredDir> = (0..BURST)
+            .map(|i| {
+                dir(
+                    &format!("D{i}"),
+                    "R",
+                    &format!("d{i}"),
+                    &format!("/root/d{i}"),
+                    1,
+                )
+            })
+            .collect();
+        journal.discovered(scan_root, chunk);
+
+        let restored = journal.load(scan_root);
+        assert_eq!(restored.dirs.len(), BURST + 1, "root + every bursted dir");
+        assert!(journal.failed_write_count() == 0, "no write failures");
+    }
+
     /// A write failure in the background writer must be observable: logged,
     /// counted exactly once, and its message retained.
     #[test]
@@ -438,5 +549,71 @@ mod tests {
 
         drop(saboteur);
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn fresh_database_is_stamped_with_schema_version() {
+        let scratch = unique_scratch("schema-stamp");
+        let db = scratch.join("journal.db");
+        {
+            let _journal = SqliteScanJournal::open(&db).unwrap();
+        }
+        let probe = rusqlite::Connection::open(&db).unwrap();
+        let version: i64 = probe
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn opening_twice_migrates_idempotently_and_keeps_rows() {
+        let scratch = unique_scratch("schema-reopen");
+        let db = scratch.join("journal.db");
+        {
+            let journal = SqliteScanJournal::open(&db).unwrap();
+            journal.begin(&dir("R", "", "root", "/root", 0));
+            // load() is a synchronous request/reply that happens after the
+            // begin write, so the row is durable before the writer is dropped.
+            assert_eq!(journal.load("/root").dirs.len(), 1);
+        }
+        // Reopening the existing v1 database must not error or duplicate.
+        let journal = SqliteScanJournal::open(&db).unwrap();
+        let restored = journal.load("/root");
+        assert_eq!(restored.dirs.len(), 1);
+        assert_eq!(journal.failed_write_count(), 0);
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn a_newer_schema_is_refused() {
+        let scratch = unique_scratch("schema-future");
+        let db = scratch.join("journal.db");
+        {
+            let probe = rusqlite::Connection::open(&db).unwrap();
+            probe.execute_batch("PRAGMA user_version=999;").unwrap();
+        }
+        let err = match SqliteScanJournal::open(&db) {
+            Ok(_) => panic!("a newer schema must be refused"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("newer than this build"),
+            "unexpected error: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    fn unique_scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sift-journal-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }

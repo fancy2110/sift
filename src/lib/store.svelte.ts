@@ -2,6 +2,7 @@ import { pickDirectory } from './dialog';
 import { isTauri } from './runtime';
 import {
   analyzeCurrent,
+  cancelCleanup,
   cancelScan,
   cleanPaths,
   getAiConfig,
@@ -10,7 +11,6 @@ import {
   dismissRoutineSuggestion,
   listHistory,
   listDirFiles,
-  listPlaces,
   listRoutines,
   listVolumes,
   markPath,
@@ -23,6 +23,7 @@ import {
   resolvePermission,
   routineSuggestions,
   runRoutine,
+  saveRoutine,
   scanRunning,
   setAutoCleanMode,
   setScheduledCleanup,
@@ -47,16 +48,19 @@ import type {
   HistoryEntry,
   MonitorStatus as MonitorStatusInfo,
   Node,
-  Place,
   Routine,
   RoutineSuggestion,
   VolumeInfo
 } from './types';
 import { t, tr, renderStoreWarning } from './i18n.svelte';
+import { startupMark } from './startup';
+
+export type ToastTone = 'success' | 'error' | 'info';
 
 export interface Toast {
   id: number;
   message: string;
+  tone: ToastTone;
 }
 
 /**
@@ -68,15 +72,13 @@ export interface Toast {
 class AppStore {
   // ---- hub navigation ----
   view = $state<'home' | 'dashboard' | 'sub'>('home');
-  subTab = $state<'smart' | 'explorer' | 'history' | 'routines' | 'map'>('smart');
+  subTab = $state<'smart' | 'explorer' | 'history' | 'routines'>('smart');
   settingsOpen = $state(false);
   /** AI provider configuration behind the settings sheet. */
   aiConfig = $state<AiConfig | null>(null);
 
   // ---- scan scopes ----
   volumes = $state<VolumeInfo[]>([]);
-  places = $state<Place[]>([]);
-  scopeKind = $state<'disk' | 'place'>('disk');
   scopeId = $state<string | null>(null);
 
   /**
@@ -126,6 +128,18 @@ class AppStore {
 
   /** Analyzed candidates from the backend. */
   findings = $state<Finding[]>([]);
+
+  /**
+   * Node id -> finding lookup, rebuilt whenever findings change. This is the
+   * single source of truth for a row's marked state: annotations are read
+   * through it instead of being copied onto node snapshots, where a live
+   * re-fetch of the open folder could overwrite them.
+   */
+  findingsById = $derived.by(() => {
+    const map = new Map<string, Finding>();
+    for (const finding of this.findings) map.set(finding.id, finding);
+    return map;
+  });
   routineSuggestions = $state<RoutineSuggestion[]>([]);
   routines = $state<Routine[]>([]);
   history = $state<HistoryEntry[]>([]);
@@ -133,6 +147,8 @@ class AppStore {
   /** Selected finding ids (deletion candidates). */
   selectedIds = $state<Set<string>>(new Set());
   cleaning = $state(false);
+  /** Set while the user asked a running cleanup to stop. */
+  cleanupCancelled = $state(false);
 
   /** Bumped on scope switch so transitions can reset. */
   treeVersion = $state(0);
@@ -148,31 +164,29 @@ class AppStore {
    * new scan is starting, so late events from the previous scan are dropped.
    */
   private scanEpoch = 0;
+  /**
+   * Set when the current scope's scan was cancelled (or never completed).
+   * Selecting the same disk then starts a fresh scan instead of being treated
+   * as a redundant scope switch and no-op-ing. Cleared when a scan starts.
+   */
+  private rescanRequested = true;
   /** Resolvers waiting for a specific scan's done event during a scope switch. */
   private scanStopWaiters = new Map<number, () => void>();
 
   // ---- scope lookups ----
 
   get currentVolume(): VolumeInfo | null {
-    return this.scopeKind === 'disk'
-      ? (this.volumes.find((v) => v.id === this.scopeId) ?? null)
-      : null;
-  }
-
-  get currentPlace(): Place | null {
-    return this.scopeKind === 'place'
-      ? (this.places.find((p) => p.id === this.scopeId) ?? null)
-      : null;
+    return this.volumes.find((v) => v.id === this.scopeId) ?? null;
   }
 
   /** Root path of the active scan. */
   get scopePath(): string | null {
-    return this.currentVolume?.mountPoint ?? this.currentPlace?.path ?? null;
+    return this.currentVolume?.mountPoint ?? null;
   }
 
   /** Display name of the active scope. */
   get scopeName(): string {
-    return this.currentVolume?.name ?? this.currentPlace?.labelKey ?? '';
+    return this.currentVolume?.name ?? '';
   }
 
   get currentNode(): Node | null {
@@ -294,6 +308,11 @@ class AppStore {
     return this.selectedIds.has(id);
   }
 
+  /** Finding attached to a node, or undefined. Reactive when read in a template. */
+  insightFor(id: string): Finding | undefined {
+    return this.findingsById.get(id);
+  }
+
   // ---- lifecycle ----
 
   async init() {
@@ -301,8 +320,12 @@ class AppStore {
     this.started = true;
 
     this.browserMode = !isTauri();
-    if (this.browserMode) this.toast(t('toast.browserMode'));
+    if (this.browserMode) this.toast(t('toast.browserMode'), 'info');
 
+    startupMark('init:parallel-start');
+    // Listeners first, and awaited: they are a few cheap registrations, and
+    // a scan already running on the backend must not emit its first batches
+    // into an unsubscribed webview.
     await Promise.all([
       onScanBatch((batch) => this.handleBatch(batch)),
       onScanDone((event) => this.handleScanDone(event)),
@@ -311,47 +334,61 @@ class AppStore {
       onMonitorEvent((event) => this.handleMonitorEvent(event))
     ]);
 
-    // A reload (or a webview reattach) can happen while a scan is still
-    // running on the backend; batches keep streaming either way, so reflect
-    // the live scan instead of rendering the idle home screen. Adopting the
-    // backend's epoch keeps those batches from being rejected as stale.
-    const activeEpoch = await scanRunning();
+    // All remaining bootstrap calls are independent; issuing them together
+    // collapses what used to be a serial chain of IPC round trips
+    // (scanRunning → warnings → volumes → history → routines) into one wave.
+    // The main-thread cost of each Tauri command is identical; only the
+    // waiting overlaps.
+    const activeEpochPromise = scanRunning();
+    const warningsPromise = takeStoreWarnings();
+    const volumesPromise = listVolumes();
+    const historyPromise = this.loadHistory();
+    const routinesPromise = this.loadRoutines();
+    // Monitor status only drives switches in other views; never block first
+    // paint on it.
+    const monitorPromise = this.refreshMonitorStatus();
+
+    const [activeEpoch, warnings, volumes] = await Promise.all([
+      activeEpochPromise,
+      warningsPromise,
+      volumesPromise,
+      historyPromise,
+      routinesPromise,
+      monitorPromise.catch(() => {})
+    ]);
+    startupMark('init:parallel-done');
+
     if (activeEpoch !== null) {
       this.scanning = true;
       this.scanEpoch = activeEpoch;
     }
-
-    for (const warning of await takeStoreWarnings()) {
-      this.toast(renderStoreWarning(warning));
+    for (const warning of warnings) {
+      this.toast(renderStoreWarning(warning), 'info');
     }
 
-    this.volumes = await listVolumes();
-    this.places = await listPlaces();
-    await this.loadHistory();
-    await this.loadRoutines();
+    this.volumes = volumes;
 
     // Pre-select the system disk without scanning; the user starts the first
     // scan explicitly from the home screen CTA.
     const preferred = this.volumes.find((v) => !v.isRemovable) ?? this.volumes[0];
     if (preferred) this.scopeId = preferred.id;
-
-    this.refreshMonitorStatus();
   }
 
   // ---- scope selection ----
 
   async selectDisk(id: string) {
-    this.scopeKind = 'disk';
-    await this.startScope(id);
-  }
-
-  async selectPlace(id: string) {
-    this.scopeKind = 'place';
     await this.startScope(id);
   }
 
   private async startScope(id: string) {
-    if (id === this.scopeId && this.rootId && !this.scanning) return;
+    // Same scope already fully scanned and idle, with no rescan pending:
+    // nothing to do. A cancelled scan sets rescanRequested, so re-selecting
+    // the same disk (or pressing the home CTA) starts a fresh scan instead of
+    // being treated as a redundant scope switch and no-op-ing.
+    if (id === this.scopeId && this.rootId && !this.scanning && !this.rescanRequested) {
+      return;
+    }
+    this.rescanRequested = false;
 
     // Stop the current scan before switching: the backend rejects a second
     // concurrent start with "scan already running", and late batches from the
@@ -373,7 +410,7 @@ class AppStore {
       epoch = await startScan(root, root);
     } catch (error) {
       this.scanning = false;
-      this.toast(t('toast.scanStartFailed', [String(error)]));
+      this.toastError(t('toast.scanStartFailed', [String(error)]));
       return;
     }
     this.scanEpoch = epoch;
@@ -407,9 +444,18 @@ class AppStore {
   /** Cancel the running scan from the UI. */
   async cancelCurrentScan() {
     if (!this.scanning) return;
-    await cancelScan();
+    this.rescanRequested = true;
+    try {
+      await cancelScan();
+    } catch (error) {
+      // If the cancel call itself fails, do not optimistically flip state:
+      // the scan may still finish on its own, whose done event settles
+      // `scanning` either way.
+      this.toastError(t('toast.scanCancelFailed', [String(error)]));
+      return;
+    }
     this.scanning = false;
-    this.toast(t('toast.scanCancelled'));
+    this.toast(t('toast.scanCancelled'), 'info');
   }
 
   private resetScanState() {
@@ -451,12 +497,12 @@ class AppStore {
     this.view = 'home';
   }
 
-  goSub(tab: 'smart' | 'explorer' | 'history' | 'routines' | 'map' = 'smart') {
+  goSub(tab: 'smart' | 'explorer' | 'history' | 'routines' = 'smart') {
     this.subTab = tab;
     this.view = 'sub';
   }
 
-  setSubTab(tab: 'smart' | 'explorer' | 'history' | 'routines' | 'map') {
+  setSubTab(tab: 'smart' | 'explorer' | 'history' | 'routines') {
     this.subTab = tab;
   }
 
@@ -508,10 +554,10 @@ class AppStore {
     };
     switch (data.kind) {
       case 'notify':
-        this.toast(t('toast.lowSpace'));
+        this.toast(t('toast.lowSpace'), 'info');
         break;
       case 'confirmationNeeded':
-        this.toast(t('toast.confirmationNeeded'));
+        this.toast(t('toast.confirmationNeeded'), 'info');
         break;
       case 'cleanupFinished': {
         const removed = new Set<string>();
@@ -535,7 +581,7 @@ class AppStore {
         break;
       }
       case 'warning':
-        if (data.message) this.toast(tr(data.message));
+        if (data.message) this.toast(tr(data.message), 'info');
         break;
       default:
         break;
@@ -593,7 +639,6 @@ class AppStore {
     }
 
     this.rebuildCurrentEntries();
-    this.annotateNodes();
   }
 
   /** Fetch the current folder's file entries live from the backend. */
@@ -609,6 +654,8 @@ class AppStore {
     // A navigation may have happened before the reply landed.
     if (this.currentNodeId !== node.id) return;
     this.currentFiles = entries.filter((entry) => !entry.isDir);
+    // Marked state derives from findings (see insightFor), so the re-fetched
+    // copies need no annotation and can never strip an existing mark.
     this.rebuildCurrentEntries();
   }
 
@@ -627,14 +674,14 @@ class AppStore {
     try {
       picked = await pickDirectory(req.path);
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
       return;
     }
     // Panel cancelled: stay parked.
     if (!picked) return;
 
     if (!pathIsWithin(req.path, picked)) {
-      this.toast(t('permission.mismatch'));
+      this.toastError(t('permission.mismatch'));
       return;
     }
 
@@ -643,7 +690,7 @@ class AppStore {
     try {
       await resolvePermission(req.id, true, picked);
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
       return;
     }
     const covered = this.permissionRequests.filter((other) =>
@@ -658,7 +705,7 @@ class AppStore {
     try {
       await resolvePermission(req.id, false);
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
       return;
     }
     this.removePermissionRequest(req.id);
@@ -673,19 +720,8 @@ class AppStore {
         await resolvePermission(req.id, false);
         this.removePermissionRequest(req.id);
       } catch (error) {
-        this.toast(t('toast.settingsFailed', [String(error)]));
+        this.toastError(t('toast.settingsFailed', [String(error)]));
         return;
-      }
-    }
-  }
-
-  /** Reflect backend findings onto their records (insightId + risk). */
-  private annotateNodes() {
-    for (const finding of this.findings) {
-      const node = this.nodeRecords.get(finding.id);
-      if (node && node.insightId !== finding.id) {
-        node.insightId = finding.id;
-        node.risk = finding.safety;
       }
     }
   }
@@ -702,7 +738,13 @@ class AppStore {
     if (event.epoch !== this.scanEpoch) return;
 
     this.scanning = false;
-    if (event.cancelled) return;
+    if (event.cancelled) {
+      // The current scope has no complete result; selecting it again must
+      // rescan rather than hit the redundant-scope early return.
+      this.rescanRequested = true;
+      return;
+    }
+    this.rescanRequested = false;
     if (this.analysedScan) return;
     this.analysedScan = true;
     await this.runAnalysis();
@@ -726,7 +768,6 @@ class AppStore {
       const summary = await analyzeCurrent();
       this.findings = summary.findings;
       this.routineSuggestions = await routineSuggestions();
-      this.annotateNodes();
 
       const next = new Set(this.selectedIds);
       for (const finding of summary.findings) {
@@ -734,7 +775,7 @@ class AppStore {
       }
       this.selectedIds = next;
     } catch (error) {
-      this.toast(t('toast.analyzeFailed', [String(error)]));
+      this.toastError(t('toast.analyzeFailed', [String(error)]));
     }
   }
 
@@ -762,7 +803,7 @@ class AppStore {
       this.toast(t('settings.aiSaved'));
       return true;
     } catch (error) {
-      this.toast(t('toast.aiSaveFailed', [tr(String(error))]));
+      this.toastError(t('toast.aiSaveFailed', [tr(String(error))]));
       return false;
     }
   }
@@ -773,18 +814,20 @@ class AppStore {
     const targets = this.candidates;
     if (this.cleaning || targets.length === 0) return 0;
     this.cleaning = true;
+    this.cleanupCancelled = false;
 
     const paths = targets.map((f) => f.path);
     let results: DeleteResultItem[] = [];
     try {
       results = await cleanPaths(paths);
     } catch (error) {
-      this.toast(t('toast.deleteFailed', [String(error)]));
+      this.toastError(t('toast.deleteFailed', [String(error)]));
       this.cleaning = false;
       return 0;
     }
 
     const removed = new Set<string>();
+    const cancelledPaths = new Set<string>();
     let bytes = 0;
     for (const result of results) {
       if (result.ok) {
@@ -793,24 +836,58 @@ class AppStore {
           removed.add(target.id);
           bytes += target.size;
         }
+      } else if (result.cancelled) {
+        // Stopped before the attempt: leave the row (and its selection)
+        // exactly as it was; it is neither a success nor a failure.
+        cancelledPaths.add(result.path);
       } else {
-        this.toast(t('toast.cannotDelete', [result.path, tr(result.error ?? '')]));
+        this.toastError(t('toast.cannotDelete', [result.path, tr(result.error ?? '')]));
       }
     }
 
     this.pruneIds(removed);
     this.findings = this.findings.filter((f) => !removed.has(f.id));
-    this.selectedIds = new Set();
+    const wasCancelled = this.cleanupCancelled || cancelledPaths.size > 0;
+    // Keep selection only for items that were not attempted, so pressing
+    // "clean" again resumes with the remainder. Build from the original
+    // targets (which still exist as findings) instead of the filtered list.
+    const keptSelected = new Set<string>();
+    for (const target of targets) {
+      if (!removed.has(target.id) && cancelledPaths.has(target.path)) {
+        keptSelected.add(target.id);
+      }
+    }
+    this.selectedIds = keptSelected;
 
     this.cleaning = false;
+    this.cleanupCancelled = false;
     await this.loadHistory();
     await this.loadRoutines();
-    this.toast(
-      automatic
-        ? t('toast.autoCleanDone', [formatSize(bytes)])
-        : t('toast.cleanDone', [formatSize(bytes)])
-    );
+    if (wasCancelled) {
+      this.toast(
+        t('toast.cleanCancelled', [formatSize(bytes), String(cancelledPaths.size)]),
+        'info'
+      );
+    } else {
+      this.toast(
+        automatic
+          ? t('toast.autoCleanDone', [formatSize(bytes)])
+          : t('toast.cleanDone', [formatSize(bytes)])
+      );
+    }
     return bytes;
+  }
+
+  /** Stop the running interactive cleanup after its current item. */
+  async cancelCurrentCleanup() {
+    if (!this.cleaning) return;
+    this.cleanupCancelled = true;
+    try {
+      await cancelCleanup();
+    } catch {
+      // The batch may finish between the click and the call; the await on
+      // cleanPaths resolves normally either way.
+    }
   }
 
   /**
@@ -901,26 +978,28 @@ class AppStore {
   /** Add a node to the deletion queue via the backend user-mark path. */
   async addManualCandidate(node: Node) {
     if (!node.deletable) {
-      this.toast(t('toast.noDeletePermission', [node.name]));
+      this.toastError(t('toast.noDeletePermission', [node.name]));
       return;
     }
-    if (node.insightId) {
+    const existing = this.findingsById.get(node.id);
+    if (existing) {
       const next = new Set(this.selectedIds);
-      next.add(node.insightId);
+      next.add(existing.id);
       this.selectedIds = next;
       this.toast(t('toast.addedToQueue', [node.name]));
       return;
     }
     try {
-      const finding = await markPath(node.path);
+      const finding = await markPath(node.path, node.size || undefined);
+      // Append the finding first; rows derive their marked state from it, so
+      // the keyed row flips regardless of snapshot/rebuild timing.
       this.findings = [...this.findings, finding];
-      this.annotateNodes();
       const next = new Set(this.selectedIds);
       next.add(finding.id);
       this.selectedIds = next;
       this.toast(t('toast.addedToQueue', [node.name]));
     } catch (error) {
-      this.toast(t('toast.cannotAdd', [node.name, String(error)]));
+      this.toastError(t('toast.cannotAdd', [node.name, String(error)]));
     }
   }
 
@@ -957,7 +1036,7 @@ class AppStore {
         (s) => !(s.name === name && s.kind === kind)
       );
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -968,7 +1047,7 @@ class AppStore {
         (s) => !(s.name === name && s.kind === kind)
       );
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -977,7 +1056,7 @@ class AppStore {
       await deleteRoutine(id);
       await this.loadRoutines();
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -986,7 +1065,7 @@ class AppStore {
       await toggleRoutineMode(id);
       await this.loadRoutines();
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -996,7 +1075,29 @@ class AppStore {
       await this.loadHistory();
       await this.loadRoutines();
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
+    }
+  }
+
+  /** Add a Smart finding's cleanable family as a standing routine. */
+  async addRoutineFromFinding(finding: Finding) {
+    try {
+      await saveRoutine(finding.name, finding.kind, finding.size);
+      await this.loadRoutines();
+      this.toast(t('toast.routineSaved', [finding.name]));
+    } catch (error) {
+      this.toastError(t('toast.settingsFailed', [String(error)]));
+    }
+  }
+
+  /** Add one Explorer item (a folder or file) as a path-based routine. */
+  async addRoutineFromNode(node: Node) {
+    try {
+      await saveRoutine(node.name, '', node.size, node.path);
+      await this.loadRoutines();
+      this.toast(t('toast.routineSaved', [node.name]));
+    } catch (error) {
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -1017,7 +1118,7 @@ class AppStore {
         this.toast(t('toast.autoOff'));
       }
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -1039,7 +1140,7 @@ class AppStore {
       this.scheduledOn = enabled;
       this.scheduledHour = hour;
     } catch (error) {
-      this.toast(t('toast.settingsFailed', [String(error)]));
+      this.toastError(t('toast.settingsFailed', [String(error)]));
     }
   }
 
@@ -1053,12 +1154,17 @@ class AppStore {
 
   // ---- misc ----
 
-  toast(message: string) {
+  toast(message: string, tone: ToastTone = 'success') {
     const id = ++this.toastSeq;
-    this.toasts = [...this.toasts, { id, message }];
+    this.toasts = [...this.toasts, { id, message, tone }];
     setTimeout(() => {
       this.toasts = this.toasts.filter((t) => t.id !== id);
-    }, 3200);
+    }, tone === 'error' ? 5000 : 3200);
+  }
+
+  /** Convenience for failure toasts; keeps call sites terse. */
+  toastError(message: string) {
+    this.toast(message, 'error');
   }
 }
 
