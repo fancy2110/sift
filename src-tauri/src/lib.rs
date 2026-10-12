@@ -147,6 +147,11 @@ pub fn run() {
         .expect("error while building Sift")
         .run(|app, event| {
             match event {
+                // Clicking the Dock icon while the window is hidden (the app lives in
+                // the tray) must bring the window back; otherwise the click appears
+                // to do nothing.
+                tauri::RunEvent::Reopen { .. } => tray::show_window(app),
+              
                 // The tray icon and menu are not needed to show the window.
                 // Build them on the first event-loop turn after the webview
                 // has been created, keeping NSStatusBar/menu construction out
