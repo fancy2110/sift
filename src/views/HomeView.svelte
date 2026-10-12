@@ -99,15 +99,15 @@
     if (preferred) await store.selectDisk(preferred.id);
   }
 
-  // r = 92 → circumference of the progress arc.
+  // r = 92 → circumference of the progress ring.
   const RING_C = 2 * Math.PI * 92;
-  // Byte-coverage percent is available once the volume capacity is known.
-  let hasPercent = $derived(store.progress.totalBytes > 0);
-  let arcLen = $derived(
-    hasPercent
-      ? Math.max(2, (RING_C * store.progress.percent) / 100)
-      : 260
+  // While scanning, clamp to 99 so the ring and number can never read 100%
+  // before the backend's Finished event; the scan-completion state (when
+  // scanning flips false after the done event) shows a full ring/100.
+  const shownPercent = $derived(
+    store.scanning ? Math.min(99, Math.max(0, store.progress.percent)) : 100
   );
+  let arcLen = $derived((RING_C * shownPercent) / 100);
 
   // Elapsed-time counter inside the ring: starts with the scan and ticks until
   // it ends (including while parked on a permission request).
@@ -171,7 +171,6 @@
       {#if store.scanning}
         <svg
           class="prog-ring"
-          class:spin-slow={!hasPercent}
           viewBox="0 0 200 200"
         >
           <circle class="prog-track" cx="100" cy="100" r="92" />
@@ -235,15 +234,9 @@
         : t('home.total')}
     </p>
     {#if store.scanning}
-      {#if hasPercent}
-        <h1 class="hub-total num">
-          {Math.round(store.progress.percent)}<span class="hub-pct">%</span>
-        </h1>
-      {:else}
-        <h1 class="hub-total num">
-          {store.scannedFiles.toLocaleString()}<span class="hub-pct">{t('home.itemsUnit')}</span>
-        </h1>
-      {/if}
+      <h1 class="hub-total num">
+        {Math.round(shownPercent)}<span class="hub-pct">%</span>
+      </h1>
     {:else}
       {@const main = formatSizeParts(store.totalReclaimable)}
       <h1 class="hub-total num" in:fly={intro({ y: 16, duration: 620, delay: 180, easing: cubicOut })}>
@@ -461,9 +454,6 @@
     stroke-linecap: round;
     filter: drop-shadow(0 0 7px color-mix(in oklch, var(--color-violet) 70%, transparent));
   }
-  .spin-slow {
-    animation: ring-spin 1.3s linear infinite;
-  }
   .ring-stage.scanning .ring-glow {
     inset: 8%;
     background: radial-gradient(
@@ -508,8 +498,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .ring-arc,
-    .ring-dash,
-    .spin-slow {
+    .ring-dash {
       animation: none;
     }
   }
