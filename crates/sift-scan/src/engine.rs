@@ -591,6 +591,13 @@ struct CoordinatorState {
     /// budget-refused (size-only) directory. Grows while the frontier expands;
     /// the scan reaches 100% exactly when every discovered directory settles.
     discovered_dirs: u64,
+    /// Directories whose readdir has completed (success, denied, or parked).
+    read_dirs: u64,
+    /// Sum of the *direct* file entries seen in every read directory. Together
+    /// with `read_dirs` it gives a moving files-per-directory average used to
+    /// weight unread directories, so one giant directory is worth proportionally
+    /// more than an empty one in the progress estimate.
+    files_in_read_dirs: u64,
     /// Highest coverage published so far; keeps the percent monotonic even
     /// when listing an open directory discovers a large new subtree.
     percent_peak: f64,
@@ -723,6 +730,8 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         },
         open_dirs: seed_open,
         discovered_dirs: seed_discovered,
+        read_dirs: seed_dirs,
+        files_in_read_dirs: seed_files,
         percent_peak: 0.0,
         initial_progress_sent: false,
         seq: 0,
@@ -1118,10 +1127,9 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
                     drop(tree_guard);
                     // A directory is one readdir work unit and is "done" the
                     // moment its listing is in hand — not when its whole
-                    // subtree has closed (BFS makes that much later). Counting
-                    // reads keeps the progress fraction advancing steadily
-                    // with the workers instead of stalling then jumping.
+                    // subtree has closed (BFS makes that much later).
                     state.progress.dirs += 1;
+                    state.read_dirs += 1;
                 }
                 // Parked pending a user decision: do not close the directory
                 // and do not touch pending_children, so its parent stays open.
@@ -1139,12 +1147,14 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
                     // The read finished (denied); count the unit so progress
                     // is not held open forever by an unresolved directory.
                     state.progress.dirs += 1;
+                    state.read_dirs += 1;
                 }
                 // NotFound, Other, or any future variant: settle at zero.
                 Err(_) => {
                     let mut tree_guard = tree.lock().unwrap();
                     state.progress.denied += 1;
                     state.progress.dirs += 1;
+                    state.read_dirs += 1;
                     // Unreadable directory: mark it and settle it at zero.
                     if let Some(node) = tree_guard.node_mut(index) {
                         node.set_denied(true);
@@ -1170,9 +1180,12 @@ fn process_result(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>, res
                 state.size_only_pending.remove(&parent);
             }
             // One size-only job settles one budget-refused directory: count
-            // it as a settled work unit (it was added to discovered_dirs when
-            // enqueued), keeping progress denominator and numerator aligned.
+            // it as a read work unit (it was added to discovered_dirs when
+            // enqueued). Its files were summed into totals but not enumerated
+            // into the tree, so they are not added to files_in_read_dirs; the
+            // moving average still assigns this directory an estimated weight.
             state.progress.dirs += 1;
+            state.read_dirs += 1;
             state
                 .unrecorded
                 .entry(parent)
@@ -1693,6 +1706,9 @@ fn process_dir_entries(
             if counted {
                 state.progress.files += 1;
                 state.progress.bytes += size;
+                // Direct, non-duplicate file in this read directory: feeds the
+                // moving files-per-directory average used to weight progress.
+                state.files_in_read_dirs += 1;
                 let retain_threshold = tree.config().file_detail_min_bytes;
                 if size.logical >= retain_threshold {
                     tree.retain_file(index, child_key, &entry.name, size, mtime_ms, deletable);
@@ -1928,34 +1944,47 @@ fn flush_progress(state: &mut CoordinatorState, tree: &Arc<Mutex<ScanTree>>) {
     let tree_guard = tree.lock().unwrap();
     let total = tree_guard.total();
 
-    // Progress is the fraction of *discovered directories already settled*.
-    // It deliberately does NOT divide measured bytes by the volume's used
-    // space: a scan may target one folder (then the denominator dwarfs the
-    // numerator and the ring sits at 0% until the end), and the scanner cannot
-    // see other mounts, permission-denied trees or APFS snapshots, so byte
-    // coverage would never reach 100% in step with the real finish.
+    // Progress weights work by *file entries*, not by directory count.
     //
-    // `dirs` counts settled directories (closed tracked nodes plus returned
-    // size-only jobs); `discovered_dirs` is every work unit, including dirs
-    // still open, queued, in flight or in a size-only walk. The denominator
-    // grows as the frontier expands; the ratio climbs as subtrees close and
-    // reaches exactly 1.0 only when nothing remains open.
-    let dir_coverage = if state.discovered_dirs > 0 {
-        (state.progress.dirs as f64 / state.discovered_dirs as f64).clamp(0.0, 1.0)
+    // A pure "directories read / directories discovered" fraction stalls at
+    // the tail: by the time only a few thousand directories remain they can be
+    // the giant ones (system caches, mail stores) holding a disproportionate
+    // share of the files, so the ring sits near 99% for a long time. Files are
+    // leaves and dominate the actual readdir work, so weighting by them keeps
+    // a huge directory proportional.
+    //
+    // The total file count is unknown ahead of time, so estimate the work still
+    // pending by extrapolating a moving average — files observed per read
+    // directory — over the directories not yet read. A floor of 1 keeps a
+    // pending directory on the denominator even if every dir seen was empty.
+    let unread_dirs = state.discovered_dirs.saturating_sub(state.read_dirs);
+    let files_so_far = state.progress.files;
+    let avg_files_per_dir = if state.read_dirs > 0 {
+        state.files_in_read_dirs as f64 / state.read_dirs as f64
     } else {
         0.0
     };
-    let coverage = if state.open_dirs > 0 {
-        // 100% is reserved for a fully closed tree.
-        dir_coverage.min(0.99)
+    let estimated_remaining = unread_dirs as f64 * avg_files_per_dir.max(1.0);
+    let file_coverage = if files_so_far > 0 {
+        let denom = files_so_far as f64 + estimated_remaining;
+        (files_so_far as f64 / denom).clamp(0.0, 1.0)
+    } else {
+        // No files observed yet (e.g. a tree of empty dirs): fall back to the
+        // directory-read fraction so progress still moves off zero.
+        if state.discovered_dirs > 0 {
+            state.read_dirs as f64 / state.discovered_dirs as f64
+        } else {
+            0.0
+        }
+    };
+    let coverage = if state.open_dirs > 0 || state.in_flight > 0 {
+        // 100% is reserved for a fully settled tree.
+        file_coverage.min(0.99)
     } else {
         1.0
     };
-    // Hold the peak. Discovery is breadth-driven: once a parent closes its
-    // children, the ratio advances and never permanently falls, because
-    // settled directories stay settled and any newly discovered subtree was
-    // reached from a directory whose closure has not completed yet. The fully
-    // closed tree overrides the peak with exactly 1.0.
+    // Hold the peak. The estimate is conservative while unread dirs remain;
+    // once they settle it converges to 1.0, which overrides the clamp.
     state.percent_peak = state.percent_peak.max(coverage);
     state.progress.coverage = state.percent_peak;
 
@@ -2820,6 +2849,61 @@ mod tests {
         );
         for c in &interim {
             assert!((0.0..=1.0).contains(c), "coverage out of range: {c}");
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn progress_final_is_100_with_one_file_heavy_directory() {
+        // Regression for the long 99% plateau: thousands of empty directories
+        // plus one directory holding almost every file. Whatever the interim
+        // estimate looks like, completion must report exactly 1.0 and interim
+        // frames must stay within (0,1] without overflowing past the clamp.
+        let tag = "pct-heavy";
+        let base =
+            std::env::temp_dir().join(format!("sift-scan-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        const EMPTY_DIRS: u32 = 2000;
+        for i in 0..EMPTY_DIRS {
+            std::fs::create_dir_all(base.join(format!("empty{i}"))).unwrap();
+        }
+        let heavy = base.join("heavy");
+        std::fs::create_dir_all(&heavy).unwrap();
+        for i in 0..20_000u32 {
+            std::fs::write(heavy.join(format!("f{i}")), vec![6u8; 100]).unwrap();
+        }
+
+        let engine = ScanEngine::with_workers(4);
+        let handle = engine
+            .scan(ScanRequest::new(ScanId(82), base.clone()))
+            .unwrap();
+
+        let mut interim = Vec::new();
+        let mut final_files = 0;
+        let mut final_cov = None;
+        while let Ok(event) = handle.events.recv_timeout(Duration::from_secs(30)) {
+            match event {
+                ScanEvent::Progress { progress, .. } => interim.push(progress),
+                ScanEvent::Finished { progress, .. } => {
+                    final_files = progress.files;
+                    final_cov = Some(progress.coverage);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        handle.join();
+
+        assert_eq!(final_cov, Some(1.0), "a settled tree reports 100%");
+        assert_eq!(final_files, 20_000, "every file in the heavy dir is counted");
+        for p in &interim {
+            assert!(
+                (0.0..=1.0).contains(&p.coverage),
+                "coverage out of range: {}",
+                p.coverage
+            );
         }
 
         let _ = std::fs::remove_dir_all(&base);
