@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1080" viewBox="0 0 1080 1080">
+  <defs>
+    <linearGradient id="wa" x1="330" y1="250" x2="780" y2="860" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5d97f5"/><stop offset="1" stop-color="#3450b8"/>
+    </linearGradient>
+    <linearGradient id="wb" x1="780" y1="250" x2="330" y2="860" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3f6fce"/><stop offset="1" stop-color="#27367f"/>
+    </linearGradient>
+    <linearGradient id="ht" x1="600" y1="120" x2="720" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#bdf6ff"/><stop offset="0.45" stop-color="#54c8ff"/><stop offset="1" stop-color="#9a6bff"/>
+    </linearGradient>
+    <radialGradient id="hb" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#7fd4ff" stop-opacity="0.55"/><stop offset="0.6" stop-color="#7a8bff" stop-opacity="0.16"/><stop offset="1" stop-color="#7a8bff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="hu" cx="0.4" cy="0.34" r="0.95">
+      <stop offset="0" stop-color="#f6faff"/><stop offset="0.55" stop-color="#c3d6ff"/><stop offset="1" stop-color="#7e97e0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="540.0" cy="506.0" r="150" fill="url(#hb)"/>
+  <path d="M804.9 399.2 A300 300 0 0 1 804.9 680.8 L654.8 601.0 A130 130 0 0 0 654.8 479.0 Z" fill="url(#wb)"/>
+  <path d="M529.5 839.8 A300 300 0 0 1 285.6 699.0 L429.8 608.9 A130 130 0 0 0 535.5 669.9 Z" fill="url(#wb)"/>
+  <path d="M794.4 699.0 A300 300 0 0 1 550.5 839.8 L544.5 669.9 A130 130 0 0 0 650.2 608.9 Z" fill="url(#wa)"/>
+  <path d="M275.1 680.8 A300 300 0 0 1 275.1 399.2 L425.2 479.0 A130 130 0 0 0 425.2 601.0 Z" fill="url(#wa)"/>
+  <path d="M285.6 381.0 A300 300 0 0 1 529.5 240.2 L535.5 410.1 A130 130 0 0 0 429.8 471.1 Z" fill="url(#wb)"/>
+  <path d="M550.5 206.2 A300 300 0 0 1 794.4 347.0 L650.2 437.1 A130 130 0 0 0 544.5 376.1 Z" fill="url(#ht)"/>
+  <circle cx="540.0" cy="540.0" r="138" fill="#0a1122"/>
+  <circle cx="540.0" cy="540.0" r="112" fill="url(#hu)"/>
+</svg>

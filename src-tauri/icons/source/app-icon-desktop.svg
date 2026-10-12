@@ -1,0 +1,47 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <path id="sq" d="M265 80 H759 A185 185 0 0 1 944 265 V759 A185 185 0 0 1 759 944 H265 A185 185 0 0 1 80 759 V265 A185 185 0 0 1 265 80 Z"/>
+    <clipPath id="sqclip"><use href="#sq"/></clipPath>
+    <linearGradient id="bg" x1="180" y1="120" x2="860" y2="940" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#121c33"/><stop offset="0.55" stop-color="#0c1326"/><stop offset="1" stop-color="#080d1c"/>
+    </linearGradient>
+    <radialGradient id="ambient" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(430 300) rotate(128) scale(720)">
+      <stop offset="0" stop-color="#3d7bff" stop-opacity="0.30"/><stop offset="1" stop-color="#3d7bff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wA" x1="300" y1="240" x2="740" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5d97f5"/><stop offset="1" stop-color="#3450b8"/>
+    </linearGradient>
+    <linearGradient id="wB" x1="740" y1="240" x2="300" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3f6fce"/><stop offset="1" stop-color="#27367f"/>
+    </linearGradient>
+    <linearGradient id="hot" x1="560" y1="120" x2="700" y2="470" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#bdf6ff"/><stop offset="0.45" stop-color="#54c8ff"/><stop offset="1" stop-color="#9a6bff"/>
+    </linearGradient>
+    <radialGradient id="hotGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#7fd4ff" stop-opacity="0.55"/><stop offset="0.6" stop-color="#7a8bff" stop-opacity="0.16"/><stop offset="1" stop-color="#7a8bff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="hub" cx="0.4" cy="0.34" r="0.95">
+      <stop offset="0" stop-color="#f6faff"/><stop offset="0.55" stop-color="#c3d6ff"/><stop offset="1" stop-color="#7e97e0"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="512" y1="0" x2="512" y2="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.015"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#sqclip)">
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#ambient)"/>
+  <circle cx="512" cy="184" r="0" fill="none"/>
+  <circle cx="512" cy="184" r="190" fill="url(#hotGlow)"/>
+    <path d="M817.5 361.6 A346 346 0 0 1 817.5 686.4 L644.4 594.4 A150 150 0 0 0 644.4 453.6 Z" fill="url(#wB)"/>
+    <path d="M499.9 869.8 A346 346 0 0 1 218.6 707.4 L384.8 603.5 A150 150 0 0 0 506.8 673.9 Z" fill="url(#wB)"/>
+    <path d="M805.4 707.4 A346 346 0 0 1 524.1 869.8 L517.2 673.9 A150 150 0 0 0 639.2 603.5 Z" fill="url(#wA)"/>
+    <path d="M206.5 686.4 A346 346 0 0 1 206.5 361.6 L379.6 453.6 A150 150 0 0 0 379.6 594.4 Z" fill="url(#wA)"/>
+    <path d="M218.6 340.6 A346 346 0 0 1 499.9 178.2 L506.8 374.1 A150 150 0 0 0 384.8 444.5 Z" fill="url(#wB)"/>
+    <path d="M524.1 138.2 A346 346 0 0 1 805.4 300.6 L639.2 404.5 A150 150 0 0 0 517.2 334.1 Z" fill="url(#hot)"/>
+  <circle cx="512" cy="524" r="158" fill="#0a1122"/>
+  <circle cx="512" cy="524" r="132" fill="url(#hub)"/>
+  <path d="M512 462 C519 494 528 503 560 510 C528 517 519 526 512 586 C505 526 496 517 464 510 C496 503 505 494 512 462 Z" fill="#3a53c8"/>
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#sheen)"/>
+
+  </g>
+</svg>
