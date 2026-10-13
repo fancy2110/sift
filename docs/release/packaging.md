@@ -6,6 +6,9 @@
 配套 CI：[`.github/workflows/release.yml`](../../.github/workflows/release.yml)，
 推送 `v*` tag 后自动三平台并行构建并挂到 GitHub Release（草稿）。
 
+发版前的整体准备（版本/更新日志、签名账号、质量门禁、分发渠道、回滚）见
+[preparation.md](./preparation.md)；本文只讲构建与签名本身。
+
 ---
 
 ## 0. 版本号来源（单一事实源）
