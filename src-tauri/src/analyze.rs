@@ -36,7 +36,13 @@ struct ReportItem {
     name: String,
     display_path: String,
     is_dir: bool,
+    /// Reclaimable (physical-preferred) bytes: display and session accounting.
     size: u64,
+    /// Logical bytes (`st_size`), which is what a fingerprint must compare
+    /// against: `fingerprint_still_matches` stats the path and reads
+    /// `meta.len()`. Using `size` here rejected every ordinary file, because
+    /// on APFS `blocks * 512` exceeds `st_size` for almost any file.
+    fingerprint_size: u64,
     mtime_ms: i64,
     kind_token: String,
     safety: Safety,
@@ -257,6 +263,7 @@ pub(crate) fn analyze_current_with(
                     display_path: item.candidate.display_path.clone(),
                     is_dir: item.candidate.is_dir,
                     size: item.candidate.reclaimable(),
+                    fingerprint_size: item.candidate.size.logical,
                     mtime_ms: item.candidate.mtime_ms,
                     kind_token: item.candidate.kind.token().to_string(),
                     safety: item.verdict.safety,
@@ -434,6 +441,21 @@ pub(crate) fn perform_cleanup(
     perform_cleanup_with(&store, &last_report, paths, automatic, None)
 }
 
+/// Does the filesystem object at `path` still match what was analysed?
+///
+/// Uses the stored *logical* size. `ReportItem::size` is the reclaimable
+/// (physical-preferred) figure for display; comparing it with `st_size` — as
+/// the guard originally did — rejects every ordinary file, because APFS
+/// allocation rounds `blocks * 512` up past `st_size`.
+fn still_describes_report_item(item: &ReportItem, path: &std::path::Path) -> bool {
+    sift_monitor::policy::fingerprint_still_matches(
+        path,
+        item.fingerprint_size,
+        item.mtime_ms,
+        item.is_dir,
+    )
+}
+
 /// The blocking cleanup over owned/shared data. Split out so the same work can
 /// run on a spawned thread (an async command, the tray menu) without borrowing
 /// [`AppServices`]: the `Arc<Store>` gives shared ownership of persistence, and
@@ -481,6 +503,10 @@ fn perform_cleanup_with(
                 display_path: entry.display_path.clone(),
                 is_dir: entry.fingerprint.is_dir,
                 size: entry.size,
+                // The stored fingerprint already carries the logical size;
+                // `entry.size` is the reclaimable (physical) figure used for
+                // display and must not be compared with `st_size`.
+                fingerprint_size: entry.fingerprint.size,
                 mtime_ms: entry.fingerprint.mtime_ms,
                 kind_token: entry.kind_token.clone(),
                 safety: entry.safety,
@@ -508,13 +534,9 @@ fn perform_cleanup_with(
         }
         // Re-verify the fingerprint immediately before deletion: the approval
         // described the object as analysed. A replacement or rewrite since then
-        // is skipped, not deleted.
-        if !sift_monitor::policy::fingerprint_still_matches(
-            &path,
-            item.size,
-            item.mtime_ms,
-            item.is_dir,
-        ) {
+        // is skipped, not deleted. Compare the *logical* size: the guard stats
+        // the path and reads `st_size`, never the allocated blocks.
+        if !still_describes_report_item(&item, &path) {
             results.push(crate::cleanup::DeleteResultItem {
                 path: text.clone(),
                 ok: false,
@@ -771,6 +793,9 @@ pub fn mark_path(
         display_path: display.clone(),
         is_dir,
         size,
+        // `size` is the display figure (max of logical and allocation); the
+        // pre-delete guard compares `st_size`, so keep that separately.
+        fingerprint_size: meta.len(),
         mtime_ms,
         kind_token: "userMarked".into(),
         safety: Safety::Review,
@@ -1533,6 +1558,7 @@ mod tests {
             display_path: "~/tmp/stale.bin".into(),
             is_dir: false,
             size: original.len(),
+            fingerprint_size: original.len(),
             mtime_ms: meta_mtime_ms(&original),
             kind_token: "installer".into(),
             safety: Safety::Review,
@@ -1553,6 +1579,51 @@ mod tests {
         assert!(!results[0].ok);
         assert_eq!(results[0].error.as_deref(), Some("err.fingerprintChanged"));
         assert!(path.exists(), "the changed file must not be deleted");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unchanged_file_passes_the_guard_despite_allocation_rounding() {
+        // Regression: the guard used to be called with the reclaimable
+        // (physical) size while `fingerprint_still_matches` reads `st_size`.
+        // For a 1000-byte file APFS reports 4096 allocated, so every ordinary
+        // file was refused as "changed" and never deleted.
+        let dir = std::env::temp_dir().join(format!("sift-guard-{:?}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("download.apk");
+        std::fs::write(&path, vec![7u8; 1000]).unwrap();
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+
+        #[cfg(unix)]
+        let physical = {
+            use std::os::unix::fs::MetadataExt;
+            meta.blocks() * 512
+        };
+        #[cfg(not(unix))]
+        let physical = meta.len();
+
+        let item = ReportItem {
+            key: sift_core::NodeKey::from_path(&path),
+            name: "download.apk".into(),
+            display_path: "~/Downloads/download.apk".into(),
+            is_dir: false,
+            size: physical,
+            fingerprint_size: meta.len(),
+            mtime_ms: meta_mtime_ms(&meta),
+            kind_token: "packageInstaller".into(),
+            safety: Safety::Safe,
+        };
+
+        assert!(
+            still_describes_report_item(&item, &path),
+            "an unchanged file must pass; physical={physical} logical={}",
+            meta.len()
+        );
+        // A different logical size at the same path is a different object.
+        std::fs::write(&path, vec![7u8; 2000]).unwrap();
+        assert!(!still_describes_report_item(&item, &path));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
