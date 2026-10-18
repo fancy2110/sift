@@ -3,6 +3,9 @@
 //! The product's deletion contract is absolute: nothing is ever permanently
 //! erased, and every failure is reported per item so one locked file cannot
 //! block the rest of a batch.
+//!
+//! macOS uses `NSFileManager.trashItemAtURL` (silent) rather than Finder's
+//! AppleScript path; see [`platform_delete`] for why.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -105,9 +108,35 @@ pub fn trash_paths_cancellable(
     paths: &[PathBuf],
     cancel: Option<&TrashCancel>,
 ) -> Vec<TrashResult> {
-    trash_paths_impl(paths, cancel, |path| {
-        trash::delete(path).map_err(|err| err.to_string())
-    })
+    trash_paths_impl(paths, cancel, platform_delete())
+}
+
+/// The per-item remover for this platform.
+///
+/// macOS: use `NSFileManager.trashItemAtURL` instead of the `trash` crate's
+/// default Finder/AppleScript path. Finder plays the "move to Trash" sound
+/// **once per item** and offers no per-call way to silence it, so a batch of
+/// N files produced a rapid burst of N sounds. `trashItemAtURL` is silent,
+/// faster (no AppleScript round trip per file), and needs no Automation
+/// permission at all — the first deletion no longer prompts "Sift wants to
+/// control Finder". Trade-off: Finder's "Put Back" entry may be missing for
+/// items moved this way on some macOS versions (a Finder limitation outside
+/// our control); the item is still in the Trash and can be dragged out to
+/// restore, so the product's recoverability promise is intact.
+///
+/// Other platforms keep the crate default (Recycle Bin / FreeDesktop trash).
+fn platform_delete() -> impl Fn(&Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        let mut ctx = trash::TrashContext::new();
+        ctx.set_delete_method(DeleteMethod::NsFileManager);
+        move |path: &Path| ctx.delete(path).map_err(|err| err.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        |path: &Path| trash::delete(path).map_err(|err| err.to_string())
+    }
 }
 
 /// Core batch loop with the per-item removal injected, so the cancellation
@@ -259,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires macOS Finder Automation (System Settings → Privacy → Automation) permission"]
+    #[ignore = "requires writing to the real ~/.Trash (run outside a restricted sandbox)"]
     fn real_file_round_trips_through_the_trash() {
         let base = std::env::temp_dir().join(format!("sift-trash-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
@@ -276,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires macOS Finder Automation (System Settings → Privacy → Automation) permission"]
+    #[ignore = "requires writing to the real ~/.Trash (run outside a restricted sandbox)"]
     fn batch_preserves_order_and_independence() {
         let base = std::env::temp_dir().join(format!("sift-trash-batch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);

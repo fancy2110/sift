@@ -77,7 +77,7 @@ docs/
 | 批量读目录 | `getattrlistbulk` ✅ 已实现并实测 | `read_dir`+`metadata`（可移植回退） | `read_dir`+`metadata`（可移植回退） |
 | 硬链接去重 | ✅（含链接数） | ✅（`number_of_links`） | ✅ |
 | 卷枚举 | ✅ | ✅ | ✅ |
-| 回收站 | ✅（需 Finder 自动化授权） | ✅ | ✅ |
+| 回收站 | ✅（`NSFileManager`，静默、无需自动化授权） | ✅ | ✅ |
 | 删除监听 | ✅ FSEvents | ✅ ReadDirectoryChangesW | ✅ inotify |
 | 整卷快路径 | 已实现 | 已调研（直读 `$MFT` / `FileIdBothDirectoryInfo`），未实现 | 已调研（`getdents64`+`statx`），未实现 |
 
