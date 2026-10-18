@@ -36,7 +36,16 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             .icon(tauri::image::Image::from_bytes(png)?)
             .icon_as_template(true)
     } else {
-        builder.icon(app.default_window_icon().cloned().expect("app has an icon"))
+        // A missing bundled icon should cost the tray, not the whole app: the
+        // window is already up by the time this runs, and the menu's "open"
+        // path is only a convenience.
+        match app.default_window_icon().cloned() {
+            Some(icon) => builder.icon(icon),
+            None => {
+                eprintln!("tray: no default window icon bundled; skipping the tray icon");
+                return Ok(());
+            }
+        }
     };
 
     builder
