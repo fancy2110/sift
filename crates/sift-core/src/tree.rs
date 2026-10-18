@@ -591,10 +591,7 @@ impl ScanTree {
         let file_delta = files as i64 - old_files as i64;
 
         let mut cursor = index;
-        loop {
-            let Some(node) = self.nodes.get(cursor as usize).copied() else {
-                break;
-            };
+        while let Some(node) = self.nodes.get(cursor as usize).copied() {
             let parent = node.parent;
             if let Some(n) = self.nodes.get_mut(cursor as usize) {
                 n.size.apply_signed(logical_delta, physical_delta);
@@ -623,10 +620,7 @@ impl ScanTree {
         let old = node.size;
         let files = node.file_count;
         let mut cursor = index;
-        loop {
-            let Some(node) = self.nodes.get(cursor as usize).copied() else {
-                break;
-            };
+        while let Some(node) = self.nodes.get(cursor as usize).copied() {
             if let Some(n) = self.nodes.get_mut(cursor as usize) {
                 n.size -= old;
                 n.file_count = n.file_count.saturating_sub(files);
@@ -892,6 +886,12 @@ impl ScanTree {
     /// node whose parent is open pre-charges that parent (the re-list then skips
     /// the child, so it is counted once); a closed node under a closed parent
     /// only renders, since its bytes already live in the parent.
+    ///
+    /// Kept as one call with explicit fields rather than a builder: adoption is
+    /// a hot path over potentially a million restored nodes, and a struct
+    /// literal at each call site would obscure the one-field-per-node-record
+    /// shape this routine deliberately mirrors.
+    #[allow(clippy::too_many_arguments)]
     pub fn adopt_node(
         &mut self,
         parent: u32,

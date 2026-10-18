@@ -101,35 +101,32 @@ fn worker_loop(
     loop {
         let mut child_fds: Vec<i32> = Vec::new();
         let mut children_opened = 0u64;
-        match DirReader::read_fd(current, true) {
-            Ok(reader) => {
-                dirs.fetch_add(1, Ordering::Relaxed);
-                for entry in reader.entries() {
-                    if entry.name == b"." || entry.name == b".." {
-                        continue;
+        if let Ok(reader) = DirReader::read_fd(current, true) {
+            dirs.fetch_add(1, Ordering::Relaxed);
+            for entry in reader.entries() {
+                if entry.name == b"." || entry.name == b".." {
+                    continue;
+                }
+                if entry.is_dir && !entry.is_symlink {
+                    let name = cstr(&entry.name);
+                    let child = unsafe {
+                        libc::openat(
+                            current,
+                            name.as_ptr(),
+                            libc::O_RDONLY | libc::O_DIRECTORY,
+                        )
+                    };
+                    if child >= 0 {
+                        let now = jobs.open_dirs.fetch_add(1, Ordering::SeqCst) + 1;
+                        update_max(&jobs.max_open_dirs, now);
+                        child_fds.push(child);
+                        children_opened += 1;
                     }
-                    if entry.is_dir && !entry.is_symlink {
-                        let name = cstr(&entry.name);
-                        let child = unsafe {
-                            libc::openat(
-                                current,
-                                name.as_ptr(),
-                                libc::O_RDONLY | libc::O_DIRECTORY,
-                            )
-                        };
-                        if child >= 0 {
-                            let now = jobs.open_dirs.fetch_add(1, Ordering::SeqCst) + 1;
-                            update_max(&jobs.max_open_dirs, now);
-                            child_fds.push(child);
-                            children_opened += 1;
-                        }
-                    } else if entry.is_file {
-                        files.fetch_add(1, Ordering::Relaxed);
-                        bytes.fetch_add(entry.logical_size, Ordering::Relaxed);
-                    }
+                } else if entry.is_file {
+                    files.fetch_add(1, Ordering::Relaxed);
+                    bytes.fetch_add(entry.logical_size, Ordering::Relaxed);
                 }
             }
-            Err(_) => {}
         }
         unsafe { libc::close(current) };
         jobs.open_dirs.fetch_sub(1, Ordering::SeqCst);

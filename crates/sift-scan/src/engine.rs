@@ -1427,15 +1427,13 @@ fn existing_child(
     parent: u32,
     name: &[u8],
 ) -> Option<u32> {
-    if !state.existing_cache.contains_key(&parent) {
-        let map = tree
-            .children(parent)
+    let map = state.existing_cache.entry(parent).or_insert_with(|| {
+        tree.children(parent)
             .into_iter()
             .map(|index| (tree.name(index).to_vec(), index))
-            .collect();
-        state.existing_cache.insert(parent, map);
-    }
-    state.existing_cache.get(&parent).and_then(|map| map.get(name)).copied()
+            .collect()
+    });
+    map.get(name).copied()
 }
 
 /// Resolve an absolute path to its node index by walking the tree from the

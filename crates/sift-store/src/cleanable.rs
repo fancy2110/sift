@@ -345,7 +345,7 @@ fn path_exists(path: &Path) -> bool {
 /// Compute the persisted cleanup command and method for an analyzed item.
 fn plan_fields(item: &AnalyzedItem) -> (Option<String>, String) {
     let plan = plan_for(&item.candidate.kind, &item.candidate.display_path);
-    let command = plan.command.as_ref().map(|step| display_command(step));
+    let command = plan.command.as_ref().map(display_command);
     (command, plan.method.token().to_string())
 }
 

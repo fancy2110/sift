@@ -1072,7 +1072,7 @@ fn finding_dto(
             .unwrap_or(false),
         cleanup_command: {
             let plan = plan_for(&item.candidate.kind, &item.candidate.display_path);
-            plan.command.as_ref().map(|step| display_command(step))
+            plan.command.as_ref().map(display_command)
         },
         cleanup_method: {
             plan_for(&item.candidate.kind, &item.candidate.display_path)
