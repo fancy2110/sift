@@ -72,14 +72,13 @@ fn decide(
 
     if now_hour > scheduled_hour {
         // Today's slot passed while the process was not alive (or not firing).
-        // Make it up once if still inside the catch-up window.
+        // Make it up once if still inside the catch-up window; otherwise record
+        // the day as handled without running an unattended cleanup.
         let hours_after_slot = now_hour - scheduled_hour;
         if catchup_hours > 0 && hours_after_slot <= catchup_hours {
             return SchedAction::RunMissed { day_key };
         }
-        if catchup_hours == 0 || hours_after_slot > catchup_hours {
-            return SchedAction::SkipMissed { day_key };
-        }
+        return SchedAction::SkipMissed { day_key };
     }
 
     // now_hour < scheduled_hour: the slot is still ahead today.
@@ -185,8 +184,16 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
 }
 
 /// Select remembered entries for unattended scheduled cleanup: `Safe`,
-/// individually approved for automatic cleanup, and inside `home`. A missing
-/// home proves nothing, so nothing is selected.
+/// individually approved for automatic cleanup, and proven to be inside
+/// `home`. A missing home proves nothing, so nothing is selected.
+///
+/// The membership test is the filesystem-proven
+/// [`sift_monitor::policy::resolved_inside_home`], not a lexical prefix: a
+/// directory inside home that is (or became) a symlink pointing outside must
+/// not be eligible for unattended deletion. This mirrors what the monitor's
+/// `clean_now` re-checks immediately before a move, so selection and execution
+/// share one boundary rule. A path that cannot be resolved counts as "outside"
+/// — it would fail the pre-delete fingerprint check anyway.
 pub(crate) fn select_approved_paths(
     entries: &[CleanableEntry],
     home: Option<&Path>,
@@ -197,7 +204,7 @@ pub(crate) fn select_approved_paths(
     entries
         .iter()
         .filter(|entry| entry.safety == Safety::Safe && entry.approved_for_auto)
-        .filter(|entry| entry.path.starts_with(home))
+        .filter(|entry| sift_monitor::policy::resolved_inside_home(&entry.path, Some(home)))
         .map(|entry| entry.path.to_string_lossy().into_owned())
         .collect()
 }
@@ -209,11 +216,47 @@ mod tests {
     use sift_analyze::{PathFingerprint, Reason, VerdictSource};
     use sift_core::NodeKey;
 
-    fn entry(name: &str, path: &str, safety: Safety, approved: bool) -> CleanableEntry {
+    /// A throwaway tree: a home with an inside target, and an outside target.
+    /// Selection now proves membership on the real filesystem, so the fixtures
+    /// must exist.
+    struct Fixture {
+        root: PathBuf,
+        home: PathBuf,
+        outside: PathBuf,
+    }
+
+    impl Fixture {
+        fn new(tag: &str) -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("sift-sched-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let home = root.join("home");
+            let outside = root.join("outside");
+            std::fs::create_dir_all(home.join("project/a")).unwrap();
+            std::fs::create_dir_all(home.join("project/b")).unwrap();
+            std::fs::create_dir_all(home.join("project/c")).unwrap();
+            std::fs::create_dir_all(outside.join("d")).unwrap();
+            Self {
+                root,
+                home,
+                outside,
+            }
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn entry(name: &str, path: impl Into<PathBuf>, safety: Safety, approved: bool) -> CleanableEntry {
+        let path = path.into();
+        let display = path.to_string_lossy().into_owned();
         CleanableEntry {
             fingerprint: PathFingerprint::new(NodeKey::from_bytes(name.as_bytes()), 1, 0, true),
-            path: PathBuf::from(path),
-            display_path: path.to_string(),
+            path,
+            display_path: display,
             name: name.to_string(),
             kind_token: "rebuildableCache".into(),
             size: 1,
@@ -233,21 +276,78 @@ mod tests {
 
     #[test]
     fn only_safe_approved_entries_inside_home_are_selected() {
-        let home = Path::new("/Users/me");
+        let fixture = Fixture::new("select");
         let entries = vec![
-            entry("a", "/Users/me/project/a", Safety::Safe, true),
-            entry("b", "/Users/me/project/b", Safety::Safe, false),
-            entry("c", "/Users/me/project/c", Safety::Review, true),
-            entry("d", "/srv/d", Safety::Safe, true),
+            entry("a", fixture.home.join("project/a"), Safety::Safe, true),
+            entry("b", fixture.home.join("project/b"), Safety::Safe, false),
+            entry("c", fixture.home.join("project/c"), Safety::Review, true),
+            entry("d", fixture.outside.join("d"), Safety::Safe, true),
         ];
-        let paths = select_approved_paths(&entries, Some(home));
-        assert_eq!(paths, vec!["/Users/me/project/a".to_string()]);
+        let paths = select_approved_paths(&entries, Some(&fixture.home));
+        assert_eq!(
+            paths,
+            vec![fixture
+                .home
+                .join("project/a")
+                .to_string_lossy()
+                .into_owned()]
+        );
     }
 
     #[test]
     fn missing_home_selects_nothing() {
-        let entries = vec![entry("a", "/Users/me/a", Safety::Safe, true)];
+        let fixture = Fixture::new("nohome");
+        let entries = vec![entry(
+            "a",
+            fixture.home.join("project/a"),
+            Safety::Safe,
+            true,
+        )];
         assert!(select_approved_paths(&entries, None).is_empty());
+    }
+
+    #[test]
+    fn a_vanished_path_is_not_selected() {
+        // It cannot be proven inside home (realpath fails) and would fail the
+        // pre-delete fingerprint check anyway: refusing is the safe direction.
+        let fixture = Fixture::new("gone");
+        let entries = vec![entry(
+            "gone",
+            fixture.home.join("project/deleted-already"),
+            Safety::Safe,
+            true,
+        )];
+        assert!(select_approved_paths(&entries, Some(&fixture.home)).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_inside_home_that_points_outside_is_not_selected() {
+        // Lexically this path is under home; the real filesystem says it lives
+        // outside. Unattended deletion must follow the real target.
+        let fixture = Fixture::new("symlink");
+        let link = fixture.home.join("link");
+        std::os::unix::fs::symlink(&fixture.outside, &link).unwrap();
+
+        let entries = vec![
+            entry("escaped", link.join("d"), Safety::Safe, true),
+            entry(
+                "inside",
+                fixture.home.join("project/a"),
+                Safety::Safe,
+                true,
+            ),
+        ];
+        let paths = select_approved_paths(&entries, Some(&fixture.home));
+        assert_eq!(
+            paths,
+            vec![fixture
+                .home
+                .join("project/a")
+                .to_string_lossy()
+                .into_owned()],
+            "the outside-pointing link is dropped, the real inner path kept"
+        );
     }
 
     #[test]

@@ -426,28 +426,16 @@ impl BulkBuffer {
 /// to the child jobs; any it declines (mount boundaries, adopted-closed
 /// subtrees, budget-refused size-only children) must be closed with
 /// [`ChildFdMap::close_remaining`] so descriptors never leak.
-/// Descriptors of a directory's children, opened with `openat` while the
-/// parent descriptor was still live.
 ///
 /// Stored as raw pairs (no per-result `HashMap` churn: nearly every one of the
 /// ~1M directories processed has only a handful of children). Lookup is
 /// linear while the list is small; a map is built lazily the first time a
-/// large directory is queried. Declined descriptors are closed with
-/// [`ChildFdMap::close_remaining`].
+/// large directory is queried.
+#[derive(Default)]
 pub struct ChildFdMap {
     pairs: Vec<(Vec<u8>, i32)>,
     built: Option<HashMap<Vec<u8>, i32>>,
 }
-
-impl Default for ChildFdMap {
-    fn default() -> Self {
-        Self {
-            pairs: Vec::new(),
-            built: None,
-        }
-    }
-}
-
 impl core::fmt::Debug for ChildFdMap {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ChildFdMap").field("len", &self.pairs.len()).finish()
@@ -513,6 +501,12 @@ impl ChildFdMap {
 
     pub fn len(&self) -> usize {
         self.built.as_ref().map_or(self.pairs.len(), HashMap::len)
+    }
+
+    /// Whether no child descriptor is held. Present so `len` has its
+    /// conventional companion and callers can express the check without `< 1`.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

@@ -29,13 +29,14 @@ fn main() {
     let mut handles = vec![];
     for _ in 0..workers {
         let stack=Arc::clone(&stack); let active=Arc::clone(&active); let buckets=Arc::clone(&buckets);
-        let root_dev=root_dev;
         handles.push(std::thread::spawn(move || {
             let mut local: BTreeMap<String,(u64,u64,u64)> = BTreeMap::new();
             loop {
                 let job = stack.lock().unwrap().pop();
                 let Some(path) = job else {
-                    if active.fetch_sub(1, std::sync::atomic::Ordering::AcqRel)==1 {}
+                    // No work right now: mark this worker idle and let the
+                    // others drain; exit once every worker is idle.
+                    active.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
                     std::thread::sleep(std::time::Duration::from_micros(150));
                     if active.load(std::sync::atomic::Ordering::Acquire)==0 { break; }
                     continue;
