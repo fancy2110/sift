@@ -14,6 +14,12 @@
 - 生产构建必须用 `pnpm tauri build --no-bundle`。直接 `cargo build --release`
   不带 Tauri 的 `custom-protocol` feature，WebView 会去加载 `localhost:5173`
   的开发页，测到的不是生产启动（这次排查中踩过）。
+- **不要用 `pnpm tauri dev` 或 `target/debug/sift` 测启动**：debug 构建未优化，
+  且 WebView 加载的是 Vite 未打包的模块图。同一台机器实测两者的 FCP 约
+  430–500 ms，而 release 包约 370 ms，difference 全在构建形态而不是代码。
+- 测量时尽量让机器空闲：系统负载（load average）到 8 以上时，同一份二进制
+  的 FCP 会整体上浮 50–80 ms，容易被误读成回归。对比回归时应当**交替**运行
+  两个二进制并取中位数，而不是先后各测一次。
 
 ## 优化前基线（生产包，热缓存，多次中位数）
 
@@ -51,6 +57,9 @@
 - 视图级代码分割：`DashboardView` / `SubPageView` 动态 import；
   `SettingsDialog`、`PermissionDrawer`、mock backend/events 全部移出首包。
   首包 JS 185 KB → **129 KB**（gzip 61 → 46 KB），CSS 68 → **35 KB**。
+- 窗口主题同步（标题栏深浅色）改为**动态 import** `@tauri-apps/api/window`：
+  静态引入会把 window API 放进首包（+14 KB），而它只是首帧之后的外观修正。
+  拆分后首包 **130 KB**，window 模块独立 chunk（~14 KB）延后加载。
 - `init()` 中监听器注册后，scanRunning/warnings/volumes/history/routines/
   monitorStatus 一次性并发；i18n 与 store init 并发。
 - 去掉 Home 外层冷启动 fade 包裹。
