@@ -1628,6 +1628,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// End-to-end through the real trash: an unchanged, non-block-aligned
+    /// file must actually leave its original location. Ignored by default
+    /// because it writes to the real `~/.Trash` (a sandboxed CI may forbid
+    /// that); run with `cargo test -p sift -- --ignored`.
+    #[test]
+    #[ignore = "requires writing to the real ~/.Trash"]
+    fn cleanup_trashes_an_unchanged_file_end_to_end() {
+        let services = AppServices::new();
+        let dir = std::env::temp_dir()
+            .join(format!("sift-cleanup-e2e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("download.apk");
+        std::fs::write(&path, vec![9u8; 1000]).unwrap();
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        #[cfg(unix)]
+        let physical = {
+            use std::os::unix::fs::MetadataExt;
+            meta.blocks() * 512
+        };
+        #[cfg(not(unix))]
+        let physical = meta.len();
+
+        let item = ReportItem {
+            key: sift_core::NodeKey::from_path(&path),
+            name: "download.apk".into(),
+            display_path: "~/Downloads/download.apk".into(),
+            is_dir: false,
+            size: physical,
+            fingerprint_size: meta.len(),
+            mtime_ms: meta_mtime_ms(&meta),
+            kind_token: "packageInstaller".into(),
+            safety: Safety::Safe,
+        };
+        services
+            .last_report
+            .lock()
+            .unwrap()
+            .insert(path.clone(), item);
+
+        let text = path.to_string_lossy().into_owned();
+        let results = perform_cleanup(&services, &[text], false);
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].ok,
+            "cleanup must succeed, got {:?}",
+            results[0].error
+        );
+        assert!(!path.exists(), "the file must leave its original location");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn meta_mtime_ms(meta: &std::fs::Metadata) -> i64 {
         #[cfg(unix)]
         {
