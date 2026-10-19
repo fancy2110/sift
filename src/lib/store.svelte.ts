@@ -562,9 +562,30 @@ class AppStore {
       case 'cleanupFinished': {
         const removed = new Set<string>();
         const removedPaths = new Set(data.paths ?? []);
+        // Findings know the id (and the size) of a removed *file*; the tree
+        // only tracks directories, so an unresolved path here used to leave
+        // auto/scheduled cleanups invisible in the smart list and the totals.
+        const findingByPath = new Map(this.findings.map((f) => [f.path, f]));
+        const removedFindings: Finding[] = [];
         for (const path of removedPaths) {
+          const finding = findingByPath.get(path);
+          if (finding) {
+            removed.add(finding.id);
+            removedFindings.push(finding);
+            continue;
+          }
           const id = this.pathToId.get(path);
           if (id) removed.add(id);
+        }
+        // Debit files that are not inside a removed directory (that subtree
+        // is debited once by pruneIds).
+        const removedDirs = removedFindings
+          .filter((finding) => finding.isDir)
+          .map((finding) => `${finding.path}/`);
+        for (const finding of removedFindings) {
+          if (finding.isDir) continue;
+          if (removedDirs.some((dir) => finding.path.startsWith(dir))) continue;
+          this.debitFileFromAncestors(finding.path, finding.size);
         }
         this.currentFiles = this.currentFiles.filter(
           (file) => !removedPaths.has(file.path)
@@ -575,6 +596,7 @@ class AppStore {
           this.selectedIds = new Set(
             [...this.selectedIds].filter((id) => !removed.has(id))
           );
+          this.refreshVolumes();
         }
         this.loadHistory();
         this.loadRoutines();
@@ -845,6 +867,20 @@ class AppStore {
       }
     }
 
+    // A removed file is not a tree node, so debiting its bytes from the
+    // ancestor directories has to be done here, by path. Directories are
+    // covered by pruneIds below (their subtree size is debited once); a file
+    // inside a removed directory is already part of that subtree, so skip it
+    // to avoid counting the same bytes twice.
+    const removedDirs = targets
+      .filter((target) => removed.has(target.id) && target.isDir)
+      .map((target) => `${target.path}/`);
+    for (const target of targets) {
+      if (!removed.has(target.id) || target.isDir) continue;
+      if (removedDirs.some((dir) => target.path.startsWith(dir))) continue;
+      this.debitFileFromAncestors(target.path, target.size);
+    }
+
     this.pruneIds(removed);
     this.findings = this.findings.filter((f) => !removed.has(f.id));
     const wasCancelled = this.cleanupCancelled || cancelledPaths.size > 0;
@@ -863,6 +899,7 @@ class AppStore {
     this.cleanupCancelled = false;
     await this.loadHistory();
     await this.loadRoutines();
+    if (bytes > 0) await this.refreshVolumes();
     if (wasCancelled) {
       this.toast(
         t('toast.cleanCancelled', [formatSize(bytes), String(cancelledPaths.size)]),
@@ -1017,6 +1054,46 @@ class AppStore {
       this.history = await listHistory();
     } catch {
       // History is best-effort.
+    }
+  }
+
+  /** Re-read volume free space: a cleanup changes it, and the dashboard
+   *  gauge is otherwise stuck on the value loaded at startup. */
+  async refreshVolumes() {
+    try {
+      this.volumes = await listVolumes();
+    } catch {
+      // Volumes are best-effort.
+    }
+  }
+
+  /**
+   * Debit a removed item's bytes from every ancestor directory node.
+   *
+   * Only directories are scan-tree nodes, so `pruneIds` cannot see a removed
+   * *file*: without this, the explorer (and anything sized from the tree)
+   * keeps reporting the pre-deletion folder total even though the file is
+   * gone. Directory findings are handled by `pruneIds`, which debits their
+   * last known subtree size exactly once.
+   */
+  private debitFileFromAncestors(path: string, size: number) {
+    if (size <= 0) return;
+    const done = new Set<string>();
+    let dir = path;
+    for (;;) {
+      if (dir === '/') break;
+      const slash = dir.lastIndexOf('/');
+      if (slash < 0) break;
+      // `slash === 0` means the next ancestor is the volume root, not a
+      // parent segment with an empty name.
+      dir = slash === 0 ? '/' : dir.slice(0, slash);
+      const id = this.pathToId.get(dir);
+      if (id && !done.has(id)) {
+        done.add(id);
+        const node = this.nodeRecords.get(id);
+        if (node) node.size = Math.max(0, node.size - size);
+      }
+      if (dir === '/') break;
     }
   }
 
