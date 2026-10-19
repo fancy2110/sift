@@ -17,6 +17,15 @@
     store.selectedIds = new Set();
   }
 
+  // Review mode: show only the rows that are currently queued for deletion,
+  // so the user can confirm exactly what the button will remove.
+  let smartFilter = $state<'all' | 'selected'>('all');
+  const smartRows = $derived(
+    smartFilter === 'selected'
+      ? store.smartItems.filter((item) => store.isSelected(item.id))
+      : store.smartItems
+  );
+
   // Family-driven icon: never infer from a (possibly localized) path string.
   function kindIcon(item: { kind: string; isDir: boolean; safety: string }): string {
     switch (item.kind) {
@@ -187,7 +196,7 @@
       <!-- SMART -->
       <section class="pager-panel" role="tabpanel">
         <div class="smart-scroll">
-          {#each store.smartItems as item, i (item.id)}
+          {#each smartRows as item, i (item.id)}
             {@const checked = store.isSelected(item.id)}
             <article class="smart-card" class:smart-card-off={!checked} in:listIn={{ index: i }}>
               <button
@@ -243,7 +252,7 @@
           {:else}
             <div class="panel-empty" in:fade={{ duration: 300 }}>
               <Icon name="check" size={24} style="color: var(--color-ok)" />
-              <p>{t('sub.smartEmpty')}</p>
+              <p>{smartFilter === 'selected' ? t('sub.noSelected') : t('sub.smartEmpty')}</p>
             </div>
           {/each}
         </div>
@@ -593,6 +602,17 @@
     </span>
     {#if store.subTab === 'smart'}
       <span class="sp-status-r">
+        <button
+          type="button"
+          class="status-link"
+          class:status-link-on={smartFilter === 'selected'}
+          aria-pressed={smartFilter === 'selected'}
+          title={t('sub.onlySelectedHint')}
+          onclick={() =>
+            (smartFilter = smartFilter === 'selected' ? 'all' : 'selected')}
+        >
+          {t('sub.onlySelected')}
+        </button>
         <button type="button" class="status-link" onclick={selectAllSmart}>{t('sub.selectAll')}</button>
         <button type="button" class="status-link" onclick={deselectAllSmart}>{t('sub.deselectAll')}</button>
       </span>
@@ -771,6 +791,9 @@
   }
   .status-link:hover {
     color: var(--color-fg);
+  }
+  .status-link-on {
+    color: var(--color-violet);
   }
   .panel-empty {
     height: 100%;

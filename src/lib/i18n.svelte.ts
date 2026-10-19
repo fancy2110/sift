@@ -364,6 +364,9 @@ const zh: Record<string, string> = {
   'sub.statusConfidence': 'AI 引擎持续分析中',
   'sub.selectAll': '全选',
   'sub.deselectAll': '取消全选',
+  'sub.onlySelected': '只看已选',
+  'sub.onlySelectedHint': '只显示已加入删除队列的项目',
+  'sub.noSelected': '没有已选项目',
 
   'hist.autoTitle': '定时深度清理',
   'hist.manualTitle': '手动整理',
@@ -731,6 +734,9 @@ const en: Record<string, string> = {
   'sub.statusConfidence': 'AI engine analyzing',
   'sub.selectAll': 'Select all',
   'sub.deselectAll': 'Deselect all',
+  'sub.onlySelected': 'Selected only',
+  'sub.onlySelectedHint': 'Show only the items queued for deletion',
+  'sub.noSelected': 'Nothing selected',
 
   'hist.autoTitle': 'Scheduled deep cleanup',
   'hist.manualTitle': 'Manual cleanup',

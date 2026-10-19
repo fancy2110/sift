@@ -332,6 +332,9 @@ export const zhTW: Record<string, string> = {
   'sub.statusConfidence': 'AI 引擎持續分析中',
   'sub.selectAll': '全選',
   'sub.deselectAll': '取消全選',
+  'sub.onlySelected': '只看已選',
+  'sub.onlySelectedHint': '只顯示已加入刪除佇列的項目',
+  'sub.noSelected': '沒有已選項目',
 
   'hist.autoTitle': '排程深度清理',
   'hist.manualTitle': '手動整理',

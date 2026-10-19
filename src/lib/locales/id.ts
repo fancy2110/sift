@@ -353,6 +353,9 @@ export const id: Record<string, string> = {
   'sub.statusConfidence': 'Mesin AI sedang menganalisis',
   'sub.selectAll': 'Pilih semua',
   'sub.deselectAll': 'Batalkan pilihan semua',
+  'sub.onlySelected': 'Hanya dipilih',
+  'sub.onlySelectedHint': 'Tampilkan hanya item yang masuk antrean hapus',
+  'sub.noSelected': 'Tidak ada yang dipilih',
 
   'hist.autoTitle': 'Pembersihan mendalam terjadwal',
   'hist.manualTitle': 'Pembersihan manual',

@@ -337,6 +337,9 @@ export const hi: Record<string, string> = {
   'sub.statusConfidence': 'AI इंजन विश्लेषण कर रहा है',
   'sub.selectAll': 'सभी चुनें',
   'sub.deselectAll': 'चयन हटाएँ',
+  'sub.onlySelected': 'केवल चयनित',
+  'sub.onlySelectedHint': 'केवल हटाने की कतार में जोड़ी गई वस्तुएँ दिखाएँ',
+  'sub.noSelected': 'कोई चयनित वस्तु नहीं',
 
   'hist.autoTitle': 'नियत गहन सफ़ाई',
   'hist.manualTitle': 'मैन्युअल सफ़ाई',

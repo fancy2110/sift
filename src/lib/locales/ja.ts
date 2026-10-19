@@ -345,6 +345,9 @@ export const ja: Record<string, string> = {
   'sub.statusConfidence': 'AI エンジンが分析を継続中',
   'sub.selectAll': 'すべて選択',
   'sub.deselectAll': '選択を解除',
+  'sub.onlySelected': '選択済みのみ',
+  'sub.onlySelectedHint': '削除キューに入っている項目だけを表示',
+  'sub.noSelected': '選択済みの項目はありません',
 
   'hist.autoTitle': '定期ディープクリーン',
   'hist.manualTitle': '手動整理',

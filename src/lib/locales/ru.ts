@@ -348,6 +348,9 @@ export const ru: Record<string, string> = {
   'sub.statusConfidence': 'Движок AI выполняет анализ',
   'sub.selectAll': 'Выбрать все',
   'sub.deselectAll': 'Снять выбор',
+  'sub.onlySelected': 'Только выбранные',
+  'sub.onlySelectedHint': 'Показывать только элементы в очереди удаления',
+  'sub.noSelected': 'Ничего не выбрано',
 
   'hist.autoTitle': 'Запланированная глубокая очистка',
   'hist.manualTitle': 'Ручная очистка',

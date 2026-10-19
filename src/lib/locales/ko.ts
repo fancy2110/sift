@@ -323,6 +323,9 @@ export const ko: Record<string, string> = {
   'sub.statusConfidence': 'AI 엔진 분석 중',
   'sub.selectAll': '모두 선택',
   'sub.deselectAll': '선택 해제',
+  'sub.onlySelected': '선택 항목만',
+  'sub.onlySelectedHint': '삭제 대기열에 추가된 항목만 표시',
+  'sub.noSelected': '선택된 항목이 없습니다',
 
   'hist.autoTitle': '예약된 전체 정리',
   'hist.manualTitle': '수동 정리',
