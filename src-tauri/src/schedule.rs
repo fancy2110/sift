@@ -98,12 +98,14 @@ fn run(app: AppHandle) {
 
         let services = app.state::<AppServices>();
         let settings = services.store.settings();
-        // The schedule must obey the automatic-cleanup switch: with
-        // AutoCleanMode off or notify-only it may scan and report, but it
-        // never deletes. (Defense in depth; run_daily re-checks below.)
-        if !settings.monitor.scheduled_cleanup_enabled
-            || !settings.monitor.auto_mode.may_delete()
-        {
+        // The scheduled toggle is its own explicit consent. It deliberately
+        // does NOT depend on the low-space auto-clean switch: a user who
+        // enables "daily cleanup" expects it to run even while the low-space
+        // trigger is off (that was the previous silent no-op). Every deletion
+        // still has to clear the per-item guards — Safe, individually
+        // approved for auto cleanup, inside home, and an unchanged
+        // fingerprint — checked by run_daily and perform_cleanup.
+        if !settings.monitor.scheduled_cleanup_enabled {
             continue;
         }
 
@@ -169,14 +171,14 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
     let home = dirs::home_dir();
     let paths = select_approved_paths(services.store.cleanable().entries(), home.as_deref());
 
-    // Re-check at act time: the user may have flipped the switch while the
-    // hour-long scan was running.
+    // Re-check the schedule's own switch at act time: the user may have turned
+    // it off while the hour-long scan was running. The per-item guards
+    // (Safe + approved + home + fingerprint) are enforced downstream.
     let still_allowed = services
         .store
         .settings()
         .monitor
-        .auto_mode
-        .may_delete();
+        .scheduled_cleanup_enabled;
     if !paths.is_empty() && still_allowed {
         crate::analyze::perform_cleanup(&services, &paths, true);
     }
