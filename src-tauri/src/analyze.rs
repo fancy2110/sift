@@ -1485,6 +1485,20 @@ pub fn shutdown(app: &AppHandle) {
 mod tests {
     use super::*;
 
+    /// Isolated services for tests: settings and persisted state must not
+    /// come from (or leak into) the developer's real app data. `AppServices::new`
+    /// opens the default store, which made assertions like "AI is off by
+    /// default" depend on whatever the machine had configured.
+    fn test_services() -> AppServices {
+        AppServices {
+            store: Arc::new(Store::in_memory()),
+            monitor: Mutex::new(None),
+            warnings: Mutex::new(Vec::new()),
+            last_report: Mutex::new(HashMap::new()),
+            cleanup_cancel: Mutex::new(None),
+        }
+    }
+
     #[test]
     fn services_load_without_warnings_on_a_clean_machine() {
         let services = AppServices::new();
@@ -1533,7 +1547,7 @@ mod tests {
 
     #[test]
     fn a_local_adjudicator_is_built_without_configuration() {
-        let services = AppServices::new();
+        let services = test_services();
         // Default settings have AI disabled, so the local rules are used and
         // nothing is transmitted.
         assert!(!services.store.settings().ai.is_usable());
@@ -1542,7 +1556,7 @@ mod tests {
 
     #[test]
     fn perform_cleanup_skips_items_whose_fingerprint_changed() {
-        let services = AppServices::new();
+        let services = test_services();
         let dir = std::env::temp_dir().join(format!("sift-cleanup-fp-{:?}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1635,7 +1649,7 @@ mod tests {
     #[test]
     #[ignore = "requires writing to the real ~/.Trash"]
     fn cleanup_trashes_an_unchanged_file_end_to_end() {
-        let services = AppServices::new();
+        let services = test_services();
         let dir = std::env::temp_dir()
             .join(format!("sift-cleanup-e2e-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

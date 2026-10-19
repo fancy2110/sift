@@ -55,9 +55,13 @@ pub struct MonitorSettings {
     /// as they are discovered. Off by default: convenience must be asked for.
     pub auto_approve_structural: bool,
     /// Run the engine daily and clean remembered safe items unattended.
-    /// Only honoured while `auto_mode` permits deletion: a schedule that
-    /// deleted files while the "automatic cleanup" switch was off would be
-    /// exactly the surprise this setting must never cause.
+    ///
+    /// This toggle is its own explicit consent and is honoured independently
+    /// of the low-space `auto_mode`: enabling a daily schedule and having it
+    /// silently do nothing because a different switch was off is a worse
+    /// surprise. Safety is enforced per item instead — only `Safe`, explicitly
+    /// approved, inside-home entries whose fingerprint still matches are ever
+    /// removed.
     #[serde(default = "default_scheduled_cleanup")]
     pub scheduled_cleanup_enabled: bool,
     /// Local hour the daily cleanup runs at.
