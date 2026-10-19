@@ -232,11 +232,27 @@ export function runRoutine(id: string): Promise<DeleteResultItem[]> {
 
 // ---- interface language ----------------------------------------------------
 
-export function getLanguage(): Promise<'zh' | 'en'> {
-  return call<string>('get_language').then((tag) => (tag === 'en' ? 'en' : 'zh'));
+/// Keep in sync with `LOCALES` in i18n.svelte.ts and `set_language` in Rust.
+export type LanguageTag = 'zh' | 'zh-TW' | 'en' | 'ja' | 'ko' | 'hi' | 'id' | 'ru';
+
+const LANGUAGE_TAGS: readonly LanguageTag[] = [
+  'zh',
+  'zh-TW',
+  'en',
+  'ja',
+  'ko',
+  'hi',
+  'id',
+  'ru',
+];
+
+export function getLanguage(): Promise<LanguageTag> {
+  return call<string>('get_language').then((tag) =>
+    LANGUAGE_TAGS.includes(tag as LanguageTag) ? (tag as LanguageTag) : 'zh'
+  );
 }
 
-export function setLanguage(language: 'zh' | 'en'): Promise<void> {
+export function setLanguage(language: LanguageTag): Promise<void> {
   return call('set_language', { language });
 }
 
