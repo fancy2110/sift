@@ -33,6 +33,15 @@
   let saving = $state(false);
   let loaded = false;
 
+  // Local mirror of the scheduled hour. `bind:value` on a <select> needs a
+  // state variable; binding the store property directly would not select the
+  // matching <option> reliably (the attribute is applied before options
+  // exist), which left the picker visibly empty.
+  let scheduledHour = $state(store.scheduledHour);
+  $effect(() => {
+    scheduledHour = store.scheduledHour;
+  });
+
   // The config arrives from the backend after the sheet opens; sync once.
   $effect(() => {
     const ai = store.aiConfig;
@@ -216,53 +225,55 @@
 
       <p class="set-section-label" style="margin-top: 22px">{t('settings.automation')}</p>
 
-      <div class="set-card">
-        <div class="set-card-info">
-          <p class="set-card-title">{t('settings.dailyTitle')}</p>
-          <p class="set-card-desc">{t('settings.dailyDesc')}</p>
-        </div>
-        <button
-          type="button"
-          class="switch"
-          class:switch-on={store.autoOn}
-          role="switch"
-          aria-label={t('settings.dailyTitle')}
-          aria-checked={store.autoOn}
-          onclick={() => store.toggleAuto()}
-        >
-          <span class="switch-knob"></span>
-        </button>
-      </div>
-
-      <div class="set-card">
-        <div class="set-card-info">
-          <p class="set-card-title">{t('settings.scheduledTitle')}</p>
-          <p class="set-card-desc">{t('settings.scheduledDesc')}</p>
-        </div>
-        <div class="sched-controls">
-          <select
-            class="sched-time"
-            aria-label={t('settings.scheduledTime')}
-            value={String(store.scheduledHour)}
-            disabled={!store.scheduledOn}
-            onchange={(e) =>
-              store.saveScheduled(store.scheduledOn, Number(e.currentTarget.value))}
-          >
-            {#each Array.from({ length: 24 }, (_, h) => h) as h}
-              <option value={h}>{String(h).padStart(2, '0')}:00</option>
-            {/each}
-          </select>
+      <div class="set-group">
+        <div class="set-card">
+          <div class="set-card-info">
+            <p class="set-card-title">{t('settings.dailyTitle')}</p>
+            <p class="set-card-desc">{t('settings.dailyDesc')}</p>
+          </div>
           <button
             type="button"
             class="switch"
-            class:switch-on={store.scheduledOn}
+            class:switch-on={store.autoOn}
             role="switch"
-            aria-label={t('settings.scheduledTitle')}
-            aria-checked={store.scheduledOn}
-            onclick={() => store.saveScheduled(!store.scheduledOn, store.scheduledHour)}
+            aria-label={t('settings.dailyTitle')}
+            aria-checked={store.autoOn}
+            onclick={() => store.toggleAuto()}
           >
             <span class="switch-knob"></span>
           </button>
+        </div>
+
+        <div class="set-card">
+          <div class="set-card-info">
+            <p class="set-card-title">{t('settings.scheduledTitle')}</p>
+            <p class="set-card-desc">{t('settings.scheduledDesc')}</p>
+          </div>
+          <div class="sched-controls">
+            <select
+              class="sched-time"
+              aria-label={t('settings.scheduledTime')}
+              bind:value={scheduledHour}
+              disabled={!store.scheduledOn}
+              onchange={() =>
+                store.saveScheduled(store.scheduledOn, Number(scheduledHour))}
+            >
+              {#each Array.from({ length: 24 }, (_, h) => h) as h}
+                <option value={h}>{String(h).padStart(2, '0')}:00</option>
+              {/each}
+            </select>
+            <button
+              type="button"
+              class="switch"
+              class:switch-on={store.scheduledOn}
+              role="switch"
+              aria-label={t('settings.scheduledTitle')}
+              aria-checked={store.scheduledOn}
+              onclick={() => store.saveScheduled(!store.scheduledOn, scheduledHour)}
+            >
+              <span class="switch-knob"></span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -345,6 +356,23 @@
     border-radius: 14px;
     border: 1px solid var(--color-border);
     background: color-mix(in oklch, var(--color-surface-2) 55%, transparent);
+  }
+  /* Related rows share one outline and a single hairline between them.
+     Two independently rounded 1px-bordered cards stacked with no gap double
+     the border and leave radius notches at the seam. */
+  .set-group {
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    overflow: hidden;
+    background: color-mix(in oklch, var(--color-surface-2) 55%, transparent);
+  }
+  .set-group .set-card {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+  }
+  .set-group .set-card + .set-card {
+    border-top: 1px solid var(--color-border);
   }
   .set-card-info {
     flex: 1;
