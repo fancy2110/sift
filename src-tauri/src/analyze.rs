@@ -848,11 +848,14 @@ pub fn get_language(services: State<'_, AppServices>) -> String {
     services.store.settings().language
 }
 
-/// Persist the interface language tag (`zh` | `en`).
+/// Persist the interface language tag.
+///
+/// The list must stay in sync with `LOCALES` in `src/lib/i18n.svelte.ts`;
+/// `zh-TW` is the only regional tag (Traditional Chinese).
 #[tauri::command]
 pub fn set_language(services: State<'_, AppServices>, language: String) -> Result<(), String> {
     let tag = match language.as_str() {
-        "zh" | "en" => language,
+        "zh" | "zh-TW" | "en" | "ja" | "ko" | "hi" | "id" | "ru" => language,
         other => return Err(format!("err.unknownLanguage|{other}")),
     };
     services
