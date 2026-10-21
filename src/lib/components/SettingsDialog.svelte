@@ -4,7 +4,7 @@
   import { formatSize } from '../format';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { i18n, setLocale, t } from '../i18n.svelte';
+  import { LOCALES, i18n, setLocale, t, type Locale } from '../i18n.svelte';
 
   function listIn(_el: Element, { index }: { index: number }) {
     return {
@@ -14,10 +14,6 @@
       css: (tm: number) =>
         `opacity:${tm};transform:translateY(${(12 * (1 - tm)).toFixed(1)}px)`
     };
-  }
-
-  function toggleLanguage() {
-    setLocale(i18n.current === 'zh' ? 'en' : 'zh');
   }
 
   // ---- AI provider draft ----
@@ -134,9 +130,18 @@
           <p class="set-card-title">{t('settings.language')}</p>
           <p class="set-card-desc">{t('settings.languageDesc')}</p>
         </div>
-        <button type="button" class="btn btn-ghost btn-sm" onclick={toggleLanguage}>
-          {i18n.current === 'zh' ? 'English' : '中文'}
-        </button>
+        <select
+          class="lang-select"
+          aria-label={t('settings.language')}
+          onchange={(event) =>
+            setLocale(event.currentTarget.value as Locale)}
+        >
+          {#each LOCALES as locale (locale.tag)}
+            <option value={locale.tag} selected={i18n.current === locale.tag}>
+              {locale.native}
+            </option>
+          {/each}
+        </select>
       </div>
 
       <p class="set-section-label" style="margin-top: 22px">{t('settings.ai')}</p>
@@ -430,6 +435,24 @@
     gap: 10px;
     flex: none;
   }
+  .lang-select {
+    height: 30px;
+    max-width: 190px;
+    padding: 0 9px;
+    border-radius: 9px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-size: 12px;
+    font-weight: 600;
+    outline: none;
+    cursor: pointer;
+  }
+  .lang-select:focus-visible {
+    border-color: var(--color-violet);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
+  }
+
   .sched-time {
     height: 28px;
     padding: 0 8px;

@@ -1,7 +1,46 @@
-import { getLanguage, setLanguage as persistLanguage } from './ipc';
+import { getLanguage, setLanguage as persistLanguage, type LanguageTag } from './ipc';
 import type { StoreWarning } from './types';
+import { ja } from './locales/ja';
+import { ko } from './locales/ko';
+import { hi } from './locales/hi';
+import { id as idLocale } from './locales/id';
+import { zhTW } from './locales/zh-TW';
+import { ru } from './locales/ru';
 
-export type Locale = 'zh' | 'en';
+export type Locale = LanguageTag;
+
+/// UI language list for the settings, endonym first so a user who does not
+/// read the current language can still find theirs.
+export const LOCALES: { tag: Locale; native: string; english: string }[] = [
+  { tag: 'zh', native: '简体中文', english: 'Simplified Chinese' },
+  { tag: 'zh-TW', native: '繁體中文', english: 'Traditional Chinese' },
+  { tag: 'en', native: 'English', english: 'English' },
+  { tag: 'ja', native: '日本語', english: 'Japanese' },
+  { tag: 'ko', native: '한국어', english: 'Korean' },
+  { tag: 'hi', native: 'हिन्दी', english: 'Hindi' },
+  { tag: 'id', native: 'Bahasa Indonesia', english: 'Indonesian' },
+  { tag: 'ru', native: 'Русский', english: 'Russian' },
+];
+
+/** Map a persisted tag (including legacy/OS-style variants) to a Locale. */
+export function normalizeLocale(tag: string): Locale {
+  const raw = tag.trim();
+  const exact = LOCALES.find((locale) => locale.tag === raw);
+  if (exact) return exact.tag;
+  const lower = raw.toLowerCase().replace('_', '-');
+  if (lower === 'zh-cn' || lower === 'zh-hans' || lower === 'zh-sg') return 'zh';
+  if (lower === 'zh-tw' || lower === 'zh-hk' || lower === 'zh-hant') return 'zh-TW';
+  if (lower === 'jp') return 'ja';
+  if (lower === 'kr' || lower === 'ko-kr') return 'ko';
+  if (lower === 'in') return 'id';
+  return 'zh';
+}
+
+function applyDocumentLang(tag: Locale) {
+  if (typeof document === 'undefined') return;
+  // Simplified Chinese needs the region for correct font/style selection.
+  document.documentElement.lang = tag === 'zh' ? 'zh-CN' : tag;
+}
 
 const zh: Record<string, string> = {
   'common.app': '应用',
@@ -337,7 +376,7 @@ const zh: Record<string, string> = {
   'settings.sub': '配置 AI 整理引擎与自动化',
   'settings.general': '通用',
   'settings.language': '界面语言',
-  'settings.languageDesc': '在中文与 English 之间切换',
+  'settings.languageDesc': '选择界面语言',
   'settings.automation': '自动化',
   'settings.dailyTitle': '空间不足时自动清理',
   'settings.dailyDesc': '磁盘空间紧张时，自动清理已确认的安全项目',
@@ -704,7 +743,7 @@ const en: Record<string, string> = {
   'settings.sub': 'Configure the AI engine and automation',
   'settings.general': 'General',
   'settings.language': 'Language',
-  'settings.languageDesc': 'Switch between 中文 and English',
+  'settings.languageDesc': 'Choose the interface language',
   'settings.automation': 'Automation',
   'settings.dailyTitle': 'Auto-clean when space is low',
   'settings.dailyDesc': 'Automatically clean approved safe items when disk space runs low',
@@ -747,19 +786,22 @@ export const i18n = new I18nState();
 
 export async function initI18n() {
   try {
-    i18n.current = await getLanguage();
+    i18n.current = normalizeLocale(await getLanguage());
   } catch {
     i18n.current = 'zh';
   }
+  applyDocumentLang(i18n.current);
 }
 
 export async function setLocale(next: Locale) {
   const previous = i18n.current;
   i18n.current = next;
+  applyDocumentLang(next);
   try {
     await persistLanguage(next);
   } catch {
     i18n.current = previous;
+    applyDocumentLang(previous);
   }
 }
 
@@ -803,4 +845,13 @@ export function renderStoreWarning(warning: StoreWarning): string {
   return t(warning.key, [t(warning.what), reason, warning.backup ?? '']);
 }
 
-const dictionaries: Record<Locale, Record<string, string>> = { zh, en };
+const dictionaries: Record<Locale, Record<string, string>> = {
+  zh,
+  'zh-TW': zhTW,
+  en,
+  ja,
+  ko,
+  hi,
+  id: idLocale,
+  ru,
+};
