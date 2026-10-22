@@ -1,14 +1,20 @@
 <script lang="ts">
   import Icon from '../lib/components/Icon.svelte';
   import LocationPicker from '../lib/components/LocationPicker.svelte';
+  import CleanupRulesPanel from '../lib/components/CleanupRulesPanel.svelte';
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
   import type { Node } from '../lib/types';
   type SubTab = 'smart' | 'explorer' | 'history' | 'routines';
+  import { onMount } from 'svelte';
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { t } from '../lib/i18n.svelte';
   import { kindTitle, reasonText, impactText, cleanupMethodText, cleanupCommandText } from '../lib/reasons';
+
+  onMount(() => {
+    void store.loadCleanupRules();
+  });
 
   function selectAllSmart() {
     store.selectedIds = new Set(store.smartItems.map((i) => i.id));
@@ -588,6 +594,14 @@
             {:else}
               <p class="rt-empty">{t('routines.empty2')}</p>
             {/each}
+          </div>
+
+          <div class="rt-block">
+            <div class="rt-block-head">
+              <h3 class="rt-block-title">{t('settings.rulesTitle')}</h3>
+              <span class="rt-count chip">{store.cleanupRules.length}</span>
+            </div>
+            <CleanupRulesPanel />
           </div>
         </div>
       </section>
