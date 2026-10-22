@@ -847,6 +847,13 @@ export function createMockBackend(bus: EventBus): MockBackend {
           state.language = String(args.language) === 'en' ? 'en' : 'zh';
           resolve(undefined as T);
           break;
+        case 'ai_prompt': {
+          const prompt = String(args.prompt ?? '');
+          resolve(
+            `（模拟回答）已收到你的问题：${prompt}\n\n配置真实的 AI 服务后，这里会显示模型的实际回答。` as unknown as T
+          );
+          break;
+        }
         case 'get_ai_config': {
           const config: AiConfig = {
             enabled: state.ai.enabled,

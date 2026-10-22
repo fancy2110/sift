@@ -899,6 +899,50 @@ pub fn set_language(services: State<'_, AppServices>, language: String) -> Resul
     Ok(())
 }
 
+/// Free-form question to the configured model (the assistant tab).
+///
+/// Only the user's own text is sent: no file contents, paths, or scan data.
+/// The tab is hidden unless AI is configured, but the command re-checks.
+#[tauri::command]
+pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<String, String> {
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("err.promptEmpty".into());
+    }
+    if prompt.chars().count() > 8000 {
+        return Err("err.promptTooLong".into());
+    }
+    let ai = services.store.settings().ai;
+    if !ai.is_usable() {
+        return Err("err.aiNotConfigured".into());
+    }
+
+    #[cfg(feature = "remote-ai")]
+    {
+        let stored_key = ai.api_key_from_env().or_else(crate::credentials::token);
+        let api_key = stored_key.ok_or_else(|| "err.aiTokenRequired".to_string())?;
+        let config = sift_analyze::LlmConfig::new(
+            ai.provider.clone(),
+            ai.endpoint.clone(),
+            ai.model.clone(),
+            api_key,
+        )
+        .with_consent()
+        .with_language(ai.language.clone());
+        let client = sift_analyze::OpenAiCompatibleAdjudicator::new(config)
+            .map_err(|error| format!("err.aiRequest|{error}"))?;
+        let system = "You are the built-in assistant of Sift, a disk space manager. Answer concisely in the user's language with practical, safe advice. You cannot delete files yourself and must never claim to have done so; suggest which Sift features or steps the user can use instead.";
+        client
+            .complete(system, &prompt)
+            .map_err(|error| format!("err.aiRequest|{error}"))
+    }
+    #[cfg(not(feature = "remote-ai"))]
+    {
+        let _ = &ai;
+        Err("err.aiNotConfigured".into())
+    }
+}
+
 /// Suggest routines from the persisted decisions.
 #[tauri::command]
 pub fn routine_suggestions(services: State<'_, AppServices>) -> Vec<RoutineSuggestionDto> {

@@ -108,6 +108,7 @@ pub fn run() {
             analyze::set_auto_clean_mode,
             analyze::set_scheduled_cleanup,
             analyze::mark_path,
+            analyze::ai_prompt,
             analyze::set_finding_dismissed,
             cleanup_rules::list_cleanup_rules,
             cleanup_rules::save_cleanup_rule,

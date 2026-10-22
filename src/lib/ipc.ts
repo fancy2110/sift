@@ -149,6 +149,11 @@ export function unwatchFs(): Promise<void> {
 
 // ---- commands: analysis, persistence & monitoring ---------------------------
 
+/** Free-form question to the configured model (assistant tab). */
+export function aiPrompt(prompt: string): Promise<string> {
+  return call<string>('ai_prompt', { prompt });
+}
+
 export function analyzeCurrent(): Promise<AnalysisSummary> {
   return call<AnalysisSummary>('analyze_current');
 }
