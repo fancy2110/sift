@@ -295,6 +295,34 @@ impl Store {
         removed
     }
 
+    /// Recommendation keys the user removed from the delete queue.
+    pub fn dismissed_findings(&self) -> std::collections::HashSet<NodeKey> {
+        self.inner
+            .lock()
+            .unwrap()
+            .settings
+            .monitor
+            .dismissed_findings
+            .iter()
+            .filter_map(|tag| NodeKey::from_hex(tag))
+            .collect()
+    }
+
+    /// Remember (or clear) "stop recommending this path".
+    ///
+    /// Inserted at the front so the bounded list in `normalized()` drops the
+    /// oldest dismissals first.
+    pub fn set_finding_dismissed(&self, key: NodeKey, dismissed: bool) {
+        let tag = key.to_string();
+        self.update_settings(|settings| {
+            let list = &mut settings.monitor.dismissed_findings;
+            list.retain(|entry| entry != &tag);
+            if dismissed {
+                list.insert(0, tag);
+            }
+        });
+    }
+
     /// Drop remembered entries whose path is gone, preferring a live key set.
     pub fn prune(&self, live: Option<&std::collections::HashSet<NodeKey>>) -> usize {
         let pruned = {
@@ -762,4 +790,18 @@ mod tests {
         );
         let _ = Path::new("/");
     }
+    #[test]
+    fn dismissed_findings_round_trip() {
+        let store = Store::in_memory();
+        let key = NodeKey::from_bytes(b"/tmp/dismiss-me");
+        assert!(store.dismissed_findings().is_empty());
+        store.set_finding_dismissed(key, true);
+        assert!(store.dismissed_findings().contains(&key));
+        // A second dismissal of the same path must not duplicate it.
+        store.set_finding_dismissed(key, true);
+        assert_eq!(store.dismissed_findings().len(), 1);
+        store.set_finding_dismissed(key, false);
+        assert!(store.dismissed_findings().is_empty());
+    }
+
 }

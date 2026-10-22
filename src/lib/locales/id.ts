@@ -178,6 +178,7 @@ export const id: Record<string, string> = {
     'Pembersihan otomatis aktif; hanya item aman yang Anda konfirmasi yang dibersihkan',
   'toast.autoOff': 'Pembersihan otomatis nonaktif; hanya pengingat yang tersisa',
   'toast.settingsFailed': 'Gagal memperbarui setelan: {0}',
+  'toast.dismissFailed': 'Gagal memperbarui rekomendasi: {0}',
   'toast.aiSaveFailed': 'Gagal menyimpan konfigurasi AI: {0}',
   'toast.lowSpace': 'Ruang disk hampir penuh; tinjau saran pembersihan',
   'toast.confirmationNeeded':

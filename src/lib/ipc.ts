@@ -144,6 +144,11 @@ export function forgetCleanable(id: string): Promise<boolean> {
   return call('forget_cleanable', { id });
 }
 
+/** Remember (or clear) "stop recommending this path" after a queue removal. */
+export function setFindingDismissed(path: string, dismissed: boolean): Promise<void> {
+  return call('set_finding_dismissed', { path, dismissed });
+}
+
 export function cleanPaths(paths: string[]): Promise<DeleteResultItem[]> {
   return call('clean_paths', { paths });
 }

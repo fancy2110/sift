@@ -630,6 +630,11 @@ export function createMockBackend(bus: EventBus): MockBackend {
           state.cleanupCancelled = true;
           resolve(true as unknown as T);
           break;
+        // The dismissal memory is backend state; the mock has no analysis
+        // pass to filter, so accept and drop it.
+        case 'set_finding_dismissed':
+          resolve(undefined as T);
+          break;
 
         // ---- monitor ----
         case 'monitor_status': {

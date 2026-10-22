@@ -245,8 +245,6 @@
 
               {#if item.safety === 'safe'}
                 <span class="ai-badge">{t('sub.aiBadge')}</span>
-              {:else}
-                <span class="review-badge">{t('sub.reviewBadge')}</span>
               {/if}
             </article>
           {:else}
@@ -912,8 +910,7 @@
     background: color-mix(in srgb, var(--color-text) 8%, transparent);
     font-size: 10.5px;
   }
-  .ai-badge,
-  .review-badge {
+  .ai-badge {
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -929,11 +926,6 @@
     color: var(--color-ok);
     border: 1px solid color-mix(in oklch, var(--color-ok) 55%, transparent);
     background: color-mix(in oklch, var(--color-ok) 10%, transparent);
-  }
-  .review-badge {
-    color: var(--color-warn);
-    border: 1px solid color-mix(in oklch, var(--color-warn) 50%, transparent);
-    background: color-mix(in oklch, var(--color-warn) 9%, transparent);
   }
   .routine-mini {
     flex: none;

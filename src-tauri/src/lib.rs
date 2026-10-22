@@ -107,6 +107,7 @@ pub fn run() {
             analyze::set_auto_clean_mode,
             analyze::set_scheduled_cleanup,
             analyze::mark_path,
+            analyze::set_finding_dismissed,
             analyze::take_store_warnings,
             analyze::store_location,
             analyze::routine_suggestions,

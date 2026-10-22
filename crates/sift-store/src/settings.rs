@@ -64,6 +64,13 @@ pub struct MonitorSettings {
     /// removed.
     #[serde(default = "default_scheduled_cleanup")]
     pub scheduled_cleanup_enabled: bool,
+    /// Paths the user removed from the recommendation queue.
+    ///
+    /// A key here means "stop recommending this": the next analysis drops the
+    /// finding instead of auto-selecting it again. Stored as the `n-…` text
+    /// form so the JSON stays readable and cannot lose `u128` precision.
+    #[serde(default)]
+    pub dismissed_findings: Vec<String>,
     /// Local hour the daily cleanup runs at.
     #[serde(default = "default_scheduled_hour")]
     pub scheduled_hour: u32,
@@ -113,6 +120,7 @@ impl Default for MonitorSettings {
             home_only: true,
             auto_approve_structural: false,
             scheduled_cleanup_enabled: false,
+            dismissed_findings: Vec::new(),
             scheduled_hour: 4,
             scheduled_last_run: None,
             scheduled_catchup_hours: 12,
@@ -139,6 +147,9 @@ impl MonitorSettings {
             self.critical_free_ratio = (self.warn_free_ratio / 2.0).max(0.001);
         }
         self.scheduled_hour = self.scheduled_hour.clamp(0, 23);
+        // Bounded so a long-lived install cannot grow the settings file
+        // without limit; newest entries are kept (inserted at the front).
+        self.dismissed_findings.truncate(500);
         self.scheduled_catchup_hours = self.scheduled_catchup_hours.clamp(0, 48);
         self
     }

@@ -169,6 +169,7 @@ export const ja: Record<string, string> = {
   'toast.autoOn': '自動整理をオンにしました。確認済みの安全な項目のみをクリーンします',
   'toast.autoOff': '自動整理をオフにしました。リマインダーのみ行います',
   'toast.settingsFailed': '設定の保存に失敗しました：{0}',
+  'toast.dismissFailed': 'おすすめ設定を保存できませんでした：{0}',
   'toast.aiSaveFailed': 'AI 設定の保存に失敗しました：{0}',
   'toast.lowSpace': 'ディスク空き容量が不足しています。クリーンの提案をご確認ください',
   'toast.confirmationNeeded': '多数のクリーン可能な項目が見つかりました。実行前に確認が必要です',
