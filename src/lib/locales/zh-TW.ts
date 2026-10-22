@@ -162,6 +162,7 @@ export const zhTW: Record<string, string> = {
   'toast.autoOn': '自動整理已開啟，僅清理您確認過的安全項目',
   'toast.autoOff': '自動整理已關閉，僅保留提醒',
   'toast.settingsFailed': '設定失敗：{0}',
+  'toast.dismissFailed': '無法儲存推薦設定：{0}',
   'toast.aiSaveFailed': 'AI 設定儲存失敗：{0}',
   'toast.lowSpace': '磁碟空間偏低，建議查看清理建議',
   'toast.confirmationNeeded': '有大量可清理項目，需要您確認後才會執行',
@@ -332,6 +333,9 @@ export const zhTW: Record<string, string> = {
   'sub.statusConfidence': 'AI 引擎持續分析中',
   'sub.selectAll': '全選',
   'sub.deselectAll': '取消全選',
+  'sub.onlySelected': '只看已選',
+  'sub.onlySelectedHint': '只顯示已加入刪除佇列的項目',
+  'sub.noSelected': '沒有已選項目',
 
   'hist.autoTitle': '排程深度清理',
   'hist.manualTitle': '手動整理',

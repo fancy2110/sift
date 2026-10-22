@@ -172,6 +172,7 @@ export const ru: Record<string, string> = {
   'toast.autoOn': 'Автоочистка включена; очищаются только подтверждённые вами безопасные элементы',
   'toast.autoOff': 'Автоочистка выключена; остаются только напоминания',
   'toast.settingsFailed': 'Не удалось обновить настройки: {0}',
+  'toast.dismissFailed': 'Не удалось обновить рекомендацию: {0}',
   'toast.aiSaveFailed': 'Не удалось сохранить настройки AI: {0}',
   'toast.lowSpace': 'Мало места на диске; просмотрите рекомендации по очистке',
   'toast.confirmationNeeded': 'Найдено много элементов для очистки; требуется ваше подтверждение',
@@ -348,6 +349,9 @@ export const ru: Record<string, string> = {
   'sub.statusConfidence': 'Движок AI выполняет анализ',
   'sub.selectAll': 'Выбрать все',
   'sub.deselectAll': 'Снять выбор',
+  'sub.onlySelected': 'Только выбранные',
+  'sub.onlySelectedHint': 'Показывать только элементы в очереди удаления',
+  'sub.noSelected': 'Ничего не выбрано',
 
   'hist.autoTitle': 'Запланированная глубокая очистка',
   'hist.manualTitle': 'Ручная очистка',

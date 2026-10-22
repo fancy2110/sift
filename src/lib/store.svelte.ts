@@ -5,6 +5,7 @@ import {
   cancelCleanup,
   cancelScan,
   cleanPaths,
+  setFindingDismissed,
   getAiConfig,
   saveAiConfig,
   deleteRoutine,
@@ -1042,9 +1043,25 @@ class AppStore {
 
   toggleSelected(id: string) {
     const next = new Set(this.selectedIds);
-    if (next.has(id)) next.delete(id);
+    const wasSelected = next.has(id);
+    if (wasSelected) next.delete(id);
     else next.add(id);
     this.selectedIds = next;
+    // Removing a recommendation from the queue is an explicit "not this one":
+    // remember it so a later analysis does not offer it again. Re-adding
+    // clears that memory.
+    const finding = this.findingsById.get(id);
+    if (finding?.safety === 'safe') {
+      void this.rememberDismissal(finding, !wasSelected);
+    }
+  }
+
+  private async rememberDismissal(finding: Finding, dismissed: boolean) {
+    try {
+      await setFindingDismissed(finding.path, dismissed);
+    } catch (error) {
+      this.toastError(t('toast.dismissFailed', [String(error)]));
+    }
   }
 
   // ---- history & routines refresh ----

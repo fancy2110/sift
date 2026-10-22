@@ -167,6 +167,7 @@ export const hi: Record<string, string> = {
   'toast.autoOn': 'स्वतः सफ़ाई चालू; केवल आपकी पुष्टि की सुरक्षित वस्तुएँ साफ़ होती हैं',
   'toast.autoOff': 'स्वतः सफ़ाई बंद; केवल अनुस्मारक शेष',
   'toast.settingsFailed': 'सेटिंग्स अपडेट करने में विफल: {0}',
+  'toast.dismissFailed': 'सुझाव सेटिंग सहेजी नहीं जा सकी: {0}',
   'toast.aiSaveFailed': 'AI कॉन्फ़िगरेशन सहेजने में विफल: {0}',
   'toast.lowSpace': 'डिस्क स्थान कम है; सफ़ाई सुझाव देखें',
   'toast.confirmationNeeded': 'कई साफ़ करने योग्य वस्तुएँ मिलीं; आपकी पुष्टि आवश्यक है',
@@ -337,6 +338,9 @@ export const hi: Record<string, string> = {
   'sub.statusConfidence': 'AI इंजन विश्लेषण कर रहा है',
   'sub.selectAll': 'सभी चुनें',
   'sub.deselectAll': 'चयन हटाएँ',
+  'sub.onlySelected': 'केवल चयनित',
+  'sub.onlySelectedHint': 'केवल हटाने की कतार में जोड़ी गई वस्तुएँ दिखाएँ',
+  'sub.noSelected': 'कोई चयनित वस्तु नहीं',
 
   'hist.autoTitle': 'नियत गहन सफ़ाई',
   'hist.manualTitle': 'मैन्युअल सफ़ाई',

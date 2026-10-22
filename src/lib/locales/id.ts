@@ -178,6 +178,7 @@ export const id: Record<string, string> = {
     'Pembersihan otomatis aktif; hanya item aman yang Anda konfirmasi yang dibersihkan',
   'toast.autoOff': 'Pembersihan otomatis nonaktif; hanya pengingat yang tersisa',
   'toast.settingsFailed': 'Gagal memperbarui setelan: {0}',
+  'toast.dismissFailed': 'Gagal memperbarui rekomendasi: {0}',
   'toast.aiSaveFailed': 'Gagal menyimpan konfigurasi AI: {0}',
   'toast.lowSpace': 'Ruang disk hampir penuh; tinjau saran pembersihan',
   'toast.confirmationNeeded':
@@ -353,6 +354,9 @@ export const id: Record<string, string> = {
   'sub.statusConfidence': 'Mesin AI sedang menganalisis',
   'sub.selectAll': 'Pilih semua',
   'sub.deselectAll': 'Batalkan pilihan semua',
+  'sub.onlySelected': 'Hanya dipilih',
+  'sub.onlySelectedHint': 'Tampilkan hanya item yang masuk antrean hapus',
+  'sub.noSelected': 'Tidak ada yang dipilih',
 
   'hist.autoTitle': 'Pembersihan mendalam terjadwal',
   'hist.manualTitle': 'Pembersihan manual',

@@ -169,6 +169,7 @@ export const ja: Record<string, string> = {
   'toast.autoOn': '自動整理をオンにしました。確認済みの安全な項目のみをクリーンします',
   'toast.autoOff': '自動整理をオフにしました。リマインダーのみ行います',
   'toast.settingsFailed': '設定の保存に失敗しました：{0}',
+  'toast.dismissFailed': 'おすすめ設定を保存できませんでした：{0}',
   'toast.aiSaveFailed': 'AI 設定の保存に失敗しました：{0}',
   'toast.lowSpace': 'ディスク空き容量が不足しています。クリーンの提案をご確認ください',
   'toast.confirmationNeeded': '多数のクリーン可能な項目が見つかりました。実行前に確認が必要です',
@@ -345,6 +346,9 @@ export const ja: Record<string, string> = {
   'sub.statusConfidence': 'AI エンジンが分析を継続中',
   'sub.selectAll': 'すべて選択',
   'sub.deselectAll': '選択を解除',
+  'sub.onlySelected': '選択済みのみ',
+  'sub.onlySelectedHint': '削除キューに入っている項目だけを表示',
+  'sub.noSelected': '選択済みの項目はありません',
 
   'hist.autoTitle': '定期ディープクリーン',
   'hist.manualTitle': '手動整理',

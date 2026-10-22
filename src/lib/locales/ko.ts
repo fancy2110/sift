@@ -154,6 +154,7 @@ export const ko: Record<string, string> = {
   'toast.autoOn': '자동 정리가 켜졌습니다. 확인한 안전 항목만 정리됩니다',
   'toast.autoOff': '자동 정리가 꺼졌습니다. 알림만 유지됩니다',
   'toast.settingsFailed': '설정 저장 실패: {0}',
+  'toast.dismissFailed': '추천 설정을 저장하지 못했습니다: {0}',
   'toast.aiSaveFailed': 'AI 설정 저장 실패: {0}',
   'toast.lowSpace': '디스크 공간이 부족합니다. 정리 제안을 확인하세요',
   'toast.confirmationNeeded': '정리 가능한 항목이 많이 발견되었습니다. 확인 후 실행됩니다',
@@ -323,6 +324,9 @@ export const ko: Record<string, string> = {
   'sub.statusConfidence': 'AI 엔진 분석 중',
   'sub.selectAll': '모두 선택',
   'sub.deselectAll': '선택 해제',
+  'sub.onlySelected': '선택 항목만',
+  'sub.onlySelectedHint': '삭제 대기열에 추가된 항목만 표시',
+  'sub.noSelected': '선택된 항목이 없습니다',
 
   'hist.autoTitle': '예약된 전체 정리',
   'hist.manualTitle': '수동 정리',

@@ -229,7 +229,7 @@ pub(crate) fn analyze_current_with(
     let adjudicator = build_adjudicator(services);
     let used_remote = adjudicator.is_remote();
 
-    let report = {
+    let mut report = {
         let mut guard = tree.lock().map_err(|err| err.to_string())?;
         analyzer.analyze(
             &*adjudicator,
@@ -238,6 +238,17 @@ pub(crate) fn analyze_current_with(
             |_stage, _done, _total| {},
         )
     };
+
+    // A recommendation the user removed from the delete queue must not come
+    // back: drop it before it is persisted or turned into a finding. The
+    // dismissal is keyed by path, so a rebuilt cache at the same path stays
+    // dismissed too.
+    let dismissed = services.store.dismissed_findings();
+    if !dismissed.is_empty() {
+        report
+            .items
+            .retain(|item| !dismissed.contains(&item.candidate.key));
+    }
 
     // Requirement 2: persist what is definitively cleanable plus the verdicts.
     services.store.record_analysis(&report, now_ms());
@@ -350,6 +361,26 @@ pub fn forget_cleanable(services: State<'_, AppServices>, id: String) -> Result<
     let removed = services.store.forget_cleanable(key);
     let _ = services.store.flush_if_dirty();
     Ok(removed)
+}
+
+/// Stop recommending a path the user removed from the delete queue (or clear
+/// that memory when they add it back).
+#[tauri::command]
+pub fn set_finding_dismissed(
+    services: State<'_, AppServices>,
+    path: String,
+    dismissed: bool,
+) -> Result<(), String> {
+    let key = sift_core::NodeKey::from_path(std::path::Path::new(&path));
+    services.store.set_finding_dismissed(key, dismissed);
+    if dismissed {
+        // Also leave the persisted cleanable list so the scheduler cannot pick
+        // it up; the in-session report stays, so an explicit re-check can
+        // still delete it.
+        services.store.forget_cleanable(key);
+    }
+    let _ = services.store.flush_if_dirty();
+    Ok(())
 }
 
 /// Send paths to the trash and record the decisions.
@@ -780,6 +811,9 @@ pub fn mark_path(
         .unwrap_or(0);
 
     let key = sift_core::NodeKey::from_path(&as_path);
+    // Adding a path back to the queue is an explicit override of an earlier
+    // "stop recommending this".
+    services.store.set_finding_dismissed(key, false);
     let name = as_path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
