@@ -5,7 +5,6 @@
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { LOCALES, i18n, setLocale, t, type Locale } from '../i18n.svelte';
-  import CleanupRulesPanel from './CleanupRulesPanel.svelte';
 
   function listIn(_el: Element, { index }: { index: number }) {
     return {
@@ -281,12 +280,6 @@
             </button>
           </div>
         </div>
-      </div>
-
-      <p class="set-section-label" style="margin-top: 22px">{t('settings.rulesTitle')}</p>
-
-      <div class="set-card rules-card">
-        <CleanupRulesPanel />
       </div>
 
     </div>
