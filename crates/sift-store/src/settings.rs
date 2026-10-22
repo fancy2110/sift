@@ -28,6 +28,52 @@ impl AutoCleanMode {
     }
 }
 
+/// A user-defined scheduled cleanup rule: one directory plus a file-name
+/// regex, applied when the daily schedule fires.
+///
+/// Rules are deliberately narrow: they match the *file name*, never delete
+/// directories, and still go through the trash. The command layer validates
+/// the regex and the directory before a rule can be saved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupRule {
+    /// Stable identifier assigned by the command layer.
+    #[serde(default)]
+    pub id: String,
+    /// Display name; falls back to the directory when empty.
+    #[serde(default)]
+    pub name: String,
+    /// Absolute directory to scan.
+    #[serde(default)]
+    pub dir: String,
+    /// Regular expression matched against each file's name.
+    #[serde(default)]
+    pub pattern: String,
+    /// Only files untouched for at least this many days; 0 means any age.
+    #[serde(default)]
+    pub older_than_days: u32,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl CleanupRule {
+    /// Trim free text and drop rules that could never match.
+    pub fn normalized(mut self) -> Option<Self> {
+        self.id = self.id.trim().to_string();
+        self.name = self.name.trim().to_string();
+        self.dir = self.dir.trim().to_string();
+        self.pattern = self.pattern.trim().to_string();
+        self.older_than_days = self.older_than_days.min(3650);
+        if self.dir.is_empty() || self.pattern.is_empty() {
+            return None;
+        }
+        if self.name.is_empty() {
+            self.name = self.dir.clone();
+        }
+        Some(self)
+    }
+}
+
 /// Background disk-space monitoring.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +117,10 @@ pub struct MonitorSettings {
     /// form so the JSON stays readable and cannot lose `u128` precision.
     #[serde(default)]
     pub dismissed_findings: Vec<String>,
+    /// User-defined "directory + file-name regex" rules, applied by the daily
+    /// scheduled cleanup. Each run is bounded and deletes through the trash.
+    #[serde(default)]
+    pub cleanup_rules: Vec<CleanupRule>,
     /// Local hour the daily cleanup runs at.
     #[serde(default = "default_scheduled_hour")]
     pub scheduled_hour: u32,
@@ -121,6 +171,7 @@ impl Default for MonitorSettings {
             auto_approve_structural: false,
             scheduled_cleanup_enabled: false,
             dismissed_findings: Vec::new(),
+            cleanup_rules: Vec::new(),
             scheduled_hour: 4,
             scheduled_last_run: None,
             scheduled_catchup_hours: 12,
@@ -150,6 +201,11 @@ impl MonitorSettings {
         // Bounded so a long-lived install cannot grow the settings file
         // without limit; newest entries are kept (inserted at the front).
         self.dismissed_findings.truncate(500);
+        self.cleanup_rules = std::mem::take(&mut self.cleanup_rules)
+            .into_iter()
+            .filter_map(CleanupRule::normalized)
+            .take(50)
+            .collect();
         self.scheduled_catchup_hours = self.scheduled_catchup_hours.clamp(0, 48);
         self
     }
