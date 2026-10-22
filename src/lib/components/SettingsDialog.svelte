@@ -5,7 +5,7 @@
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { LOCALES, i18n, setLocale, t, type Locale } from '../i18n.svelte';
-  import type { CleanupRule, RulePreview } from '../ipc';
+  import CleanupRulesPanel from './CleanupRulesPanel.svelte';
 
   function listIn(_el: Element, { index }: { index: number }) {
     return {
@@ -38,46 +38,6 @@
   $effect(() => {
     scheduledHour = store.scheduledHour;
   });
-
-  // ---- cleanup rules draft ----
-  let ruleDraft = $state<CleanupRule | null>(null);
-  let rulePreview = $state<RulePreview | null>(null);
-  let ruleBusy = $state(false);
-
-  function startRuleDraft() {
-    ruleDraft = {
-      id: '',
-      name: '',
-      dir: '',
-      pattern: '',
-      olderThanDays: 0,
-      enabled: true,
-    };
-    rulePreview = null;
-  }
-
-  async function previewRule() {
-    if (!ruleDraft || ruleBusy) return;
-    ruleBusy = true;
-    rulePreview = await store.previewCleanupRule($state.snapshot(ruleDraft));
-    ruleBusy = false;
-  }
-
-  async function saveRule() {
-    if (!ruleDraft || ruleBusy) return;
-    ruleBusy = true;
-    const saved = await store.saveCleanupRuleDraft($state.snapshot(ruleDraft));
-    ruleBusy = false;
-    if (saved) {
-      ruleDraft = null;
-      rulePreview = null;
-    }
-  }
-
-  async function runRule(rule: CleanupRule) {
-    if (!window.confirm(t('settings.ruleRunConfirm'))) return;
-    await store.runCleanupRule(rule);
-  }
 
   // The config arrives from the backend after the sheet opens; sync once.
   $effect(() => {
@@ -326,111 +286,7 @@
       <p class="set-section-label" style="margin-top: 22px">{t('settings.rulesTitle')}</p>
 
       <div class="set-card rules-card">
-        <p class="set-card-desc">{t('settings.rulesDesc')}</p>
-
-        {#each store.cleanupRules as rule (rule.id)}
-          <div class="rule-row">
-            <div class="rule-info">
-              <p class="rule-name">{rule.name}</p>
-              <p class="rule-meta">{rule.dir}</p>
-              <p class="rule-meta">
-                <code>{rule.pattern}</code> ·
-                {rule.olderThanDays > 0
-                  ? t('settings.ruleDays', [String(rule.olderThanDays)])
-                  : t('settings.ruleAnyAge')}
-              </p>
-            </div>
-            <button
-              type="button"
-              class="btn-icon rule-run"
-              title={t('settings.ruleRun')}
-              aria-label={t('settings.ruleRun')}
-              onclick={() => runRule(rule)}
-            >
-              <Icon name="play" size={12} />
-            </button>
-            <button
-              type="button"
-              class="switch"
-              class:switch-on={rule.enabled}
-              role="switch"
-              aria-label={rule.name}
-              aria-checked={rule.enabled}
-              onclick={() => store.toggleCleanupRule(rule)}
-            >
-              <span class="switch-knob"></span>
-            </button>
-            <button
-              type="button"
-              class="btn-icon rule-del"
-              aria-label={t('settings.ruleCancel')}
-              onclick={() => store.removeCleanupRule(rule.id)}
-            >
-              <Icon name="x" size={12} />
-            </button>
-          </div>
-        {/each}
-
-        {#if store.cleanupRules.length === 0 && !ruleDraft}
-          <p class="rules-empty">{t('settings.rulesEmpty')}</p>
-        {/if}
-
-        {#if ruleDraft}
-          <div class="rule-form">
-            <input
-              class="ai-input"
-              placeholder={t('settings.ruleNamePh')}
-              aria-label={t('settings.ruleName')}
-              bind:value={ruleDraft.name}
-            />
-            <input
-              class="ai-input"
-              placeholder={t('settings.ruleDirPh')}
-              aria-label={t('settings.ruleDir')}
-              spellcheck="false"
-              bind:value={ruleDraft.dir}
-            />
-            <input
-              class="ai-input"
-              placeholder={t('settings.rulePatternPh')}
-              aria-label={t('settings.rulePattern')}
-              spellcheck="false"
-              bind:value={ruleDraft.pattern}
-            />
-            <label class="rule-days">
-              <span>{t('settings.ruleDaysLabel')}</span>
-              <input type="number" min="0" max="3650" bind:value={ruleDraft.olderThanDays} />
-            </label>
-            {#if rulePreview}
-              <p class="rule-preview">
-                {rulePreview.matched === 0
-                  ? t('settings.rulePreviewEmpty')
-                  : t('settings.rulePreviewResult', [
-                      String(rulePreview.matched),
-                      formatSize(rulePreview.bytes)
-                    ])}
-                {#if rulePreview.truncated}
-                  · {t('settings.ruleTruncated')}
-                {/if}
-              </p>
-            {/if}
-            <div class="rule-actions">
-              <button type="button" class="btn btn-ghost btn-sm" disabled={ruleBusy} onclick={previewRule}>
-                {t('settings.rulePreview')}
-              </button>
-              <button type="button" class="btn btn-sm" disabled={ruleBusy} onclick={saveRule}>
-                {t('settings.ruleSave')}
-              </button>
-              <button type="button" class="btn btn-ghost btn-sm" onclick={() => (ruleDraft = null)}>
-                {t('settings.ruleCancel')}
-              </button>
-            </div>
-          </div>
-        {:else}
-          <button type="button" class="rule-add" onclick={startRuleDraft}>
-            {t('settings.ruleAdd')}
-          </button>
-        {/if}
+        <CleanupRulesPanel />
       </div>
 
     </div>
@@ -730,108 +586,4 @@
     opacity: 0.6;
   }
 
-  .rules-card {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
-  }
-  .rules-empty {
-    margin: 0;
-    padding: 6px 0;
-    font-size: 11.5px;
-    color: var(--color-faint);
-  }
-  .rule-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 9px 10px;
-    border-radius: 10px;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-  }
-  .rule-info {
-    flex: 1;
-    min-width: 0;
-  }
-  .rule-name {
-    margin: 0;
-    font-size: 12.5px;
-    font-weight: 620;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .rule-meta {
-    margin: 1px 0 0;
-    font-size: 10.5px;
-    color: var(--color-faint);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .rule-meta code {
-    font-family: var(--font-mono);
-  }
-  .rule-run,
-  .rule-del {
-    flex: none;
-    color: var(--color-faint);
-  }
-  .rule-run:hover {
-    color: var(--color-violet);
-  }
-  .rule-del:hover {
-    color: var(--color-warn);
-  }
-  .rule-form {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .rule-days {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    font-size: 11px;
-    color: var(--color-faint);
-  }
-  .rule-days input {
-    width: 72px;
-    height: 28px;
-    padding: 0 8px;
-    border-radius: 8px;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-fg);
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    outline: none;
-  }
-  .rule-preview {
-    margin: 0;
-    font-size: 11px;
-    color: var(--color-muted);
-  }
-  .rule-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-  .rule-add {
-    align-self: flex-start;
-    padding: 7px 12px;
-    border-radius: 9px;
-    border: 1px dashed var(--color-border-strong);
-    background: transparent;
-    color: var(--color-muted);
-    font-size: 11.5px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .rule-add:hover {
-    color: var(--color-fg);
-    border-color: var(--color-violet);
-  }
 </style>
