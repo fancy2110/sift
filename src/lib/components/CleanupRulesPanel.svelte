@@ -2,8 +2,8 @@
   /**
    * User-defined "directory + file-name regex" cleanup rules.
    *
-   * Rendered both in the settings sheet and in the routines tab, so it keeps
-   * its own styles and only depends on the shared store actions.
+   * The list is for reading and deleting only; creating a rule (and trying it
+   * out) happens in a modal dialog, which keeps every row to a single line.
    */
   import Icon from './Icon.svelte';
   import { store } from '../store.svelte';
@@ -11,11 +11,12 @@
   import { t } from '../i18n.svelte';
   import type { CleanupRule, RulePreview } from '../ipc';
 
+  let dialogOpen = $state(false);
   let draft = $state<CleanupRule | null>(null);
   let preview = $state<RulePreview | null>(null);
   let busy = $state(false);
 
-  function startDraft() {
+  function openDialog() {
     draft = {
       id: '',
       name: '',
@@ -24,6 +25,15 @@
       olderThanDays: 0,
       enabled: true
     };
+    preview = null;
+    busy = false;
+    dialogOpen = true;
+  }
+
+  function closeDialog() {
+    if (busy) return;
+    dialogOpen = false;
+    draft = null;
     preview = null;
   }
 
@@ -39,15 +49,21 @@
     busy = true;
     const saved = await store.saveCleanupRuleDraft($state.snapshot(draft));
     busy = false;
-    if (saved) {
-      draft = null;
-      preview = null;
-    }
+    if (saved) closeDialog();
   }
 
-  async function runRule(rule: CleanupRule) {
-    if (!window.confirm(t('settings.ruleRunConfirm'))) return;
-    await store.runCleanupRule(rule);
+  /**
+   * The routines tab lives inside a horizontally translated pager, so a
+   * `position: fixed` child would be centered on that 400%-wide panel
+   * instead of the viewport. Render the modal on <body> instead.
+   */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      }
+    };
   }
 
   const ageText = (rule: CleanupRule) =>
@@ -56,78 +72,103 @@
       : t('settings.ruleAnyAge');
 </script>
 
+<svelte:window
+  onkeydown={(event) => {
+    if (dialogOpen && event.key === 'Escape') closeDialog();
+  }}
+/>
+
 <div class="cr">
-  <p class="cr-desc">{t('settings.rulesDesc')}</p>
+  <div class="cr-head">
+    <p class="cr-desc">{t('settings.rulesDesc')}</p>
+    <button type="button" class="cr-add" onclick={openDialog}>
+      <Icon name="play" size={10} /> {t('settings.ruleAdd')}
+    </button>
+  </div>
 
   {#each store.cleanupRules as rule (rule.id)}
-    <div class="cr-row">
-      <div class="cr-info">
-        <p class="cr-name">{rule.name}</p>
-        <p class="cr-meta" title={rule.dir}>{rule.dir}</p>
-        <p class="cr-meta"><code>{rule.pattern}</code> · {ageText(rule)}</p>
-      </div>
+    <div class="cr-row" class:cr-off={!rule.enabled}>
+      <span class="cr-name" title={rule.name}>{rule.name}</span>
+      <span class="cr-meta" title={`${rule.dir} · ${rule.pattern}`}>
+        {rule.dir} · <code>{rule.pattern}</code> · {ageText(rule)}
+      </span>
       <button
         type="button"
-        class="cr-btn"
-        title={t('settings.ruleRun')}
-        aria-label={t('settings.ruleRun')}
-        onclick={() => runRule(rule)}
-      >
-        <Icon name="play" size={12} />
-      </button>
-      <button
-        type="button"
-        class="cr-toggle"
-        class:cr-on={rule.enabled}
-        aria-pressed={rule.enabled}
-        title={rule.enabled ? t('routines.stateOn') : t('routines.stateOff')}
-        aria-label={rule.enabled ? t('routines.stateOn') : t('routines.stateOff')}
-        onclick={() => store.toggleCleanupRule(rule)}
-      >
-        <span class="cr-knob"></span>
-      </button>
-      <button
-        type="button"
-        class="cr-btn cr-danger"
+        class="cr-del"
         title={t('settings.delete')}
-        aria-label={t('settings.delete')}
+        aria-label={`${t('settings.delete')} ${rule.name}`}
         onclick={() => store.removeCleanupRule(rule.id)}
       >
-        <Icon name="x" size={12} />
+        <Icon name="trash" size={13} />
       </button>
     </div>
-  {/each}
-
-  {#if store.cleanupRules.length === 0 && !draft}
+  {:else}
     <p class="cr-empty">{t('settings.rulesEmpty')}</p>
-  {/if}
+  {/each}
+</div>
 
-  {#if draft}
-    <div class="cr-form">
-      <input
-        class="cr-input"
-        placeholder={t('settings.ruleNamePh')}
-        aria-label={t('settings.ruleName')}
-        bind:value={draft.name}
-      />
-      <input
-        class="cr-input"
-        placeholder={t('settings.ruleDirPh')}
-        aria-label={t('settings.ruleDir')}
-        spellcheck="false"
-        bind:value={draft.dir}
-      />
-      <input
-        class="cr-input"
-        placeholder={t('settings.rulePatternPh')}
-        aria-label={t('settings.rulePattern')}
-        spellcheck="false"
-        bind:value={draft.pattern}
-      />
-      <label class="cr-days">
+{#if dialogOpen && draft}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="cr-overlay" role="presentation" use:portal onclick={closeDialog}>
+    <div
+      class="cr-dialog"
+      role="dialog"
+      tabindex="-1"
+      aria-modal="true"
+      aria-label={t('settings.ruleAdd')}
+      onclick={(event) => event.stopPropagation()}
+    >
+      <div class="cr-dialog-head">
+        <h3 class="cr-dialog-title">{t('settings.ruleAdd')}</h3>
+        <button
+          type="button"
+          class="cr-icon-btn"
+          aria-label={t('settings.ruleCancel')}
+          onclick={closeDialog}
+        >
+          <Icon name="x" size={13} />
+        </button>
+      </div>
+
+      <label class="cr-field">
+        <span>{t('settings.ruleName')}</span>
+        <input
+          class="cr-input"
+          placeholder={t('settings.ruleNamePh')}
+          bind:value={draft.name}
+        />
+      </label>
+
+      <label class="cr-field">
+        <span>{t('settings.ruleDir')}</span>
+        <input
+          class="cr-input"
+          placeholder={t('settings.ruleDirPh')}
+          spellcheck="false"
+          bind:value={draft.dir}
+        />
+      </label>
+
+      <label class="cr-field">
+        <span>{t('settings.rulePattern')}</span>
+        <input
+          class="cr-input"
+          placeholder={t('settings.rulePatternPh')}
+          spellcheck="false"
+          bind:value={draft.pattern}
+        />
+      </label>
+
+      <label class="cr-field cr-field-inline">
         <span>{t('settings.ruleDaysLabel')}</span>
         <input type="number" min="0" max="3650" bind:value={draft.olderThanDays} />
       </label>
+
+      <label class="cr-enabled">
+        <input type="checkbox" bind:checked={draft.enabled} />
+        <span>{t('routines.stateOn')}</span>
+      </label>
+
       {#if preview}
         <p class="cr-preview">
           {preview.matched === 0
@@ -141,32 +182,41 @@
           {/if}
         </p>
       {/if}
-      <div class="cr-actions">
+
+      <div class="cr-dialog-actions">
         <button type="button" class="cr-btn-text" disabled={busy} onclick={previewRule}>
           {t('settings.rulePreview')}
         </button>
-        <button type="button" class="cr-btn-text cr-primary" disabled={busy} onclick={saveRule}>
-          {t('settings.ruleSave')}
-        </button>
-        <button type="button" class="cr-btn-text" onclick={() => (draft = null)}>
+        <span class="cr-spacer"></span>
+        <button type="button" class="cr-btn-text" onclick={closeDialog}>
           {t('settings.ruleCancel')}
+        </button>
+        <button
+          type="button"
+          class="cr-btn-text cr-primary"
+          disabled={busy}
+          onclick={saveRule}
+        >
+          {t('settings.ruleSave')}
         </button>
       </div>
     </div>
-  {:else}
-    <button type="button" class="cr-add" onclick={startDraft}>
-      {t('settings.ruleAdd')}
-    </button>
-  {/if}
-</div>
+  </div>
+{/if}
 
 <style>
   .cr {
     display: flex;
     flex-direction: column;
-    gap: 9px;
+    gap: 8px;
     width: 100%;
     min-width: 0;
+  }
+  .cr-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
   }
   .cr-desc {
     margin: 0;
@@ -180,21 +230,24 @@
     font-size: 11.5px;
     color: var(--color-faint);
   }
+
+  /* one rule == one line */
   .cr-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 9px 10px;
+    gap: 10px;
+    min-width: 0;
+    padding: 8px 10px;
     border-radius: 10px;
     border: 1px solid var(--color-border);
     background: var(--color-surface);
   }
-  .cr-info {
-    flex: 1;
-    min-width: 0;
+  .cr-row.cr-off {
+    opacity: 0.55;
   }
   .cr-name {
-    margin: 0;
+    flex: none;
+    max-width: 34%;
     font-size: 12.5px;
     font-weight: 620;
     overflow: hidden;
@@ -202,8 +255,9 @@
     white-space: nowrap;
   }
   .cr-meta {
-    margin: 1px 0 0;
-    font-size: 10.5px;
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
     color: var(--color-faint);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -212,7 +266,7 @@
   .cr-meta code {
     font-family: var(--font-mono);
   }
-  .cr-btn {
+  .cr-del {
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -220,114 +274,21 @@
     width: 26px;
     height: 26px;
     border-radius: 8px;
-    border: 1px solid var(--color-border);
+    border: 1px solid transparent;
     background: transparent;
     color: var(--color-faint);
     cursor: pointer;
   }
-  .cr-btn:hover {
-    color: var(--color-violet);
-    border-color: var(--color-border-strong);
-  }
-  .cr-danger:hover {
+  .cr-del:hover {
     color: var(--color-warn);
+    border-color: var(--color-border);
   }
-  .cr-toggle {
-    position: relative;
-    flex: none;
-    width: 34px;
-    height: 20px;
-    border-radius: 999px;
-    border: none;
-    background: var(--color-surface-3);
-    cursor: pointer;
-    transition: background 0.2s ease;
-  }
-  .cr-toggle.cr-on {
-    background: var(--color-violet);
-  }
-  .cr-knob {
-    position: absolute;
-    top: 2.5px;
-    left: 2.5px;
-    width: 15px;
-    height: 15px;
-    border-radius: 50%;
-    background: var(--color-sheen);
-    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .cr-toggle.cr-on .cr-knob {
-    transform: translateX(14px);
-  }
-  .cr-form {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .cr-input {
-    width: 100%;
-    height: 30px;
-    padding: 0 10px;
-    border-radius: 9px;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-fg);
-    font-size: 11.5px;
-    outline: none;
-  }
-  .cr-input:focus {
-    border-color: var(--color-violet);
-    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
-  }
-  .cr-days {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    font-size: 11px;
-    color: var(--color-faint);
-  }
-  .cr-days input {
-    width: 72px;
-    height: 28px;
-    padding: 0 8px;
-    border-radius: 8px;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-fg);
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    outline: none;
-  }
-  .cr-preview {
-    margin: 0;
-    font-size: 11px;
-    color: var(--color-muted);
-  }
-  .cr-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-  .cr-btn-text {
-    padding: 6px 11px;
-    border-radius: 8px;
-    border: 1px solid var(--color-border);
-    background: transparent;
-    color: var(--color-muted);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .cr-btn-text:hover {
-    color: var(--color-fg);
-  }
-  .cr-primary {
-    border-color: color-mix(in oklch, var(--color-violet) 55%, transparent);
-    color: var(--color-violet);
-  }
+
   .cr-add {
-    align-self: flex-start;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     padding: 6px 11px;
     border-radius: 8px;
     border: 1px dashed var(--color-border-strong);
@@ -340,5 +301,141 @@
   .cr-add:hover {
     color: var(--color-fg);
     border-color: var(--color-violet);
+  }
+
+  /* dialog */
+  .cr-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: oklch(0 0 0 / 0.42);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+  }
+  .cr-dialog {
+    width: min(440px, calc(100vw - 40px));
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    padding: 18px 20px 16px;
+    border-radius: 16px;
+    border: 1px solid var(--color-border-strong);
+    background: color-mix(in oklch, var(--color-surface) 96%, var(--color-bg));
+    box-shadow: 0 30px 70px -24px var(--color-shadow);
+  }
+  .cr-dialog-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .cr-dialog-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+  .cr-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--color-faint);
+    cursor: pointer;
+  }
+  .cr-icon-btn:hover {
+    color: var(--color-fg);
+    background: var(--color-surface-2);
+  }
+  .cr-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--color-faint);
+  }
+  .cr-field-inline {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .cr-input {
+    width: 100%;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 9px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-size: 12px;
+    outline: none;
+  }
+  .cr-input:focus {
+    border-color: var(--color-violet);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
+  }
+  .cr-field-inline input {
+    width: 76px;
+    height: 30px;
+    padding: 0 8px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    outline: none;
+  }
+  .cr-enabled {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11.5px;
+    color: var(--color-muted);
+  }
+  .cr-enabled input {
+    accent-color: var(--color-violet);
+  }
+  .cr-preview {
+    margin: 0;
+    font-size: 11px;
+    color: var(--color-muted);
+  }
+  .cr-dialog-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+  }
+  .cr-spacer {
+    flex: 1;
+  }
+  .cr-btn-text {
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .cr-btn-text:hover {
+    color: var(--color-fg);
+  }
+  .cr-btn-text:disabled {
+    opacity: 0.55;
+  }
+  .cr-primary {
+    border-color: color-mix(in oklch, var(--color-violet) 55%, transparent);
+    color: var(--color-violet);
   }
 </style>
