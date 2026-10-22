@@ -229,6 +229,40 @@ impl OpenAiCompatibleAdjudicator {
         self.config.batch_size
     }
 
+    /// Send one free-form prompt and return the assistant's text.
+    ///
+    /// Used by the in-app assistant tab. Only what the caller passes is sent;
+    /// no scan data or paths are attached here.
+    pub fn complete(&self, system: &str, user: &str) -> Result<String, AdjudicateError> {
+        let body = serde_json::json!({
+            "model": self.config.model,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": user },
+            ],
+            "temperature": 0.3,
+        });
+        let response = self
+            .client
+            .post(&self.config.endpoint)
+            .bearer_auth(&self.config.api_key)
+            .json(&body)
+            .send()
+            .map_err(|err| AdjudicateError::Transport(err.to_string()))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .map_err(|err| AdjudicateError::Transport(err.to_string()))?;
+        if !status.is_success() {
+            return Err(AdjudicateError::Transport(format!(
+                "HTTP {}: {}",
+                status.as_u16(),
+                text.chars().take(300).collect::<String>()
+            )));
+        }
+        extract_content(&text)
+    }
+
     /// Send `batch` in sub-batches and validate every answer.
     fn request_batch(
         &self,

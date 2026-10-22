@@ -443,6 +443,18 @@ const zh: Record<string, string> = {
   'err.ruleDirNotDir': '路径不是目录',
   'err.ruleRegex': '正则表达式无效：{0}',
   'err.ruleNotFound': '规则不存在或已被删除',
+  'sub.tab.prompt': 'AI 助手',
+  'prompt.title': '向 AI 提问',
+  'prompt.placeholder': '例如：/Users/me/Library/Caches 里哪些可以安全清理？',
+  'prompt.send': '发送',
+  'prompt.thinking': '思考中…',
+  'prompt.empty': '回答会显示在这里',
+  'prompt.note': '只发送你输入的文本，不包含文件内容或路径。',
+  'prompt.error': '请求失败：{0}',
+  'err.promptEmpty': '请输入内容',
+  'err.promptTooLong': '内容过长（最多 8000 字符）',
+  'err.aiNotConfigured': '未配置可用的 AI 服务',
+  'err.aiRequest': 'AI 请求失败：{0}',
 };
 
 const en: Record<string, string> = {
@@ -847,6 +859,18 @@ const en: Record<string, string> = {
   'err.ruleDirNotDir': 'The path is not a directory',
   'err.ruleRegex': 'Invalid regular expression: {0}',
   'err.ruleNotFound': 'The rule no longer exists',
+  'sub.tab.prompt': 'Assistant',
+  'prompt.title': 'Ask the assistant',
+  'prompt.placeholder': 'e.g. Which caches under ~/Library/Caches are safe to clean?',
+  'prompt.send': 'Send',
+  'prompt.thinking': 'Thinking…',
+  'prompt.empty': 'The answer appears here',
+  'prompt.note': 'Only the text you type is sent — never file contents or paths.',
+  'prompt.error': 'Request failed: {0}',
+  'err.promptEmpty': 'Enter something first',
+  'err.promptTooLong': 'Too long (8000 characters max)',
+  'err.aiNotConfigured': 'AI is not configured',
+  'err.aiRequest': 'AI request failed: {0}',
 };
 
 type ParamValue = string | number;

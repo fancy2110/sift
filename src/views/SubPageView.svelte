@@ -5,11 +5,11 @@
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
   import type { Node } from '../lib/types';
-  type SubTab = 'smart' | 'explorer' | 'history' | 'routines';
+  type SubTab = 'smart' | 'explorer' | 'history' | 'routines' | 'prompt';
   import { onMount } from 'svelte';
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { t } from '../lib/i18n.svelte';
+  import { t, tr } from '../lib/i18n.svelte';
   import { kindTitle, reasonText, impactText, cleanupMethodText, cleanupCommandText } from '../lib/reasons';
 
   onMount(() => {
@@ -124,8 +124,54 @@
     };
   }
 
-  const tabIndex = { smart: 0, explorer: 1, history: 2, routines: 3 } as const;
-  const pagerOffset = $derived(tabIndex[store.subTab] * (100 / 4));
+  // The assistant tab only exists when a usable AI endpoint is configured;
+  // the pager width and offsets follow the live tab count.
+  const aiReady = $derived(
+    store.aiConfig?.enabled === true && store.aiConfig?.hasToken === true
+  );
+
+  const TABS = $derived<[SubTab, string, string][]>([
+    ['smart', 'spark', t('sub.tab.smart')],
+    ['explorer', 'layers', t('sub.tab.explorer')],
+    ['history', 'clock', t('sub.tab.history')],
+    ['routines', 'routine', t('sub.tab.routines')],
+    ...(aiReady
+      ? ([['prompt', 'brain', t('sub.tab.prompt')]] as [SubTab, string, string][])
+      : [])
+  ]);
+  const tabIndex = $derived(
+    Object.fromEntries(TABS.map(([id], index) => [id, index])) as Record<
+      SubTab,
+      number
+    >
+  );
+  const panelWidth = $derived(100 / TABS.length);
+  const pagerOffset = $derived((tabIndex[store.subTab] ?? 0) * panelWidth);
+
+  $effect(() => {
+    if (!aiReady && store.subTab === 'prompt') store.setSubTab('smart');
+  });
+
+  // ---- assistant ----
+  let promptText = $state('');
+  let promptAnswer = $state('');
+  let promptError = $state('');
+  let promptBusy = $state(false);
+
+  async function sendPrompt() {
+    const text = promptText.trim();
+    if (!text || promptBusy) return;
+    promptBusy = true;
+    promptError = '';
+    promptAnswer = '';
+    try {
+      promptAnswer = await store.askAi(text);
+    } catch (error) {
+      promptError = tr(String(error));
+    } finally {
+      promptBusy = false;
+    }
+  }
 
   // Escape dismisses the open context menu; without this the only way out is
   // choosing an item.
@@ -138,12 +184,6 @@
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const TABS: [SubTab, string, string][] = [
-    ['smart', 'spark', t('sub.tab.smart')],
-    ['explorer', 'layers', t('sub.tab.explorer')],
-    ['history', 'clock', t('sub.tab.history')],
-    ['routines', 'routine', t('sub.tab.routines')]
-  ];
 </script>
 
 <div class="subpage">
@@ -175,10 +215,15 @@
   </header>
 
   <div class="sp-tabbar">
-    <div class="segmented" role="tablist" aria-label={t('sub.tabsLabel')}>
+    <div
+      class="segmented"
+      style="--tabs:{TABS.length}"
+      role="tablist"
+      aria-label={t('sub.tabsLabel')}
+    >
       <span
         class="segmented-thumb"
-        style="width: calc(100%/4); transform: translateX({tabIndex[store.subTab] * 100}%)"
+        style="width: calc(100%/{TABS.length}); transform: translateX({tabIndex[store.subTab] * 100}%)"
         aria-hidden="true"
       ></span>
       {#each TABS as [tabId, icon, label]}
@@ -198,9 +243,9 @@
   </div>
 
   <div class="sp-body">
-    <div class="pager" style="width:400%; transform: translateX(-{pagerOffset}%)">
+    <div class="pager" style="width:{TABS.length * 100}%; transform: translateX(-{pagerOffset}%)">
       <!-- SMART -->
-      <section class="pager-panel" role="tabpanel">
+      <section class="pager-panel" role="tabpanel" style="width:{panelWidth}%">
         <div class="smart-scroll">
           {#each smartRows as item, i (item.id)}
             {@const checked = store.isSelected(item.id)}
@@ -263,7 +308,7 @@
       </section>
 
       <!-- EXPLORER -->
-      <section class="pager-panel" role="tabpanel">
+      <section class="pager-panel" role="tabpanel" style="width:{panelWidth}%">
         <div class="explorer">
           <div class="ex-crumb">
             <LocationPicker />
@@ -446,7 +491,7 @@
       </section>
 
       <!-- HISTORY -->
-      <section class="pager-panel" role="tabpanel">
+      <section class="pager-panel" role="tabpanel" style="width:{panelWidth}%">
         <div class="hist-scroll">
           {#each store.history as rec, i (rec.id)}
             <article class="hist-card" in:listIn={{ index: i }}>
@@ -489,7 +534,7 @@
       </section>
 
       <!-- ROUTINES -->
-      <section class="pager-panel" role="tabpanel">
+      <section class="pager-panel" role="tabpanel" style="width:{panelWidth}%">
         <div class="routine-scroll">
           <div class="rt-block">
             <div class="rt-block-head">
@@ -605,6 +650,50 @@
           </div>
         </div>
       </section>
+
+      {#if aiReady}
+        <section class="pager-panel" role="tabpanel" style="width:{panelWidth}%">
+          <div class="prompt-pane">
+            <div class="prompt-scroll">
+              <p class="prompt-title">{t('prompt.title')}</p>
+              <p class="prompt-note">{t('prompt.note')}</p>
+
+              {#if promptError}
+                <p class="prompt-error">{t('prompt.error', [promptError])}</p>
+              {:else if promptBusy}
+                <p class="prompt-hint">{t('prompt.thinking')}</p>
+              {:else if promptAnswer}
+                <div class="prompt-answer">{promptAnswer}</div>
+              {:else}
+                <p class="prompt-hint">{t('prompt.empty')}</p>
+              {/if}
+            </div>
+
+            <div class="prompt-composer">
+              <textarea
+                bind:value={promptText}
+                rows="3"
+                placeholder={t('prompt.placeholder')}
+                onkeydown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    void sendPrompt();
+                  }
+                }}
+              ></textarea>
+              <button
+                type="button"
+                class="btn btn-sm prompt-send"
+                disabled={promptBusy || promptText.trim() === ''}
+                onclick={() => void sendPrompt()}
+              >
+                <Icon name="spark" size={12} />
+                {promptBusy ? t('prompt.thinking') : t('prompt.send')}
+              </button>
+            </div>
+          </div>
+        </section>
+      {/if}
     </div>
   </div>
 
@@ -708,7 +797,7 @@
   .segmented {
     position: relative;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(var(--tabs, 4), 1fr);
     padding: 3px;
     border-radius: 12px;
     background: color-mix(in oklch, var(--color-bg) 55%, transparent);
@@ -1499,5 +1588,88 @@
     margin: 6px 0 10px;
     font-size: 12px;
     color: var(--color-faint);
+  }
+
+  /* assistant */
+  .prompt-pane {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 22px 26px 18px;
+    min-height: 0;
+  }
+  .prompt-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .prompt-title {
+    margin: 0 0 4px;
+    font-size: 15px;
+    font-weight: 650;
+  }
+  .prompt-note {
+    margin: 0 0 18px;
+    font-size: 11.5px;
+    color: var(--color-faint);
+  }
+  .prompt-hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--color-faint);
+  }
+  .prompt-answer {
+    margin: 0;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 1px solid var(--color-border);
+    background: color-mix(in oklch, var(--color-surface-2) 55%, transparent);
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .prompt-error {
+    margin: 0;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in oklch, var(--color-warn) 45%, transparent);
+    background: color-mix(in oklch, var(--color-warn) 10%, transparent);
+    color: var(--color-warn);
+    font-size: 12px;
+    white-space: pre-wrap;
+  }
+  .prompt-composer {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    flex: none;
+  }
+  .prompt-composer textarea {
+    flex: 1;
+    min-height: 64px;
+    max-height: 160px;
+    resize: vertical;
+    padding: 10px 12px;
+    border-radius: 11px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-family: inherit;
+    font-size: 12.5px;
+    line-height: 1.5;
+    outline: none;
+  }
+  .prompt-composer textarea:focus {
+    border-color: var(--color-violet);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
+  }
+  .prompt-send {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 34px;
   }
 </style>

@@ -1,6 +1,7 @@
 import { pickDirectory } from './dialog';
 import { isTauri } from './runtime';
 import {
+  aiPrompt as apiAiPrompt,
   analyzeCurrent,
   cancelCleanup,
   cancelScan,
@@ -80,7 +81,7 @@ export interface Toast {
 class AppStore {
   // ---- hub navigation ----
   view = $state<'home' | 'dashboard' | 'sub'>('home');
-  subTab = $state<'smart' | 'explorer' | 'history' | 'routines'>('smart');
+  subTab = $state<'smart' | 'explorer' | 'history' | 'routines' | 'prompt'>('smart');
   settingsOpen = $state(false);
   /** AI provider configuration behind the settings sheet. */
   aiConfig = $state<AiConfig | null>(null);
@@ -358,6 +359,9 @@ class AppStore {
     // Monitor status only drives switches in other views; never block first
     // paint on it.
     const monitorPromise = this.refreshMonitorStatus();
+    // The assistant tab only appears when AI is configured; load it up front
+    // instead of waiting for the settings sheet to open.
+    const aiConfigPromise = this.loadAiConfig();
 
     const [activeEpoch, warnings, volumes] = await Promise.all([
       activeEpochPromise,
@@ -365,7 +369,8 @@ class AppStore {
       volumesPromise,
       historyPromise,
       routinesPromise,
-      monitorPromise.catch(() => {})
+      monitorPromise.catch(() => {}),
+      aiConfigPromise
     ]);
     startupMark('init:parallel-done');
 
@@ -508,12 +513,12 @@ class AppStore {
     this.view = 'home';
   }
 
-  goSub(tab: 'smart' | 'explorer' | 'history' | 'routines' = 'smart') {
+  goSub(tab: 'smart' | 'explorer' | 'history' | 'routines' | 'prompt' = 'smart') {
     this.subTab = tab;
     this.view = 'sub';
   }
 
-  setSubTab(tab: 'smart' | 'explorer' | 'history' | 'routines') {
+  setSubTab(tab: 'smart' | 'explorer' | 'history' | 'routines' | 'prompt') {
     this.subTab = tab;
   }
 
@@ -816,11 +821,21 @@ class AppStore {
   async openSettings() {
     this.settingsOpen = true;
     void this.loadCleanupRules();
+    await this.loadAiConfig();
+  }
+
+  /** Load the AI configuration (the assistant tab depends on it). */
+  async loadAiConfig() {
     try {
       this.aiConfig = await getAiConfig();
     } catch {
       this.aiConfig = null;
     }
+  }
+
+  /** Ask the configured model a free-form question. */
+  async askAi(prompt: string): Promise<string> {
+    return apiAiPrompt(prompt);
   }
 
   async loadCleanupRules() {
