@@ -23,6 +23,7 @@ import type {
   RoutineSuggestion,
   VolumeInfo
 } from '../types';
+import type { CleanupRule } from '../ipc';
 
 // ---- units -----------------------------------------------------------------
 
@@ -324,6 +325,8 @@ export function createMockBackend(bus: EventBus): MockBackend {
     findings: [] as Finding[],
     /** Persisted definitively-cleanable list, keyed by finding id. */
     cleanable: new Map<string, Finding>(),
+    /** User-defined cleanup rules (mock keeps them in memory only). */
+    cleanupRules: [] as CleanupRule[],
     history: [
       {
         id: 'h-2', atMs: NOW - 30 * DAY_MS, bytes: 30 * GB, items: 2,
@@ -634,6 +637,37 @@ export function createMockBackend(bus: EventBus): MockBackend {
         // pass to filter, so accept and drop it.
         case 'set_finding_dismissed':
           resolve(undefined as T);
+          break;
+        case 'list_cleanup_rules':
+          resolve([...state.cleanupRules] as unknown as T);
+          break;
+        case 'save_cleanup_rule': {
+          const draft = args.rule as CleanupRule;
+          const saved: CleanupRule = {
+            ...draft,
+            id: draft.id || `rule-${state.cleanupRules.length + 1}`,
+            name: draft.name || draft.dir
+          };
+          state.cleanupRules = [
+            ...state.cleanupRules.filter((rule) => rule.id !== saved.id),
+            saved
+          ];
+          resolve(saved as unknown as T);
+          break;
+        }
+        case 'delete_cleanup_rule':
+          state.cleanupRules = state.cleanupRules.filter(
+            (rule) => rule.id !== String(args.id ?? '')
+          );
+          resolve(true as unknown as T);
+          break;
+        case 'preview_cleanup_rule':
+          resolve({ matched: 0, bytes: 0, truncated: false, examples: [] } as unknown as T);
+          break;
+        case 'run_cleanup_rule':
+          resolve({
+            matched: 0, removed: 0, failed: 0, bytes: 0, truncated: false, results: []
+          } as unknown as T);
           break;
 
         // ---- monitor ----

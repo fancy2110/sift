@@ -106,6 +106,31 @@ export function resolvePermission(
 
 // ---- commands: deletion & filesystem awareness -----------------------------
 
+export interface CleanupRule {
+  id: string;
+  name: string;
+  dir: string;
+  pattern: string;
+  olderThanDays: number;
+  enabled: boolean;
+}
+
+export interface RulePreview {
+  matched: number;
+  bytes: number;
+  truncated: boolean;
+  examples: string[];
+}
+
+export interface RuleRun {
+  matched: number;
+  removed: number;
+  failed: number;
+  bytes: number;
+  truncated: boolean;
+  results: DeleteResultItem[];
+}
+
 export interface DeleteResultItem {
   path: string;
   ok: boolean;
@@ -147,6 +172,26 @@ export function forgetCleanable(id: string): Promise<boolean> {
 /** Remember (or clear) "stop recommending this path" after a queue removal. */
 export function setFindingDismissed(path: string, dismissed: boolean): Promise<void> {
   return call('set_finding_dismissed', { path, dismissed });
+}
+
+export function listCleanupRules(): Promise<CleanupRule[]> {
+  return call('list_cleanup_rules');
+}
+
+export function saveCleanupRule(rule: CleanupRule): Promise<CleanupRule> {
+  return call('save_cleanup_rule', { rule });
+}
+
+export function deleteCleanupRule(id: string): Promise<boolean> {
+  return call('delete_cleanup_rule', { id });
+}
+
+export function previewCleanupRule(rule: CleanupRule): Promise<RulePreview> {
+  return call('preview_cleanup_rule', { rule });
+}
+
+export function runCleanupRule(id: string): Promise<RuleRun> {
+  return call('run_cleanup_rule', { id });
 }
 
 export function cleanPaths(paths: string[]): Promise<DeleteResultItem[]> {

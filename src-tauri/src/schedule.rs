@@ -179,8 +179,21 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
         .settings()
         .monitor
         .scheduled_cleanup_enabled;
-    if !paths.is_empty() && still_allowed {
+    if !still_allowed {
+        return Ok(());
+    }
+    if !paths.is_empty() {
         crate::analyze::perform_cleanup(&services, &paths, true);
+    }
+
+    // User-defined "directory + regex" rules run after the recommendation
+    // pass. Each rule is bounded and reports through the history like any
+    // other automatic cleanup; one bad rule never blocks the rest.
+    let rules = services.store.settings().monitor.cleanup_rules;
+    for rule in rules.iter().filter(|rule| rule.enabled) {
+        if let Err(error) = crate::cleanup_rules::run_rule(&services.store, rule) {
+            eprintln!("scheduled cleanup rule \"{}\" failed: {error}", rule.name);
+        }
     }
     Ok(())
 }

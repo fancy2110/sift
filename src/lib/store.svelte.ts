@@ -6,6 +6,11 @@ import {
   cancelScan,
   cleanPaths,
   setFindingDismissed,
+  listCleanupRules as apiListCleanupRules,
+  saveCleanupRule as apiSaveCleanupRule,
+  deleteCleanupRule as apiDeleteCleanupRule,
+  previewCleanupRule as apiPreviewCleanupRule,
+  runCleanupRule as apiRunCleanupRule,
   getAiConfig,
   saveAiConfig,
   deleteRoutine,
@@ -36,7 +41,9 @@ import {
   watchFs,
   acceptRoutineSuggestion,
   type BatchUpdate,
+  type CleanupRule,
   type DeleteResultItem,
+  type RulePreview,
   type PermissionRequest,
   type ProgressInfo,
   type RefreshedEvent,
@@ -126,6 +133,9 @@ class AppStore {
   monitorRunning = $state(false);
   scheduledOn = $state(false);
   scheduledHour = $state(4);
+
+  /** User-defined directory + regex cleanup rules (persisted server-side). */
+  cleanupRules = $state<CleanupRule[]>([]);
 
   /** Analyzed candidates from the backend. */
   findings = $state<Finding[]>([]);
@@ -805,10 +815,67 @@ class AppStore {
   /** Open the settings sheet and load the persisted AI configuration. */
   async openSettings() {
     this.settingsOpen = true;
+    void this.loadCleanupRules();
     try {
       this.aiConfig = await getAiConfig();
     } catch {
       this.aiConfig = null;
+    }
+  }
+
+  async loadCleanupRules() {
+    try {
+      this.cleanupRules = await apiListCleanupRules();
+    } catch {
+      // Rules are best-effort; the list simply stays empty.
+    }
+  }
+
+  /** Create or update a rule; returns the saved rule (with its id) or null. */
+  async saveCleanupRuleDraft(rule: CleanupRule): Promise<CleanupRule | null> {
+    try {
+      const saved = await apiSaveCleanupRule(rule);
+      this.cleanupRules = await apiListCleanupRules();
+      this.toast(t('settings.ruleSaved'));
+      return saved;
+    } catch (error) {
+      this.toastError(tr(String(error)));
+      return null;
+    }
+  }
+
+  async toggleCleanupRule(rule: CleanupRule) {
+    await this.saveCleanupRuleDraft({ ...rule, enabled: !rule.enabled });
+  }
+
+  async removeCleanupRule(id: string) {
+    try {
+      await apiDeleteCleanupRule(id);
+      this.cleanupRules = await apiListCleanupRules();
+      this.toast(t('toast.ruleDeleted'));
+    } catch (error) {
+      this.toastError(t('toast.ruleDeleteFailed', [String(error)]));
+    }
+  }
+
+  async previewCleanupRule(rule: CleanupRule): Promise<RulePreview | null> {
+    try {
+      return await apiPreviewCleanupRule(rule);
+    } catch (error) {
+      this.toastError(tr(String(error)));
+      return null;
+    }
+  }
+
+  async runCleanupRule(rule: CleanupRule) {
+    try {
+      const result = await apiRunCleanupRule(rule.id);
+      this.toast(
+        t('toast.ruleRunDone', [String(result.removed), formatSize(result.bytes)])
+      );
+      await this.loadHistory();
+    } catch (error) {
+      this.toastError(t('toast.ruleRunFailed', [String(error)]));
     }
   }
 

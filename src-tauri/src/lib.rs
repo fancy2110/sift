@@ -7,6 +7,7 @@
 
 mod analyze;
 mod cleanup;
+mod cleanup_rules;
 mod credentials;
 mod disks;
 mod scanner;
@@ -108,6 +109,11 @@ pub fn run() {
             analyze::set_scheduled_cleanup,
             analyze::mark_path,
             analyze::set_finding_dismissed,
+            cleanup_rules::list_cleanup_rules,
+            cleanup_rules::save_cleanup_rule,
+            cleanup_rules::delete_cleanup_rule,
+            cleanup_rules::preview_cleanup_rule,
+            cleanup_rules::run_cleanup_rule,
             analyze::take_store_warnings,
             analyze::store_location,
             analyze::routine_suggestions,
