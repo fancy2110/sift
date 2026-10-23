@@ -918,7 +918,20 @@ fn normalize_endpoint_for(raw: &str, provider: &str) -> String {
 /// Only the user's own text is sent: no file contents, paths, or scan data.
 /// The tab is hidden unless AI is configured, but the command re-checks.
 #[tauri::command]
-pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<String, String> {
+pub async fn ai_prompt(
+    services: State<'_, AppServices>,
+    prompt: String,
+) -> Result<String, String> {
+    // `reqwest::blocking` plus a 45 s timeout and a 401 retry must not run on
+    // the main thread: doing so froze the whole window while the model was
+    // thinking.
+    let store = Arc::clone(&services.store);
+    tauri::async_runtime::spawn_blocking(move || ai_prompt_blocking(&store, prompt))
+        .await
+        .map_err(|error| format!("err.aiRequest|{error}"))?
+}
+
+fn ai_prompt_blocking(store: &sift_store::Store, prompt: String) -> Result<String, String> {
     let prompt = prompt.trim().to_string();
     if prompt.is_empty() {
         return Err("err.promptEmpty".into());
@@ -926,7 +939,7 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
     if prompt.chars().count() > 8000 {
         return Err("err.promptTooLong".into());
     }
-    let ai = services.store.settings().ai;
+    let ai = store.settings().ai;
     if !ai.is_usable() {
         return Err("err.aiNotConfigured".into());
     }
@@ -994,7 +1007,7 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
                     if let Ok(retry) = sift_analyze::OpenAiCompatibleAdjudicator::new(retry_config)
                     {
                         if let Ok(recovered) = retry.complete(system, &prompt) {
-                            services.store.update_settings(|settings| {
+                            store.update_settings(|settings| {
                                 if let Some(stored) = settings
                                     .ai
                                     .profiles
@@ -1005,7 +1018,7 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
                                     stored.model = "ark-code-latest".to_string();
                                 }
                             });
-                            let _ = services.store.flush_if_dirty();
+                            let _ = store.flush_if_dirty();
                             return Ok(recovered);
                         }
                     }
