@@ -341,13 +341,13 @@ export function aiRoutine(prompt: string): Promise<AiRoutineDraft> {
   return call<AiRoutineDraft>('ai_routine', { prompt });
 }
 
-/** Save a confirmed draft; always starts in approve mode. */
-export function saveAiRoutine(draft: {
+/** Save a confirmed draft (manual or AI); always starts in approve mode. */
+export function saveRoutineDraft(draft: {
   title: string;
   cadence: string;
   paths: string[];
 }): Promise<void> {
-  return call<void>('save_ai_routine', {
+  return call<void>('save_routine_draft', {
     title: draft.title,
     cadence: draft.cadence,
     paths: draft.paths

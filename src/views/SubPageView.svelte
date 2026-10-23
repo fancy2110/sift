@@ -2,9 +2,10 @@
   import Icon from '../lib/components/Icon.svelte';
   import LocationPicker from '../lib/components/LocationPicker.svelte';
   import CleanupRulesPanel from '../lib/components/CleanupRulesPanel.svelte';
+  import RoutineComposer from '../lib/components/RoutineComposer.svelte';
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
-  import type { AiRoutineDraft, Node } from '../lib/types';
+  import type { Node } from '../lib/types';
   type SubTab = 'smart' | 'explorer' | 'history' | 'routines';
   import { onMount } from 'svelte';
   import { fade, scale } from 'svelte/transition';
@@ -139,33 +140,9 @@
   const panelWidth = $derived(100 / TABS.length);
   const pagerOffset = $derived(tabIndex[store.subTab] * panelWidth);
 
-  // ---- AI routine draft ----
-  let routinePrompt = $state('');
-  let routineDraft = $state<AiRoutineDraft | null>(null);
-  let routineBusy = $state(false);
-
   /** Stored cadences were once `cadence.weekly`; map them to the dict keys. */
   function cadenceLabel(cadence: string) {
     return t(cadence.startsWith('routine.') ? cadence : `routine.${cadence}`);
-  }
-
-  async function generateRoutine() {
-    const text = routinePrompt.trim();
-    if (!text || routineBusy) return;
-    routineBusy = true;
-    routineDraft = await store.generateAiRoutine(text);
-    routineBusy = false;
-  }
-
-  async function saveDraft() {
-    if (!routineDraft || routineBusy) return;
-    routineBusy = true;
-    const saved = await store.saveAiRoutine($state.snapshot(routineDraft));
-    routineBusy = false;
-    if (saved) {
-      routineDraft = null;
-      routinePrompt = '';
-    }
   }
 
   // Escape dismisses the open context menu; without this the only way out is
@@ -579,6 +556,7 @@
             <div class="rt-block-head">
               <h3 class="rt-block-title">{t('routines.saved')}</h3>
               <span class="rt-count chip">{store.routines.length}</span>
+              <RoutineComposer />
             </div>
             {#each store.routines as r, i (r.id)}
               <article class="rt-card" in:listIn={{ index: i }}>
@@ -634,69 +612,6 @@
             {:else}
               <p class="rt-empty">{t('routines.empty2')}</p>
             {/each}
-          </div>
-
-          <div class="rt-block">
-            <div class="rt-block-head">
-              <h3 class="rt-block-title">{t('routines.aiTitle')}</h3>
-              <span class="rt-count chip"><Icon name="spark" size={10} /></span>
-            </div>
-            <p class="rt-ai-desc">{t('routines.aiDesc')}</p>
-            <div class="rt-ai-input">
-              <textarea
-                rows="2"
-                bind:value={routinePrompt}
-                placeholder={t('routines.aiPlaceholder')}
-                onkeydown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    void generateRoutine();
-                  }
-                }}
-              ></textarea>
-              <button
-                type="button"
-                class="rt-btn rt-btn-primary"
-                disabled={routineBusy || routinePrompt.trim() === ''}
-                onclick={() => void generateRoutine()}
-              >
-                <Icon name="spark" size={11} />
-                {routineBusy ? t('prompt.thinking') : t('routines.aiGenerate')}
-              </button>
-            </div>
-
-            {#if routineDraft}
-              <article class="rt-card rt-ai-draft">
-                <span class="rt-card-icon rt-card-icon-on">
-                  <Icon name="spark" size={14} />
-                </span>
-                <div class="rt-card-body">
-                  <div class="rt-card-top">
-                    <p class="rt-card-name">{routineDraft.title}</p>
-                    <span class="rt-chip rt-chip-on">{cadenceLabel(routineDraft.cadence)}</span>
-                  </div>
-                  {#each routineDraft.paths as path (path)}
-                    <p class="rt-card-path" title={path}>{path}</p>
-                  {/each}
-                  {#if routineDraft.reason}
-                    <p class="rt-card-reason">{routineDraft.reason}</p>
-                  {/if}
-                </div>
-                <div class="rt-card-actions">
-                  <button
-                    type="button"
-                    class="rt-btn rt-btn-primary"
-                    disabled={routineBusy}
-                    onclick={saveDraft}
-                  >
-                    <Icon name="check" size={11} stroke={2.2} /> {t('routines.aiSave')}
-                  </button>
-                  <button type="button" class="rt-btn" onclick={() => (routineDraft = null)}>
-                    {t('routines.aiDiscard')}
-                  </button>
-                </div>
-              </article>
-            {/if}
           </div>
 
           <div class="rt-block">
@@ -1605,43 +1520,4 @@
     color: var(--color-faint);
   }
 
-
-  .rt-ai-desc {
-    margin: 0 0 8px;
-    font-size: 11px;
-    color: var(--color-faint);
-    line-height: 1.5;
-  }
-  .rt-ai-input {
-    display: flex;
-    align-items: flex-end;
-    gap: 8px;
-  }
-  .rt-ai-input textarea {
-    flex: 1;
-    min-height: 52px;
-    max-height: 140px;
-    resize: vertical;
-    padding: 8px 10px;
-    border-radius: 10px;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-fg);
-    font-family: inherit;
-    font-size: 11.5px;
-    line-height: 1.5;
-    outline: none;
-  }
-  .rt-ai-input textarea:focus {
-    border-color: var(--color-violet);
-    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
-  }
-  .rt-ai-draft {
-    margin-top: 10px;
-    border-color: color-mix(in oklch, var(--color-violet) 35%, var(--color-border));
-  }
-  .rt-btn:disabled {
-    opacity: 0.55;
-    cursor: default;
-  }
 </style>

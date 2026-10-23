@@ -727,7 +727,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
             } as unknown as T
           );
           break;
-        case 'save_ai_routine': {
+        case 'save_routine_draft': {
           const title = String(args.title ?? '');
           const cadence = String(args.cadence ?? 'cadence.weekly');
           const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];

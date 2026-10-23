@@ -245,9 +245,9 @@ fn ai_routine_blocking(
     }
 }
 
-/// Save a confirmed draft as a routine. Always approve-before-run.
+/// Save a confirmed draft (manual or AI-generated). Always approve-before-run.
 #[tauri::command]
-pub fn save_ai_routine(
+pub fn save_routine_draft(
     services: State<'_, AppServices>,
     title: String,
     paths: Vec<String>,
