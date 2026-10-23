@@ -76,6 +76,15 @@ impl RetrySignals {
     }
 }
 
+/// Wire format of the provider's chat API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+    /// OpenAI-compatible `/chat/completions` with a bearer token.
+    OpenAi,
+    /// Anthropic `/v1/messages` with `x-api-key` and `anthropic-version`.
+    Anthropic,
+}
+
 /// Connection and consent settings for a remote adjudicator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -95,6 +104,8 @@ pub struct LlmConfig {
     /// Whether the user has explicitly agreed to send file metadata off the
     /// machine. [`LlmConfig::new`] starts at `false`.
     pub consent: bool,
+    /// Wire format spoken by the endpoint.
+    pub protocol: Protocol,
 }
 
 impl LlmConfig {
@@ -116,12 +127,18 @@ impl LlmConfig {
             batch_size: 30,
             language: "zh".to_string(),
             consent: false,
+            protocol: Protocol::OpenAi,
         }
     }
 
     /// Record the user's explicit agreement to transmit file metadata.
     pub fn with_consent(mut self) -> Self {
         self.consent = true;
+        self
+    }
+
+    pub fn with_protocol(mut self, protocol: Protocol) -> Self {
+        self.protocol = protocol;
         self
     }
 
@@ -234,19 +251,29 @@ impl OpenAiCompatibleAdjudicator {
     /// Used by the in-app assistant tab. Only what the caller passes is sent;
     /// no scan data or paths are attached here.
     pub fn complete(&self, system: &str, user: &str) -> Result<String, AdjudicateError> {
-        let body = serde_json::json!({
-            "model": self.config.model,
-            "messages": [
-                { "role": "system", "content": system },
-                { "role": "user", "content": user },
-            ],
-            "temperature": 0.3,
-        });
-        let response = self
-            .client
-            .post(&self.config.endpoint)
-            .bearer_auth(&self.config.api_key)
-            .json(&body)
+        let request = self.client.post(&self.config.endpoint);
+        let request = match self.config.protocol {
+            Protocol::OpenAi => request
+                .bearer_auth(&self.config.api_key)
+                .json(&serde_json::json!({
+                    "model": self.config.model,
+                    "messages": [
+                        { "role": "system", "content": system },
+                        { "role": "user", "content": user },
+                    ],
+                    "temperature": 0.3,
+                })),
+            Protocol::Anthropic => request
+                .header("x-api-key", &self.config.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&serde_json::json!({
+                    "model": self.config.model,
+                    "max_tokens": 2048,
+                    "system": system,
+                    "messages": [{ "role": "user", "content": user }],
+                })),
+        };
+        let response = request
             .send()
             .map_err(|err| AdjudicateError::Transport(err.to_string()))?;
         let status = response.status();
@@ -261,7 +288,10 @@ impl OpenAiCompatibleAdjudicator {
                 text.chars().take(300).collect::<String>()
             )));
         }
-        extract_content(&text)
+        match self.config.protocol {
+            Protocol::OpenAi => extract_content(&text),
+            Protocol::Anthropic => extract_anthropic_content(&text),
+        }
     }
 
     /// Send `batch` in sub-batches and validate every answer.
@@ -332,20 +362,34 @@ impl OpenAiCompatibleAdjudicator {
         now_ms: i64,
     ) -> Result<Vec<Verdict>, Retry> {
         let (system, user) = build_prompt_at(batch, &self.config.language, now_ms);
-        let body = serde_json::json!({
-            "model": self.config.model,
-            "messages": [
-                { "role": "system", "content": system },
-                { "role": "user", "content": user },
-            ],
-            "temperature": 0,
-            "response_format": { "type": "json_object" },
-        });
+        let body = match self.config.protocol {
+            Protocol::OpenAi => serde_json::json!({
+                "model": self.config.model,
+                "messages": [
+                    { "role": "system", "content": system },
+                    { "role": "user", "content": user },
+                ],
+                "temperature": 0,
+                "response_format": { "type": "json_object" },
+            }),
+            // Anthropic carries the system prompt separately and has no
+            // json_object mode; the prompt already asks for JSON.
+            Protocol::Anthropic => serde_json::json!({
+                "model": self.config.model,
+                "max_tokens": 4096,
+                "system": system,
+                "messages": [{ "role": "user", "content": user }],
+            }),
+        };
 
-        let response = self
-            .client
-            .post(&self.config.endpoint)
-            .bearer_auth(&self.config.api_key)
+        let request = self.client.post(&self.config.endpoint);
+        let request = match self.config.protocol {
+            Protocol::OpenAi => request.bearer_auth(&self.config.api_key),
+            Protocol::Anthropic => request
+                .header("x-api-key", &self.config.api_key)
+                .header("anthropic-version", "2023-06-01"),
+        };
+        let response = request
             .json(&body)
             .send()
             .map_err(|err| {
@@ -388,8 +432,11 @@ impl OpenAiCompatibleAdjudicator {
             )));
         }
 
-        let content =
-            extract_content(&text).map_err(|err| Retry::Fatal(err.to_string()))?;
+        let raw_content = match self.config.protocol {
+            Protocol::OpenAi => extract_content(&text),
+            Protocol::Anthropic => extract_anthropic_content(&text),
+        };
+        let content = raw_content.map_err(|err| Retry::Fatal(err.to_string()))?;
         let raw = parse_raw_verdicts(&content).map_err(|err| Retry::Fatal(err.to_string()))?;
         Ok(apply_remote_verdicts(
             batch,
@@ -471,6 +518,37 @@ fn extract_content(body: &str) -> Result<String, AdjudicateError> {
         .next()
         .map(|choice| choice.message.content)
         .ok_or_else(|| AdjudicateError::Response("reply contained no choices".to_string()))
+}
+
+/// Extract the text blocks of an Anthropic `/v1/messages` reply.
+fn extract_anthropic_content(body: &str) -> Result<String, AdjudicateError> {
+    #[derive(serde::Deserialize)]
+    struct Reply {
+        content: Vec<Block>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Block {
+        #[serde(rename = "type")]
+        kind: String,
+        #[serde(default)]
+        text: String,
+    }
+
+    let reply: Reply = serde_json::from_str(body)
+        .map_err(|err| AdjudicateError::Response(format!("unrecognised reply: {err}")))?;
+    let text = reply
+        .content
+        .into_iter()
+        .filter(|block| block.kind == "text")
+        .map(|block| block.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.trim().is_empty() {
+        return Err(AdjudicateError::Response(
+            "reply contained no text".to_string(),
+        ));
+    }
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -573,6 +651,66 @@ mod tests {
         assert!(parsed[0]["signals"].as_array().unwrap().len() == 1);
         // The id must be the stable key the answer has to quote back.
         assert!(parsed[0]["id"].as_str().unwrap().starts_with("n-"));
+    }
+
+    #[test]
+    fn anthropic_complete_uses_the_messages_api() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                if read == 0 {
+                    break;
+                }
+                raw.extend_from_slice(&chunk[..read]);
+                if let Some(pos) = raw.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let header_end = pos + 4;
+                    let headers = String::from_utf8_lossy(&raw[..header_end]).to_ascii_lowercase();
+                    let length = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if raw.len() >= header_end + length {
+                        break;
+                    }
+                }
+            }
+            let body = r#"{"content":[{"type":"text","text":"pong"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&raw).to_string()
+        });
+
+        let config = LlmConfig::new(
+            "anthropic",
+            format!("http://{addr}/v1/messages"),
+            "claude-test",
+            "sk-ant-test",
+        )
+        .with_consent()
+        .with_protocol(Protocol::Anthropic);
+        let client = OpenAiCompatibleAdjudicator::new(config).unwrap();
+        assert_eq!(client.complete("be brief", "hello").unwrap(), "pong");
+
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /v1/messages"), "{request}");
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains("x-api-key: sk-ant-test"), "{request}");
+        assert!(lower.contains("anthropic-version: 2023-06-01"), "{request}");
+        assert!(request.contains("\"system\":\"be brief\""), "{request}");
+        assert!(request.contains("\"max_tokens\""), "{request}");
     }
 
     #[test]

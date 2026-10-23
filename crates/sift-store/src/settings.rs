@@ -258,6 +258,52 @@ impl AnalysisSettings {
     }
 }
 
+/// One selectable AI provider configuration.
+///
+/// Every profile keeps its own endpoint, model and API key (the adapter stores
+/// the key under an account derived from `id`), so switching providers does not
+/// discard the previous credential.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiProfile {
+    pub id: String,
+    pub name: String,
+    /// `ark` | `deepseek` | `openai` | `anthropic` | `custom`.
+    pub provider: String,
+    pub endpoint: String,
+    pub model: String,
+    /// Optional per-profile key variable; falls back to the global one.
+    #[serde(default)]
+    pub api_key_env: String,
+}
+
+/// Upper bound on saved provider configurations.
+pub const MAX_AI_PROFILES: usize = 12;
+
+impl AiProfile {
+    fn normalized(self) -> Option<Self> {
+        let id = self.id.trim().to_string();
+        let endpoint = self.endpoint.trim().to_string();
+        let model = self.model.trim().to_string();
+        if id.is_empty() || endpoint.is_empty() || model.is_empty() {
+            return None;
+        }
+        let name = if self.name.trim().is_empty() {
+            endpoint.clone()
+        } else {
+            self.name.trim().to_string()
+        };
+        Some(Self {
+            id,
+            name,
+            provider: self.provider.trim().to_ascii_lowercase(),
+            endpoint,
+            model,
+            api_key_env: self.api_key_env.trim().to_string(),
+        })
+    }
+}
+
 /// Remote (language-model) adjudication.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -268,8 +314,18 @@ pub struct AiSettings {
     /// Kept separate from `enabled` so the consent step is explicit and can be
     /// revoked without losing the endpoint configuration.
     pub consent_granted: bool,
+    /// Id of the profile used for requests.
+    #[serde(default)]
+    pub active_profile: String,
+    /// Selectable provider configurations, each with its own key.
+    #[serde(default)]
+    pub profiles: Vec<AiProfile>,
+    // Legacy single-profile fields, kept only to migrate older settings.
+    #[serde(default)]
     pub provider: String,
+    #[serde(default)]
     pub endpoint: String,
+    #[serde(default)]
     pub model: String,
     /// Name of the environment variable holding the API key. The key itself is
     /// never written to disk by this crate.
@@ -289,6 +345,8 @@ impl Default for AiSettings {
         Self {
             enabled: false,
             consent_granted: false,
+            active_profile: String::new(),
+            profiles: Vec::new(),
             provider: String::new(),
             endpoint: String::new(),
             model: String::new(),
@@ -301,23 +359,84 @@ impl Default for AiSettings {
 }
 
 impl AiSettings {
+    /// The selected profile (falling back to the first one).
+    pub fn active(&self) -> Option<&AiProfile> {
+        self.profiles
+            .iter()
+            .find(|profile| profile.id == self.active_profile)
+            .or_else(|| self.profiles.first())
+    }
+
     /// Whether a remote request may be made right now.
     pub fn is_usable(&self) -> bool {
         self.enabled
             && self.consent_granted
-            && !self.endpoint.trim().is_empty()
-            && !self.model.trim().is_empty()
+            && self
+                .active()
+                .is_some_and(|profile| !profile.endpoint.is_empty() && !profile.model.is_empty())
     }
 
     /// Read the API key from the environment, if configured.
     pub fn api_key_from_env(&self) -> Option<String> {
-        let name = self.api_key_env.trim();
+        let profile = self.active()?;
+        let name = if profile.api_key_env.trim().is_empty() {
+            self.api_key_env.trim()
+        } else {
+            profile.api_key_env.trim()
+        };
         if name.is_empty() {
             return None;
         }
         std::env::var(name)
             .ok()
             .filter(|key| !key.trim().is_empty())
+    }
+
+    /// Repair a loaded configuration and migrate the pre-profiles layout.
+    pub fn normalized(mut self) -> Self {
+        let migrating = self.profiles.is_empty() && !self.endpoint.trim().is_empty();
+        if migrating {
+            self.profiles.push(AiProfile {
+                id: "default".to_string(),
+                name: if self.provider.trim().is_empty() {
+                    "default".to_string()
+                } else {
+                    self.provider.trim().to_string()
+                },
+                provider: self.provider.trim().to_ascii_lowercase(),
+                endpoint: self.endpoint.trim().to_string(),
+                model: self.model.trim().to_string(),
+                api_key_env: self.api_key_env.trim().to_string(),
+            });
+        }
+        let mut seen = std::collections::HashSet::new();
+        self.profiles = self
+            .profiles
+            .into_iter()
+            .filter_map(AiProfile::normalized)
+            .filter(|profile| seen.insert(profile.id.clone()))
+            .take(MAX_AI_PROFILES)
+            .collect();
+        if migrating {
+            // The legacy fields are a one-time import: leaving them set would
+            // resurrect a default profile after the user deletes every entry.
+            self.provider.clear();
+            self.endpoint.clear();
+            self.model.clear();
+        }
+        if self.active_profile.is_empty()
+            || !self.profiles.iter().any(|p| p.id == self.active_profile)
+        {
+            self.active_profile = self
+                .profiles
+                .first()
+                .map(|profile| profile.id.clone())
+                .unwrap_or_default();
+        }
+        if self.language.trim().is_empty() {
+            self.language = "zh".to_string();
+        }
+        self
     }
 }
 
@@ -349,6 +468,7 @@ impl Settings {
         Self {
             monitor: self.monitor.normalized(),
             analysis: self.analysis.normalized(),
+            ai: self.ai.normalized(),
             ..self
         }
     }
@@ -430,8 +550,15 @@ mod tests {
     fn remote_use_requires_both_enablement_and_consent() {
         let mut ai = AiSettings {
             enabled: true,
-            endpoint: "https://example.test/v1/chat".into(),
-            model: "m".into(),
+            active_profile: "default".into(),
+            profiles: vec![AiProfile {
+                id: "default".into(),
+                name: "test".into(),
+                provider: "openai".into(),
+                endpoint: "https://example.test/v1/chat".into(),
+                model: "m".into(),
+                api_key_env: String::new(),
+            }],
             ..AiSettings::default()
         };
         assert!(!ai.is_usable(), "no consent");
@@ -439,7 +566,7 @@ mod tests {
         assert!(ai.is_usable());
 
         // An endpoint without a model is not usable either.
-        ai.model = String::new();
+        ai.profiles[0].model = String::new();
         assert!(!ai.is_usable());
     }
 

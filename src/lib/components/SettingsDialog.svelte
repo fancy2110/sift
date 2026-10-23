@@ -16,18 +16,28 @@
     };
   }
 
-  // ---- AI provider draft ----
+  // ---- AI profiles ----
+  type AiProfileView = {
+    id: string;
+    name: string;
+    provider: string;
+    endpoint: string;
+    model: string;
+    hasToken: boolean;
+  };
 
-  let draft = $state({
-    enabled: false,
+  let editorOpen = $state(false);
+  let editor = $state({
+    id: '',
+    name: '',
     provider: '',
     endpoint: '',
     model: '',
     token: '',
+    hasToken: false
   });
   let clearToken = $state(false);
   let saving = $state(false);
-  let loaded = false;
 
   // Local mirror of the scheduled hour. `bind:value` on a <select> needs a
   // state variable; binding the store property directly would not select the
@@ -36,20 +46,6 @@
   let scheduledHour = $state(store.scheduledHour);
   $effect(() => {
     scheduledHour = store.scheduledHour;
-  });
-
-  // The config arrives from the backend after the sheet opens; sync once.
-  $effect(() => {
-    const ai = store.aiConfig;
-    if (ai && !loaded) {
-      draft.enabled = ai.enabled;
-      draft.provider = ai.provider;
-      draft.endpoint = ai.endpoint;
-      draft.model = ai.model;
-      draft.token = '';
-      clearToken = false;
-      loaded = true;
-    }
   });
 
   const presets = [
@@ -62,6 +58,7 @@
       label: 'settings.aiPresetOpenai',
       provider: 'openai',
       endpoint: 'https://api.openai.com/v1/chat/completions',
+      model: 'gpt-4o',
     },
     {
       // Official docs: base_url https://api.deepseek.com, route
@@ -71,32 +68,83 @@
       endpoint: 'https://api.deepseek.com/chat/completions',
       model: 'deepseek-flash',
     },
+    {
+      // Anthropic uses /v1/messages with x-api-key, not the OpenAI route; the
+      // model must be one the account can access.
+      label: 'settings.aiPresetClaude',
+      provider: 'anthropic',
+      endpoint: 'https://api.anthropic.com/v1/messages',
+    },
   ];
 
-  function applyPreset(provider: string, endpoint: string, model?: string) {
-    draft.provider = provider;
-    draft.endpoint = endpoint;
-    // A preset that names a model sets it; the user can still edit afterwards.
-    if (model) draft.model = model;
+  function startProfile() {
+    editor = {
+      id: '',
+      name: '',
+      provider: 'deepseek',
+      endpoint: 'https://api.deepseek.com/chat/completions',
+      model: 'deepseek-flash',
+      token: '',
+      hasToken: false
+    };
+    clearToken = false;
+    editorOpen = true;
+  }
+
+  function editProfile(profile: AiProfileView) {
+    editor = {
+      id: profile.id,
+      name: profile.name,
+      provider: profile.provider,
+      endpoint: profile.endpoint,
+      model: profile.model,
+      token: '',
+      hasToken: profile.hasToken
+    };
+    clearToken = false;
+    editorOpen = true;
+  }
+
+  function applyPreset(preset: (typeof presets)[number]) {
+    editor.provider = preset.provider;
+    editor.endpoint = preset.endpoint;
+    if (preset.model) editor.model = preset.model;
+    if (!editor.name.trim()) editor.name = t(preset.label);
+  }
+
+  async function saveProfile() {
+    if (saving) return;
+    saving = true;
+    const token = clearToken ? '' : editor.token !== '' ? editor.token : undefined;
+    const ok = await store.saveAiProfile(
+      {
+        id: editor.id || null,
+        name: editor.name,
+        provider: editor.provider,
+        endpoint: editor.endpoint,
+        model: editor.model
+      },
+      token
+    );
+    saving = false;
+    if (ok) editorOpen = false;
+  }
+
+  function providerLabel(provider: string) {
+    const preset = presets.find((item) => item.provider === provider);
+    return preset ? t(preset.label) : t('settings.aiProviderCustom');
+  }
+
+  function endpointHost(endpoint: string) {
+    return endpoint.replace(/^https?:\/\//, '').split('/')[0];
   }
 
   async function save() {
     if (saving) return;
     saving = true;
-    // undefined keeps the stored secret; '' clears it; a value replaces it.
-    const token = clearToken ? '' : draft.token !== '' ? draft.token : undefined;
-    const ok = await store.saveAiSettings(
-      {
-        enabled: draft.enabled,
-        provider: draft.provider,
-        endpoint: draft.endpoint,
-        model: draft.model,
-        language: i18n.current,
-      },
-      token,
-    );
+    await store.setAiLanguage(i18n.current);
     saving = false;
-    if (ok) store.settingsOpen = false;
+    store.settingsOpen = false;
   }
 </script>
 
@@ -164,75 +212,150 @@
         <button
           type="button"
           class="switch"
-          class:switch-on={draft.enabled}
+          class:switch-on={store.aiConfig?.enabled}
           role="switch"
           aria-label={t('settings.aiEnableTitle')}
-          aria-checked={draft.enabled}
-          onclick={() => (draft.enabled = !draft.enabled)}
+          aria-checked={store.aiConfig?.enabled}
+          onclick={() => store.setAiEnabled(!store.aiConfig?.enabled)}
         >
           <span class="switch-knob"></span>
         </button>
       </div>
 
-      <div class="ai-form" class:ai-form-off={!draft.enabled}>
-        <p class="ai-label">{t('settings.aiPreset')}</p>
-        <div class="ai-presets">
-          {#each presets as preset (preset.provider)}
-            <button
-              type="button"
-              class="ai-preset"
-              class:preset-on={draft.provider === preset.provider
-                && draft.endpoint === preset.endpoint}
-              aria-pressed={draft.provider === preset.provider
-                && draft.endpoint === preset.endpoint}
-              onclick={() => applyPreset(preset.provider, preset.endpoint, preset.model)}
+      <div class="ai-form" class:ai-form-off={!store.aiConfig?.enabled}>
+        <p class="ai-label">{t('settings.aiProfiles')}</p>
+        <div class="ai-profiles">
+          {#each store.aiConfig?.profiles ?? [] as profile (profile.id)}
+            <div
+              class="ai-profile"
+              class:ai-profile-on={store.aiConfig?.activeProfile === profile.id}
             >
-              {t(preset.label)}
-            </button>
+              <button
+                type="button"
+                class="ai-profile-main"
+                aria-pressed={store.aiConfig?.activeProfile === profile.id}
+                onclick={() => store.selectAiProfile(profile.id)}
+              >
+                <span
+                  class="ai-radio"
+                  class:ai-radio-on={store.aiConfig?.activeProfile === profile.id}
+                ></span>
+                <span class="ai-profile-text">
+                  <span class="ai-profile-name">
+                    {profile.name}
+                    <span class="ai-tag">{providerLabel(profile.provider)}</span>
+                  </span>
+                  <span class="ai-profile-meta">
+                    {endpointHost(profile.endpoint)} · {profile.model}
+                  </span>
+                </span>
+              </button>
+              <span class="ai-key-chip" class:ai-key-ok={profile.hasToken}>
+                {profile.hasToken ? t('settings.aiKeySaved') : t('settings.aiKeyMissing')}
+              </span>
+              <button
+                type="button"
+                class="ai-mini"
+                aria-label={t('settings.aiEditProfile')}
+                title={t('settings.aiEditProfile')}
+                onclick={() => editProfile(profile)}
+              >
+                <Icon name="sliders" size={12} />
+              </button>
+              <button
+                type="button"
+                class="ai-mini ai-mini-danger"
+                aria-label={t('settings.aiDeleteProfile')}
+                title={t('settings.aiDeleteProfile')}
+                onclick={() => store.deleteAiProfile(profile.id)}
+              >
+                <Icon name="trash" size={12} />
+              </button>
+            </div>
           {/each}
+          <button type="button" class="ai-add" onclick={startProfile}>
+            + {t('settings.aiAddProfile')}
+          </button>
         </div>
 
-        <p class="ai-label">{t('settings.aiEndpoint')}</p>
-        <input
-          type="text"
-          class="ai-input"
-          placeholder={t('settings.aiEndpointPh')}
-          bind:value={draft.endpoint}
-          spellcheck="false"
-          autocomplete="off"
-        />
+        {#if editorOpen}
+          <div class="ai-editor">
+            <p class="ai-label">{t('settings.aiProvider')}</p>
+            <div class="ai-presets">
+              {#each presets as preset (preset.provider)}
+                <button
+                  type="button"
+                  class="ai-preset"
+                  class:preset-on={editor.provider === preset.provider}
+                  aria-pressed={editor.provider === preset.provider}
+                  onclick={() => applyPreset(preset)}
+                >
+                  {t(preset.label)}
+                </button>
+              {/each}
+            </div>
 
-        <p class="ai-label">{t('settings.aiModel')}</p>
-        <input
-          type="text"
-          class="ai-input"
-          placeholder={t('settings.aiModelPh')}
-          bind:value={draft.model}
-          spellcheck="false"
-          autocomplete="off"
-        />
+            <p class="ai-label">{t('settings.aiName')}</p>
+            <input
+              type="text"
+              class="ai-input"
+              placeholder={t('settings.aiNamePh')}
+              bind:value={editor.name}
+              autocomplete="off"
+            />
 
-        <p class="ai-label">
-          {t('settings.aiToken')}
-          <span class="ai-token-state" class:ai-token-ok={store.aiConfig?.hasToken && !clearToken}>
-            {store.aiConfig?.hasToken && !clearToken
-              ? t('settings.aiTokenSaved')
-              : t('settings.aiTokenNone')}
-          </span>
-        </p>
-        <input
-          type="password"
-          class="ai-input"
-          placeholder={t('settings.aiTokenPh')}
-          bind:value={draft.token}
-          spellcheck="false"
-          autocomplete="off"
-        />
-        {#if store.aiConfig?.hasToken}
-          <label class="ai-clear">
-            <input type="checkbox" bind:checked={clearToken} />
-            {t('settings.aiTokenClear')}
-          </label>
+            <p class="ai-label">{t('settings.aiEndpoint')}</p>
+            <input
+              type="text"
+              class="ai-input"
+              placeholder={t('settings.aiEndpointPh')}
+              bind:value={editor.endpoint}
+              spellcheck="false"
+              autocomplete="off"
+            />
+
+            <p class="ai-label">{t('settings.aiModel')}</p>
+            <input
+              type="text"
+              class="ai-input"
+              placeholder={t('settings.aiModelPh')}
+              bind:value={editor.model}
+              spellcheck="false"
+              autocomplete="off"
+            />
+
+            <p class="ai-label">
+              {t('settings.aiToken')}
+              <span class="ai-token-state" class:ai-token-ok={editor.hasToken && !clearToken}>
+                {editor.hasToken && !clearToken
+                  ? t('settings.aiTokenSaved')
+                  : t('settings.aiTokenNone')}
+              </span>
+            </p>
+            <input
+              type="password"
+              class="ai-input"
+              placeholder={t('settings.aiTokenPh')}
+              bind:value={editor.token}
+              spellcheck="false"
+              autocomplete="off"
+            />
+            {#if editor.hasToken}
+              <label class="ai-clear">
+                <input type="checkbox" bind:checked={clearToken} />
+                {t('settings.aiTokenClear')}
+              </label>
+            {/if}
+
+            <div class="ai-editor-actions">
+              <button type="button" class="btn btn-ghost btn-sm" onclick={() => (editorOpen = false)}>
+                {t('settings.ruleCancel')}
+              </button>
+              <button type="button" class="btn btn-sm" disabled={saving} onclick={saveProfile}>
+                {t('settings.aiProfileSave')}
+              </button>
+            </div>
+          </div>
         {/if}
 
         <p class="ai-consent">{t('settings.aiConsent')}</p>
@@ -589,4 +712,140 @@
     opacity: 0.6;
   }
 
+
+  .ai-profiles {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .ai-profile {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+  }
+  .ai-profile-on {
+    border-color: color-mix(in oklch, var(--color-violet) 55%, transparent);
+    background: color-mix(in oklch, var(--color-violet) 10%, var(--color-surface));
+  }
+  .ai-profile-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    border: none;
+    background: transparent;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+  }
+  .ai-radio {
+    flex: none;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    border: 1.5px solid var(--color-border-strong);
+  }
+  .ai-radio-on {
+    border-color: var(--color-violet);
+    box-shadow: inset 0 0 0 3px var(--color-violet);
+  }
+  .ai-profile-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .ai-profile-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 620;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ai-tag {
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    font-size: 9.5px;
+    font-weight: 600;
+    color: var(--color-faint);
+  }
+  .ai-profile-meta {
+    font-size: 10.5px;
+    color: var(--color-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ai-key-chip {
+    flex: none;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    font-size: 9.5px;
+    color: var(--color-faint);
+  }
+  .ai-key-ok {
+    color: var(--color-violet);
+    border-color: color-mix(in oklch, var(--color-violet) 45%, transparent);
+  }
+  .ai-mini {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--color-faint);
+    cursor: pointer;
+  }
+  .ai-mini:hover {
+    color: var(--color-fg);
+    border-color: var(--color-border);
+  }
+  .ai-mini-danger:hover {
+    color: var(--color-warn);
+  }
+  .ai-add {
+    align-self: flex-start;
+    padding: 6px 11px;
+    border-radius: 8px;
+    border: 1px dashed var(--color-border-strong);
+    background: transparent;
+    color: var(--color-muted);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .ai-add:hover {
+    color: var(--color-fg);
+    border-color: var(--color-violet);
+  }
+  .ai-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid var(--color-border);
+    background: color-mix(in oklch, var(--color-surface-2) 60%, transparent);
+  }
+  .ai-editor-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 2px;
+  }
 </style>

@@ -129,7 +129,11 @@ pub fn run() {
             analyze::get_language,
             analyze::set_language,
             analyze::get_ai_config,
-            analyze::save_ai_config,
+            analyze::save_ai_profile,
+            analyze::select_ai_profile,
+            analyze::delete_ai_profile,
+            analyze::set_ai_enabled,
+            analyze::set_ai_language,
         ])
         .setup(|app| {
             startup_trace::mark("setup:enter");

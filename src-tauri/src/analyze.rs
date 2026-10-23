@@ -151,36 +151,6 @@ pub struct AnalysisSummaryDto {
     pub remote_needs_consent: bool,
 }
 
-/// AI provider configuration for the settings sheet.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiConfigDto {
-    pub enabled: bool,
-    pub provider: String,
-    pub endpoint: String,
-    pub model: String,
-    pub language: String,
-    pub batch_size: usize,
-    /// Whether a token is stored (Keychain or the `SIFT_AI_API_KEY`
-    /// environment variable); the secret itself is never returned.
-    pub has_token: bool,
-}
-
-/// Settings-sheet submission. `token` semantics: `None` keeps the stored
-/// secret, `Some("")` clears it, `Some(value)` replaces it.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveAiConfigInput {
-    pub enabled: bool,
-    pub provider: String,
-    pub endpoint: String,
-    pub model: String,
-    #[serde(default)]
-    pub language: Option<String>,
-    #[serde(default)]
-    pub token: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitorStatusDto {
@@ -960,6 +930,10 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
     if !ai.is_usable() {
         return Err("err.aiNotConfigured".into());
     }
+    let profile = ai
+        .active()
+        .cloned()
+        .ok_or_else(|| "err.aiNotConfigured".to_string())?;
 
     #[cfg(feature = "remote-ai")]
     {
@@ -967,25 +941,33 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
         let from_env = env_key.is_some();
         let stored_key = match env_key {
             Some(key) => Some(key),
-            None => crate::credentials::token_result()
-                .map_err(|error| format!("err.aiKeychain|{error}"))?,
+            None => {
+                let account = crate::credentials::account_for(&profile.id);
+                let mut result = crate::credentials::token_result(&account);
+                if matches!(result, Ok(None)) && profile.id == "default" {
+                    result =
+                        crate::credentials::token_result(crate::credentials::legacy_account());
+                }
+                result.map_err(|error| format!("err.aiKeychain|{error}"))?
+            }
         };
         let api_key = stored_key.ok_or_else(|| "err.aiTokenRequired".to_string())?;
         let config = sift_analyze::LlmConfig::new(
-            ai.provider.clone(),
-            normalize_endpoint_for(&ai.endpoint, &ai.provider),
-            ai.model.clone(),
+            profile.provider.clone(),
+            normalize_endpoint_for(&profile.endpoint, &profile.provider),
+            profile.model.clone(),
             api_key,
         )
         .with_consent()
-        .with_language(ai.language.clone());
+        .with_language(ai.language.clone())
+        .with_protocol(protocol_for(&profile));
         let client = sift_analyze::OpenAiCompatibleAdjudicator::new(config)
             .map_err(|error| format!("err.aiRequest|{error}"))?;
         let system = "You are the built-in assistant of Sift, a disk space manager. Answer concisely in the user's language with practical, safe advice. You cannot delete files yourself and must never claim to have done so; suggest which Sift features or steps the user can use instead.";
         client.complete(system, &prompt).map_err(|error| {
             let text = error.to_string();
             if text.contains("HTTP 404") {
-                let endpoint = normalize_endpoint_for(&ai.endpoint, &ai.provider);
+                let endpoint = normalize_endpoint_for(&profile.endpoint, &profile.provider);
                 format!("err.aiNotFound|{endpoint}")
             } else if text.contains("HTTP 401") || text.contains("HTTP 403") {
                 // Almost always a key from a different provider: an ARK
@@ -1055,84 +1037,281 @@ pub struct RoutineSuggestionDto {
     pub cadence: String,
 }
 
-/// Read the AI provider configuration for the settings sheet.
-#[tauri::command]
-pub fn get_ai_config(services: State<'_, AppServices>) -> AiConfigDto {
-    let ai = services.store.settings().ai;
-    let has_token = ai.api_key_from_env().is_some() || crate::credentials::has_token();
+/// One provider configuration sent to the settings sheet.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiProfileDto {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub endpoint: String,
+    pub model: String,
+    pub has_token: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConfigDto {
+    pub enabled: bool,
+    pub active_profile: String,
+    pub profiles: Vec<AiProfileDto>,
+    pub language: String,
+    pub batch_size: usize,
+    /// Whether the active profile has a key (environment or stored).
+    pub has_token: bool,
+}
+
+/// Wire protocol for a provider: Anthropic speaks a different API.
+fn protocol_for(profile: &sift_store::AiProfile) -> sift_analyze::Protocol {
+    let provider = profile.provider.to_ascii_lowercase();
+    let anthropic = provider == "anthropic"
+        || provider == "claude"
+        || profile
+            .endpoint
+            .to_ascii_lowercase()
+            .contains("anthropic.com");
+    if anthropic {
+        sift_analyze::Protocol::Anthropic
+    } else {
+        sift_analyze::Protocol::OpenAi
+    }
+}
+
+fn env_key_for(profile: &sift_store::AiProfile) -> Option<String> {
+    let name = profile.api_key_env.trim();
+    let name = if name.is_empty() {
+        "SIFT_AI_API_KEY"
+    } else {
+        name
+    };
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn profile_has_token(profile: &sift_store::AiProfile) -> bool {
+    if env_key_for(profile).is_some() {
+        return true;
+    }
+    let account = crate::credentials::account_for(&profile.id);
+    if crate::credentials::has_token(&account) {
+        return true;
+    }
+    // The migrated profile may still hold the pre-profiles key.
+    profile.id == "default"
+        && crate::credentials::has_token(crate::credentials::legacy_account())
+}
+
+fn ai_config_dto(ai: &sift_store::AiSettings) -> AiConfigDto {
+    let profiles: Vec<AiProfileDto> = ai
+        .profiles
+        .iter()
+        .map(|profile| AiProfileDto {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            provider: profile.provider.clone(),
+            endpoint: profile.endpoint.clone(),
+            model: profile.model.clone(),
+            has_token: profile_has_token(profile),
+        })
+        .collect();
+    let has_token = profiles
+        .iter()
+        .find(|profile| profile.id == ai.active_profile)
+        .map(|profile| profile.has_token)
+        .unwrap_or(false);
     AiConfigDto {
         enabled: ai.enabled,
-        provider: ai.provider,
-        endpoint: ai.endpoint,
-        model: ai.model,
-        language: ai.language,
+        active_profile: ai.active_profile.clone(),
+        profiles,
+        language: ai.language.clone(),
         batch_size: ai.batch_size,
         has_token,
     }
 }
 
-/// Persist the AI provider configuration and, when supplied, its token.
+fn next_profile_id(ai: &sift_store::AiSettings) -> String {
+    (1..=sift_store::MAX_AI_PROFILES)
+        .map(|index| format!("profile-{index}"))
+        .find(|id| !ai.profiles.iter().any(|profile| &profile.id == id))
+        .unwrap_or_else(|| format!("profile-{}", ai.profiles.len() + 1))
+}
+
+/// Read every AI provider configuration for the settings sheet.
 #[tauri::command]
-pub fn save_ai_config(
+pub fn get_ai_config(services: State<'_, AppServices>) -> AiConfigDto {
+    ai_config_dto(&services.store.settings().ai)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveAiProfileInput {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    pub provider: String,
+    pub endpoint: String,
+    pub model: String,
+    /// `Some` replaces (empty clears), `None` keeps the stored key.
+    pub token: Option<String>,
+}
+
+/// Create or update one provider configuration and (optionally) its key.
+#[tauri::command]
+pub fn save_ai_profile(
     services: State<'_, AppServices>,
-    config: SaveAiConfigInput,
+    profile: SaveAiProfileInput,
 ) -> Result<AiConfigDto, String> {
-    let provider = config.provider.trim().to_string();
-    let endpoint = normalize_endpoint_for(&config.endpoint, &provider);
-    let model = config.model.trim().to_string();
-
-    // Handle the token first so an enable without a secret cannot succeed
-    // before storage fails below it.
-    let token_after = match config.token.as_deref() {
-        None => crate::credentials::has_token(),
-        Some(value) if value.trim().is_empty() => {
-            crate::credentials::delete_token()?;
-            false
-        }
-        Some(value) => {
-            crate::credentials::set_token(value.trim())?;
-            true
-        }
-    };
-    let env_key_present = services.store.settings().ai.api_key_from_env().is_some();
-
-    if config.enabled && (endpoint.is_empty() || model.is_empty()) {
+    let provider = profile.provider.trim().to_ascii_lowercase();
+    let endpoint = normalize_endpoint_for(&profile.endpoint, &provider);
+    let model = profile.model.trim().to_string();
+    if endpoint.is_empty() || model.is_empty() {
         return Err("err.aiEndpointRequired".to_string());
     }
-    if config.enabled && !(token_after || env_key_present) {
-        return Err("err.aiTokenRequired".to_string());
+
+    let ai = services.store.settings().ai;
+    let id = match profile.id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => id.to_string(),
+        None => {
+            if ai.profiles.len() >= sift_store::MAX_AI_PROFILES {
+                return Err("err.aiProfileLimit".to_string());
+            }
+            next_profile_id(&ai)
+        }
+    };
+    let account = crate::credentials::account_for(&id);
+    match profile.token.as_deref() {
+        None => {}
+        Some(value) if value.trim().is_empty() => {
+            crate::credentials::delete_token(&account)?;
+        }
+        Some(value) => {
+            crate::credentials::set_token(&account, value.trim())?;
+        }
     }
 
+    let name = if profile.name.trim().is_empty() {
+        endpoint.clone()
+    } else {
+        profile.name.trim().to_string()
+    };
     services.store.update_settings(|settings| {
         let ai = &mut settings.ai;
-        ai.enabled = config.enabled;
-        // Enabling is itself the explicit consent: the sheet shows exactly
-        // what metadata leaves the machine. Disabling leaves the recorded
-        // consent in place so re-enabling needs no second acknowledgement.
-        if config.enabled {
-            ai.consent_granted = true;
-        }
-        ai.provider = provider;
-        ai.endpoint = endpoint;
-        ai.model = model;
-        if let Some(language) = config.language.as_deref() {
-            if !language.trim().is_empty() {
-                ai.language = language.trim().to_string();
+        let updated = sift_store::AiProfile {
+            id: id.clone(),
+            name,
+            provider,
+            endpoint,
+            model,
+            api_key_env: String::new(),
+        };
+        match ai.profiles.iter_mut().find(|existing| existing.id == id) {
+            Some(existing) => *existing = updated,
+            None => {
+                if ai.active_profile.is_empty() || ai.profiles.is_empty() {
+                    ai.active_profile = id.clone();
+                }
+                ai.profiles.push(updated);
             }
         }
     });
     let _ = services.store.flush_if_dirty();
+    Ok(ai_config_dto(&services.store.settings().ai))
+}
 
-    let ai = services.store.settings().ai;
-    Ok(AiConfigDto {
-        enabled: ai.enabled,
-        provider: ai.provider,
-        endpoint: ai.endpoint,
-        model: ai.model,
-        language: ai.language,
-        batch_size: ai.batch_size,
-        has_token: token_after || env_key_present,
-    })
+/// Switch which configuration requests use.
+#[tauri::command]
+pub fn select_ai_profile(
+    services: State<'_, AppServices>,
+    id: String,
+) -> Result<AiConfigDto, String> {
+    let known = services
+        .store
+        .settings()
+        .ai
+        .profiles
+        .iter()
+        .any(|profile| profile.id == id);
+    if !known {
+        return Err("err.aiProfileMissing".to_string());
+    }
+    services.store.update_settings(|settings| {
+        settings.ai.active_profile = id.clone();
+    });
+    let _ = services.store.flush_if_dirty();
+    Ok(ai_config_dto(&services.store.settings().ai))
+}
+
+/// Remove a configuration and its stored key.
+#[tauri::command]
+pub fn delete_ai_profile(
+    services: State<'_, AppServices>,
+    id: String,
+) -> Result<AiConfigDto, String> {
+    let account = crate::credentials::account_for(&id);
+    let _ = crate::credentials::delete_token(&account);
+    if id == "default" {
+        let _ = crate::credentials::delete_token(crate::credentials::legacy_account());
+    }
+    services.store.update_settings(|settings| {
+        let ai = &mut settings.ai;
+        ai.profiles.retain(|profile| profile.id != id);
+        if ai.active_profile == id {
+            ai.active_profile = ai
+                .profiles
+                .first()
+                .map(|profile| profile.id.clone())
+                .unwrap_or_default();
+        }
+    });
+    let _ = services.store.flush_if_dirty();
+    Ok(ai_config_dto(&services.store.settings().ai))
+}
+
+/// Turn model use on or off. Enabling is the explicit consent step.
+#[tauri::command]
+pub fn set_ai_enabled(
+    services: State<'_, AppServices>,
+    enabled: bool,
+) -> Result<AiConfigDto, String> {
+    if enabled {
+        let ai = services.store.settings().ai;
+        let Some(profile) = ai.active() else {
+            return Err("err.aiNotConfigured".to_string());
+        };
+        if profile.endpoint.is_empty() || profile.model.is_empty() {
+            return Err("err.aiEndpointRequired".to_string());
+        }
+        if !profile_has_token(profile) {
+            return Err("err.aiTokenRequired".to_string());
+        }
+    }
+    services.store.update_settings(|settings| {
+        let ai = &mut settings.ai;
+        ai.enabled = enabled;
+        if enabled {
+            ai.consent_granted = true;
+        }
+    });
+    let _ = services.store.flush_if_dirty();
+    Ok(ai_config_dto(&services.store.settings().ai))
+}
+
+/// Persist the language model reasons should be written in.
+#[tauri::command]
+pub fn set_ai_language(
+    services: State<'_, AppServices>,
+    language: String,
+) -> Result<AiConfigDto, String> {
+    let language = language.trim().to_string();
+    if language.is_empty() {
+        return Err("err.languageRequired".to_string());
+    }
+    services.store.update_settings(|settings| {
+        settings.ai.language = language.clone();
+    });
+    let _ = services.store.flush_if_dirty();
+    Ok(ai_config_dto(&services.store.settings().ai))
 }
 
 // ---- helpers ---------------------------------------------------------------
@@ -1145,29 +1324,40 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
     #[cfg(feature = "remote-ai")]
     {
         if ai.is_usable() {
-            // Prefer the environment variable; otherwise the token kept in
-            // the user's Keychain by the settings sheet.
-            let stored_key = ai.api_key_from_env().or_else(crate::credentials::token);
-            if let Some(api_key) = stored_key {
-                let config = sift_analyze::LlmConfig::new(
-                    ai.provider.clone(),
-                    normalize_endpoint_for(&ai.endpoint, &ai.provider),
-                    ai.model.clone(),
-                    api_key,
-                )
-                .with_consent()
-                .with_language(ai.language.clone())
-                .with_batch_size(ai.batch_size);
-                if let Ok(remote) = sift_analyze::OpenAiCompatibleAdjudicator::new(config) {
-                    return Box::new(sift_analyze::HabitAdjudicator::new(
-                        sift_analyze::RoutingAdjudicator::with_remote(
-                            RuleAdjudicator::new(),
-                            remote,
-                            sift_analyze::Guardrails::default(),
-                        ),
-                        services.store.decisions(),
-                        sift_analyze::HabitPolicy::default(),
-                    ));
+            if let Some(profile) = ai.active() {
+                // Prefer the environment variable; otherwise the token kept
+                // for this profile by the settings sheet.
+                let account = crate::credentials::account_for(&profile.id);
+                let stored_key = ai.api_key_from_env().or_else(|| {
+                    let mut result = crate::credentials::token_result(&account);
+                    if matches!(result, Ok(None)) && profile.id == "default" {
+                        result =
+                            crate::credentials::token_result(crate::credentials::legacy_account());
+                    }
+                    result.ok().flatten()
+                });
+                if let Some(api_key) = stored_key {
+                    let config = sift_analyze::LlmConfig::new(
+                        profile.provider.clone(),
+                        normalize_endpoint_for(&profile.endpoint, &profile.provider),
+                        profile.model.clone(),
+                        api_key,
+                    )
+                    .with_consent()
+                    .with_language(ai.language.clone())
+                    .with_batch_size(ai.batch_size)
+                    .with_protocol(protocol_for(profile));
+                    if let Ok(remote) = sift_analyze::OpenAiCompatibleAdjudicator::new(config) {
+                        return Box::new(sift_analyze::HabitAdjudicator::new(
+                            sift_analyze::RoutingAdjudicator::with_remote(
+                                RuleAdjudicator::new(),
+                                remote,
+                                sift_analyze::Guardrails::default(),
+                            ),
+                            services.store.decisions(),
+                            sift_analyze::HabitPolicy::default(),
+                        ));
+                    }
                 }
             }
         }

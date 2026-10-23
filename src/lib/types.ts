@@ -54,14 +54,24 @@ export interface AnalysisSummary {
 }
 
 /** AI provider configuration from the backend (never includes the token). */
-export interface AiConfig {
-  enabled: boolean;
+export interface AiProfile {
+  id: string;
+  name: string;
+  /** ark | deepseek | openai | anthropic | custom */
   provider: string;
   endpoint: string;
   model: string;
+  /** Whether this profile has a token (environment or stored). */
+  hasToken: boolean;
+}
+
+export interface AiConfig {
+  enabled: boolean;
+  activeProfile: string;
+  profiles: AiProfile[];
   language: string;
   batchSize: number;
-  /** Whether a token is stored in the Keychain / environment. */
+  /** Whether the active profile has a token. */
   hasToken: boolean;
 }
 
