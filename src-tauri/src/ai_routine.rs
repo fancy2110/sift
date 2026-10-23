@@ -1,6 +1,9 @@
 //! Turn a sentence into a routine draft with the configured model.
 //!
-//! The model only ever produces a *draft*: paths are re-validated here
+//! The model only ever produces *configuration*, never an action: it cannot
+//! run commands, rename files or delete anything. The user's home directory is
+//! substituted into the prompt so it can name absolute paths (no file contents
+//! or other paths are sent). Paths are re-validated here
 //! (absolute, existing directory, inside the home directory), the draft is
 //! shown to the user, and saving always starts in approve mode. Nothing is
 //! deleted from a model answer.
@@ -39,20 +42,29 @@ struct ModelReply {
     reason: String,
 }
 
-const SYSTEM: &str = r#"You convert one user request into one Sift routine configuration.
+/// Build the system prompt with the real home directory substituted, so the
+/// model returns absolute paths instead of guessing `~/` or `/Users/me`.
+fn system_prompt(home: &Path) -> String {
+    let home = home.display();
+    format!(
+        r#"You convert one user request into one Sift routine configuration.
+
+You only return configuration. You never execute commands, rename files, or modify anything.
 
 Output ONLY a single JSON object. No markdown fences, no explanation, no text before or after it, and no extra keys.
 
 Required keys:
 - "title": string, at most 40 characters.
 - "cadence": exactly one of "daily", "weekly", "monthly".
-- "paths": array of 1 to 5 directory paths that already exist in the user's home directory. Write them with a leading "~/" (the user's home), for example "~/Library/Caches". Prefer caches, logs, temporary files and build output. Never use "/", "~", or system paths.
+- "paths": array of 1 to 5 absolute directory paths that already exist under {home}. Prefer caches, logs, temporary files and build output. Never use "/", "{home}" itself, or system paths.
 - "reason": string, at most 120 characters, explaining why this is safe.
 
 Write "title" and "reason" in the same language as the user's request.
 
 The exact shape (values are placeholders):
-{"title":"...","cadence":"weekly","paths":["~/Library/..."],"reason":"..."}"#;
+{{"title":"...","cadence":"weekly","paths":["{home}/Library/..."],"reason":"..."}}"#
+    )
+}
 
 /// Extract the first JSON object from a model reply (which may add prose or
 /// code fences despite the instruction).
@@ -219,8 +231,10 @@ fn ai_routine_blocking(
         .with_protocol(crate::analyze::protocol_for(&profile));
         let client = sift_analyze::OpenAiCompatibleAdjudicator::new(config)
             .map_err(|error| format!("err.aiRequest|{error}"))?;
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("~"));
+        let system = system_prompt(&home);
         let reply = client
-            .complete(SYSTEM, &prompt)
+            .complete(&system, &prompt)
             .map_err(|error| map_client_error(&error.to_string(), &endpoint))?;
         parse_draft(&reply, &prompt)
     }
@@ -324,6 +338,15 @@ mod tests {
         assert!(!draft.paths.is_empty(), "no validated paths: {draft:?}");
         assert!(draft.cadence.starts_with("routine.cadence."));
         eprintln!("live draft: {draft:?}");
+    }
+
+    #[test]
+    fn the_prompt_injects_the_home_directory_and_forbids_actions() {
+        let home = dirs::home_dir().unwrap();
+        let prompt = system_prompt(&home);
+        assert!(prompt.contains(&home.display().to_string()));
+        assert!(prompt.contains("never execute commands"));
+        assert!(prompt.contains("\"cadence\""));
     }
 
     #[test]
