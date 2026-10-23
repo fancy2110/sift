@@ -444,4 +444,5 @@ export const zhTW: Record<string, string> = {
   'settings.aiPresetClaude': 'Claude',
   'err.aiProfileLimit': '設定數量已達上限（12）',
   'err.aiProfileMissing': '設定不存在',
+  'settings.aiPresetArkPlan': '火山方舟 Agent Plan',
 };
