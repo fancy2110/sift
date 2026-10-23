@@ -502,6 +502,11 @@ const zh: Record<string, string> = {
   'routines.removePath': '移除',
   'routines.saveTask': '保存定时任务',
   'routines.pathEmpty': '还没有添加目录',
+  'routines.tasksTitle': '定时任务',
+  'routines.ruleTab': '规则匹配',
+  'routines.ruleDesc': '按「目录 + 文件名正则」匹配，随每日定时清理执行，只进回收站。',
+  'routines.ruleBadge': '规则',
+  'routines.disabled': '已停用',
 };
 
 const en: Record<string, string> = {
@@ -965,6 +970,11 @@ const en: Record<string, string> = {
   'routines.removePath': 'Remove',
   'routines.saveTask': 'Save routine',
   'routines.pathEmpty': 'No directories yet',
+  'routines.tasksTitle': 'Scheduled tasks',
+  'routines.ruleTab': 'Rule',
+  'routines.ruleDesc': 'Match by directory + file-name regex as part of the daily schedule; files always go to the Trash.',
+  'routines.ruleBadge': 'Rule',
+  'routines.disabled': 'Disabled',
 };
 
 type ParamValue = string | number;

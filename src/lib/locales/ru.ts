@@ -489,4 +489,9 @@ export const ru: Record<string, string> = {
   'routines.removePath': 'Удалить',
   'routines.saveTask': 'Сохранить рутину',
   'routines.pathEmpty': 'Каталоги не добавлены',
+  'routines.tasksTitle': 'Регулярные задачи',
+  'routines.ruleTab': 'По правилу',
+  'routines.ruleDesc': 'Сопоставление по «каталог + регулярное выражение имени файла» в рамках ежедневного расписания; файлы перемещаются в Корзину.',
+  'routines.ruleBadge': 'Правило',
+  'routines.disabled': 'Отключено',
 };

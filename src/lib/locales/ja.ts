@@ -485,4 +485,9 @@ export const ja: Record<string, string> = {
   'routines.removePath': '削除',
   'routines.saveTask': '定時タスクを保存',
   'routines.pathEmpty': 'ディレクトリがありません',
+  'routines.tasksTitle': '定時タスク',
+  'routines.ruleTab': 'ルール一致',
+  'routines.ruleDesc': '「ディレクトリ + ファイル名の正規表現」で照合し、毎日の定期クリーンで実行されます。ファイルはゴミ箱へ移動します。',
+  'routines.ruleBadge': 'ルール',
+  'routines.disabled': '無効',
 };

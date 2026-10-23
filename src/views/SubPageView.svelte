@@ -1,7 +1,6 @@
 <script lang="ts">
   import Icon from '../lib/components/Icon.svelte';
   import LocationPicker from '../lib/components/LocationPicker.svelte';
-  import CleanupRulesPanel from '../lib/components/CleanupRulesPanel.svelte';
   import RoutineComposer from '../lib/components/RoutineComposer.svelte';
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
@@ -554,8 +553,8 @@
 
           <div class="rt-block">
             <div class="rt-block-head">
-              <h3 class="rt-block-title">{t('routines.saved')}</h3>
-              <span class="rt-count chip">{store.routines.length}</span>
+              <h3 class="rt-block-title">{t('routines.tasksTitle')}</h3>
+              <span class="rt-count chip">{store.routines.length + store.cleanupRules.length}</span>
               <RoutineComposer />
             </div>
             {#each store.routines as r, i (r.id)}
@@ -609,18 +608,65 @@
                   </button>
                 </div>
               </article>
-            {:else}
-              <p class="rt-empty">{t('routines.empty2')}</p>
             {/each}
+
+            {#each store.cleanupRules as rule (rule.id)}
+              <article class="rt-card">
+                <span class="rt-card-icon">
+                  <Icon name="filter" size={14} />
+                </span>
+                <div class="rt-card-body">
+                  <div class="rt-card-top">
+                    <p class="rt-card-name">{rule.name}</p>
+                    <span class="rt-chip">{t('routines.ruleBadge')}</span>
+                    {#if !rule.enabled}
+                      <span class="rt-chip">{t('routines.disabled')}</span>
+                    {/if}
+                  </div>
+                  <p class="rt-card-meta" title={`${rule.dir} · ${rule.pattern}`}>
+                    {rule.dir} · <code>{rule.pattern}</code>
+                    {#if rule.olderThanDays > 0}
+                      · {t('settings.ruleDays', [String(rule.olderThanDays)])}
+                    {/if}
+                  </p>
+                </div>
+                <div class="rt-card-actions">
+                  <button
+                    type="button"
+                    class="rt-btn"
+                    title={t('settings.ruleRun')}
+                    aria-label={t('settings.ruleRun')}
+                    onclick={() => store.runCleanupRule(rule)}
+                  >
+                    <Icon name="play" size={10.5} />
+                  </button>
+                  <button
+                    type="button"
+                    class="rt-btn"
+                    title={t('settings.toggleMode')}
+                    aria-label={t('settings.toggleMode')}
+                    onclick={() => store.toggleCleanupRule(rule)}
+                  >
+                    <Icon name="refresh" size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    class="rt-btn rt-btn-danger"
+                    title={t('settings.delete')}
+                    aria-label={t('settings.delete')}
+                    onclick={() => store.removeCleanupRule(rule.id)}
+                  >
+                    <Icon name="trash" size={12} />
+                  </button>
+                </div>
+              </article>
+            {/each}
+
+            {#if store.routines.length === 0 && store.cleanupRules.length === 0}
+              <p class="rt-empty">{t('routines.empty2')}</p>
+            {/if}
           </div>
 
-          <div class="rt-block">
-            <div class="rt-block-head">
-              <h3 class="rt-block-title">{t('settings.rulesTitle')}</h3>
-              <span class="rt-count chip">{store.cleanupRules.length}</span>
-            </div>
-            <CleanupRulesPanel />
-          </div>
         </div>
       </section>
 
