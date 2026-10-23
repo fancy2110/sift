@@ -15,7 +15,7 @@ import {
   aiRoutine as apiAiRoutine,
   getAiConfig,
   saveAiProfile,
-  saveAiRoutine as apiSaveAiRoutine,
+  saveRoutineDraft as apiSaveRoutineDraft,
   selectAiProfile,
   deleteAiProfile,
   setAiEnabled,
@@ -1260,9 +1260,13 @@ class AppStore {
     }
   }
 
-  async saveAiRoutine(draft: AiRoutineDraft): Promise<boolean> {
+  async saveRoutineDraft(draft: {
+    title: string;
+    cadence: string;
+    paths: string[];
+  }): Promise<boolean> {
     try {
-      await apiSaveAiRoutine(draft);
+      await apiSaveRoutineDraft(draft);
       await this.loadRoutines();
       this.toast(t('routines.aiSaved'));
       return true;

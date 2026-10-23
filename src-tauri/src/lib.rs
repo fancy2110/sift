@@ -111,7 +111,7 @@ pub fn run() {
             analyze::mark_path,
             analyze::ai_prompt,
             ai_routine::ai_routine,
-            ai_routine::save_ai_routine,
+            ai_routine::save_routine_draft,
             analyze::set_finding_dismissed,
             cleanup_rules::list_cleanup_rules,
             cleanup_rules::save_cleanup_rule,

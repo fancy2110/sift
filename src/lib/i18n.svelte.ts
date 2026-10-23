@@ -489,6 +489,19 @@ const zh: Record<string, string> = {
   'err.aiRoutineNoPaths': 'AI 没有给出可用的目录（必须存在、绝对路径、位于主目录内）',
   'err.aiRoutineTitle': '例行任务需要一个标题',
   'err.aiTimeout': '请求超时：模型思考时间较长或网络较慢，请重试（已等待 120 秒）。',
+  'routines.addTask': '添加定时任务',
+  'routines.manualTab': '手动输入',
+  'routines.aiTab': 'AI 输入',
+  'routines.titleLabel': '名称',
+  'routines.titlePh': '例如：清理 Xcode 构建缓存',
+  'routines.cadenceLabel': '周期',
+  'routines.pathsLabel': '目录',
+  'routines.pathPh': '输入绝对路径后回车',
+  'routines.pickPath': '选择目录',
+  'routines.addPath': '添加',
+  'routines.removePath': '移除',
+  'routines.saveTask': '保存定时任务',
+  'routines.pathEmpty': '还没有添加目录',
 };
 
 const en: Record<string, string> = {
@@ -939,6 +952,19 @@ const en: Record<string, string> = {
   'err.aiRoutineNoPaths': 'The model gave no usable directory (must exist, be absolute, inside the home directory)',
   'err.aiRoutineTitle': 'A routine needs a title',
   'err.aiTimeout': 'Request timed out: the model took too long or the network is slow. Try again (waited 120 s).',
+  'routines.addTask': 'Add routine',
+  'routines.manualTab': 'Manual',
+  'routines.aiTab': 'AI',
+  'routines.titleLabel': 'Name',
+  'routines.titlePh': 'e.g. Clean Xcode build caches',
+  'routines.cadenceLabel': 'Frequency',
+  'routines.pathsLabel': 'Directories',
+  'routines.pathPh': 'Type an absolute path and press Enter',
+  'routines.pickPath': 'Choose folder',
+  'routines.addPath': 'Add',
+  'routines.removePath': 'Remove',
+  'routines.saveTask': 'Save routine',
+  'routines.pathEmpty': 'No directories yet',
 };
 
 type ParamValue = string | number;
