@@ -885,11 +885,12 @@ export function createMockBackend(bus: EventBus): MockBackend {
                 ? (existing?.hasToken ?? false)
                 : draft.token !== ''
           };
+          const creating = !state.ai.profiles.some((item) => item.id === id);
           state.ai.profiles = [
             ...state.ai.profiles.filter((item) => item.id !== id),
             profile
           ];
-          if (!state.ai.activeProfile) state.ai.activeProfile = id;
+          if (creating) state.ai.activeProfile = id;
           resolve(mockAiConfig() as unknown as T);
           break;
         }

@@ -952,6 +952,7 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
             }
         };
         let api_key = stored_key.ok_or_else(|| "err.aiTokenRequired".to_string())?;
+        let plan_key = api_key.trim_start().to_ascii_lowercase().starts_with("ark-");
         let config = sift_analyze::LlmConfig::new(
             profile.provider.clone(),
             normalize_endpoint_for(&profile.endpoint, &profile.provider),
@@ -973,10 +974,18 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
                 // Almost always a key from a different provider: an ARK
                 // endpoint rejects a DeepSeek key and vice versa. Say which
                 // source won so an exported env var is not overlooked.
-                if from_env {
-                    "err.aiAuthEnv".to_string()
+                let endpoint =
+                    normalize_endpoint_for(&profile.endpoint, &profile.provider);
+                let platform_ark = endpoint.contains("ark.cn-beijing.volces.com/api/v3")
+                    && !endpoint.contains("/api/plan/");
+                if platform_ark && plan_key {
+                    // `ark-` keys are Agent Plan keys: the platform gateway
+                    // always rejects them, whatever the model.
+                    "err.aiArkPlanKey".to_string()
+                } else if from_env {
+                    format!("err.aiAuthEnv|{endpoint}")
                 } else {
-                    "err.aiAuthKeychain".to_string()
+                    format!("err.aiAuthKeychain|{endpoint}")
                 }
             } else {
                 format!("err.aiRequest|{text}")
@@ -1205,14 +1214,16 @@ pub fn save_ai_profile(
             model,
             api_key_env: String::new(),
         };
+        let creating = !ai.profiles.iter().any(|existing| existing.id == id);
         match ai.profiles.iter_mut().find(|existing| existing.id == id) {
             Some(existing) => *existing = updated,
-            None => {
-                if ai.active_profile.is_empty() || ai.profiles.is_empty() {
-                    ai.active_profile = id.clone();
-                }
-                ai.profiles.push(updated);
-            }
+            None => ai.profiles.push(updated),
+        }
+        // A just-added configuration is almost certainly the one the user
+        // wants to use; leaving an older profile active made "add" look like
+        // a no-op and kept requests on the previous endpoint.
+        if creating {
+            ai.active_profile = id.clone();
         }
     });
     let _ = services.store.flush_if_dirty();
