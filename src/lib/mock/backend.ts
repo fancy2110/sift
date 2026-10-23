@@ -717,6 +717,35 @@ export function createMockBackend(bus: EventBus): MockBackend {
         case 'list_history':
           resolve([...state.history].reverse() as unknown as T);
           break;
+        case 'ai_routine':
+          resolve(
+            {
+              title: '每周清理 Xcode 缓存',
+              cadence: 'cadence.weekly',
+              paths: ['/Users/you/Library/Developer/Xcode/DerivedData'],
+              reason: '（模拟）这里是 Xcode 的构建产物，可安全重建。'
+            } as unknown as T
+          );
+          break;
+        case 'save_ai_routine': {
+          const title = String(args.title ?? '');
+          const cadence = String(args.cadence ?? 'cadence.weekly');
+          const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
+          state.routines = [
+            ...state.routines,
+            {
+              id: `ai-${state.routines.length + 1}`,
+              title,
+              kind: 'customPath',
+              cadence,
+              averageBytes: 0,
+              mode: 'approve',
+              paths
+            }
+          ];
+          resolve(undefined as T);
+          break;
+        }
         case 'list_routines':
           resolve([...state.routines] as unknown as T);
           break;

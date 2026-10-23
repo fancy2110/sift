@@ -5,6 +5,7 @@
 //! `sift-*` crates. Nothing here contains product logic; it only registers
 //! commands and translates event vocabularies.
 
+mod ai_routine;
 mod analyze;
 mod cleanup;
 mod cleanup_rules;
@@ -109,6 +110,8 @@ pub fn run() {
             analyze::set_scheduled_cleanup,
             analyze::mark_path,
             analyze::ai_prompt,
+            ai_routine::ai_routine,
+            ai_routine::save_ai_routine,
             analyze::set_finding_dismissed,
             cleanup_rules::list_cleanup_rules,
             cleanup_rules::save_cleanup_rule,

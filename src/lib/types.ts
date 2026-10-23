@@ -87,6 +87,15 @@ export interface RoutineSuggestion {
   cadence: string;
 }
 
+/** A routine proposed by the model; saved only after the user confirms. */
+export interface AiRoutineDraft {
+  title: string;
+  /** cadence.daily | cadence.weekly | cadence.monthly */
+  cadence: string;
+  paths: string[];
+  reason: string;
+}
+
 /** One finished cleanup session from the backend timeline. */
 export interface HistoryEntry {
   id: string;

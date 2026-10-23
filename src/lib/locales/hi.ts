@@ -228,6 +228,7 @@ export const hi: Record<string, string> = {
   'common.back': 'वापस',
 
   'routine.cadence.weekly': 'साप्ताहिक',
+  'routine.cadence.daily': 'प्रतिदिन',
   'routine.cadence.monthly': 'मासिक',
   'routine.mode.auto': 'स्वतः',
   'routine.mode.approve': 'स्वीकृति',
@@ -451,4 +452,14 @@ export const hi: Record<string, string> = {
   'err.aiProfileLimit': 'कॉन्फ़िगरेशन सीमा (12) पूरी',
   'err.aiProfileMissing': 'कॉन्फ़िगरेशन नहीं मिला',
   'settings.aiPresetArkPlan': 'ARK Agent Plan',
+  'routines.aiTitle': 'AI से नियमित कार्य बनाएँ',
+  'routines.aiDesc': 'बताएँ कि नियमित रूप से क्या साफ़ करना है; AI एक मसौदा बनाएगा। सहेजने से पहले पथ जाँचें - हटाने के लिए अभी भी पुष्टि चाहिए।',
+  'routines.aiPlaceholder': 'उदा.: हर हफ़्ते Xcode बिल्ड कैश साफ़ करें',
+  'routines.aiGenerate': 'बनाएँ',
+  'routines.aiSave': 'नियमित कार्य के रूप में सहेजें',
+  'routines.aiDiscard': 'छोड़ें',
+  'routines.aiSaved': 'नियमित कार्य के रूप में सहेजा गया',
+  'err.aiRoutineParse': 'AI उत्तर पढ़ा नहीं जा सका; दूसरे शब्दों में फिर कोशिश करें',
+  'err.aiRoutineNoPaths': 'AI ने कोई उपयोगी निर्देशिका नहीं दी (मौजूद, निरपेक्ष, होम के अंदर होनी चाहिए)',
+  'err.aiRoutineTitle': 'नियमित कार्य के लिए शीर्षक आवश्यक है',
 };

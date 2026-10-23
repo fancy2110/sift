@@ -256,6 +256,7 @@ const zh: Record<string, string> = {
 
 
   'routine.cadence.weekly': '每周',
+  'routine.cadence.daily': '每天',
   'routine.cadence.monthly': '每月',
   'routine.mode.auto': '自动',
   'routine.mode.approve': '确认',
@@ -477,6 +478,16 @@ const zh: Record<string, string> = {
   'err.aiProfileLimit': '配置数量已达上限（12）',
   'err.aiProfileMissing': '配置不存在',
   'settings.aiPresetArkPlan': '火山方舟 Agent Plan',
+  'routines.aiTitle': '用 AI 创建例行任务',
+  'routines.aiDesc': '描述想定期清理什么，AI 会给出草稿；保存前可确认路径，保存后仍需手动确认才会删除。',
+  'routines.aiPlaceholder': '例如：每周清理 Xcode 的构建缓存',
+  'routines.aiGenerate': '生成',
+  'routines.aiSave': '保存为例行任务',
+  'routines.aiDiscard': '放弃',
+  'routines.aiSaved': '已保存为例行任务',
+  'err.aiRoutineParse': 'AI 返回的内容无法解析，请换个说法重试',
+  'err.aiRoutineNoPaths': 'AI 没有给出可用的目录（必须存在、绝对路径、位于主目录内）',
+  'err.aiRoutineTitle': '例行任务需要一个标题',
 };
 
 const en: Record<string, string> = {
@@ -694,6 +705,7 @@ const en: Record<string, string> = {
 
 
   'routine.cadence.weekly': 'Weekly',
+  'routine.cadence.daily': 'Daily',
   'routine.cadence.monthly': 'Monthly',
   'routine.mode.auto': 'Auto',
   'routine.mode.approve': 'Approve',
@@ -915,6 +927,16 @@ const en: Record<string, string> = {
   'err.aiProfileLimit': 'Too many configurations (12 max)',
   'err.aiProfileMissing': 'Configuration not found',
   'settings.aiPresetArkPlan': 'ARK Agent Plan',
+  'routines.aiTitle': 'Create a routine with AI',
+  'routines.aiDesc': 'Describe what to clean regularly; the model drafts a routine. Review the paths before saving - deletion still needs a confirmation.',
+  'routines.aiPlaceholder': 'e.g. Clean Xcode build caches every week',
+  'routines.aiGenerate': 'Generate',
+  'routines.aiSave': 'Save as routine',
+  'routines.aiDiscard': 'Discard',
+  'routines.aiSaved': 'Saved as a routine',
+  'err.aiRoutineParse': 'The model reply could not be parsed; try rephrasing',
+  'err.aiRoutineNoPaths': 'The model gave no usable directory (must exist, be absolute, inside the home directory)',
+  'err.aiRoutineTitle': 'A routine needs a title',
 };
 
 type ParamValue = string | number;

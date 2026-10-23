@@ -235,6 +235,7 @@ export const ja: Record<string, string> = {
   'common.back': '戻る',
 
   'routine.cadence.weekly': '毎週',
+  'routine.cadence.daily': '毎日',
   'routine.cadence.monthly': '毎月',
   'routine.mode.auto': '自動',
   'routine.mode.approve': '確認',
@@ -460,4 +461,14 @@ export const ja: Record<string, string> = {
   'err.aiProfileLimit': '構成が上限（12）に達しました',
   'err.aiProfileMissing': '構成が見つかりません',
   'settings.aiPresetArkPlan': '火山方舟 Agent Plan',
+  'routines.aiTitle': 'AI で例行タスクを作成',
+  'routines.aiDesc': '定期的に何を整理したいか記述してください。AI が草稿を作ります。保存前にパスを確認でき、削除には引き続き確認が必要です。',
+  'routines.aiPlaceholder': '例：毎週 Xcode のビルドキャッシュを削除',
+  'routines.aiGenerate': '生成',
+  'routines.aiSave': '例行タスクとして保存',
+  'routines.aiDiscard': '破棄',
+  'routines.aiSaved': '例行タスクとして保存しました',
+  'err.aiRoutineParse': 'AI の応答を解析できませんでした。言い換えて再試行してください',
+  'err.aiRoutineNoPaths': 'AI が使用可能なディレクトリを提示しませんでした（存在する絶対パスでホーム内である必要があります）',
+  'err.aiRoutineTitle': '例行タスクにはタイトルが必要です',
 };

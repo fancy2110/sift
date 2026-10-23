@@ -4,8 +4,8 @@
   import CleanupRulesPanel from '../lib/components/CleanupRulesPanel.svelte';
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
-  import type { Node } from '../lib/types';
-  type SubTab = 'smart' | 'explorer' | 'history' | 'routines' | 'prompt';
+  import type { AiRoutineDraft, Node } from '../lib/types';
+  type SubTab = 'smart' | 'explorer' | 'history' | 'routines';
   import { onMount } from 'svelte';
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
@@ -124,52 +124,47 @@
     };
   }
 
-  // The assistant tab only exists when a usable AI endpoint is configured;
-  // the pager width and offsets follow the live tab count.
-  const aiReady = $derived(
-    store.aiConfig?.enabled === true && store.aiConfig?.hasToken === true
-  );
-
-  const TABS = $derived<[SubTab, string, string][]>([
+  const TABS: [SubTab, string, string][] = [
     ['smart', 'spark', t('sub.tab.smart')],
     ['explorer', 'layers', t('sub.tab.explorer')],
     ['history', 'clock', t('sub.tab.history')],
-    ['routines', 'routine', t('sub.tab.routines')],
-    ...(aiReady
-      ? ([['prompt', 'brain', t('sub.tab.prompt')]] as [SubTab, string, string][])
-      : [])
-  ]);
-  const tabIndex = $derived(
-    Object.fromEntries(TABS.map(([id], index) => [id, index])) as Record<
-      SubTab,
-      number
-    >
-  );
+    ['routines', 'routine', t('sub.tab.routines')]
+  ];
+  const tabIndex: Record<SubTab, number> = {
+    smart: 0,
+    explorer: 1,
+    history: 2,
+    routines: 3
+  };
   const panelWidth = $derived(100 / TABS.length);
-  const pagerOffset = $derived((tabIndex[store.subTab] ?? 0) * panelWidth);
+  const pagerOffset = $derived(tabIndex[store.subTab] * panelWidth);
 
-  $effect(() => {
-    if (!aiReady && store.subTab === 'prompt') store.setSubTab('smart');
-  });
+  // ---- AI routine draft ----
+  let routinePrompt = $state('');
+  let routineDraft = $state<AiRoutineDraft | null>(null);
+  let routineBusy = $state(false);
 
-  // ---- assistant ----
-  let promptText = $state('');
-  let promptAnswer = $state('');
-  let promptError = $state('');
-  let promptBusy = $state(false);
+  /** Stored cadences were once `cadence.weekly`; map them to the dict keys. */
+  function cadenceLabel(cadence: string) {
+    return t(cadence.startsWith('routine.') ? cadence : `routine.${cadence}`);
+  }
 
-  async function sendPrompt() {
-    const text = promptText.trim();
-    if (!text || promptBusy) return;
-    promptBusy = true;
-    promptError = '';
-    promptAnswer = '';
-    try {
-      promptAnswer = await store.askAi(text);
-    } catch (error) {
-      promptError = tr(String(error));
-    } finally {
-      promptBusy = false;
+  async function generateRoutine() {
+    const text = routinePrompt.trim();
+    if (!text || routineBusy) return;
+    routineBusy = true;
+    routineDraft = await store.generateAiRoutine(text);
+    routineBusy = false;
+  }
+
+  async function saveDraft() {
+    if (!routineDraft || routineBusy) return;
+    routineBusy = true;
+    const saved = await store.saveAiRoutine($state.snapshot(routineDraft));
+    routineBusy = false;
+    if (saved) {
+      routineDraft = null;
+      routinePrompt = '';
     }
   }
 
@@ -598,7 +593,7 @@
                     </span>
                   </div>
                   <p class="rt-card-meta num">
-                    {t(r.cadence)} · ≈{formatSize(r.averageBytes)}
+                    {cadenceLabel(r.cadence)} · ≈{formatSize(r.averageBytes)}
                   </p>
                   {#if r.paths.length}
                     <p class="rt-card-path" title={r.paths.join(', ')}>{r.paths[0]}</p>
@@ -643,6 +638,69 @@
 
           <div class="rt-block">
             <div class="rt-block-head">
+              <h3 class="rt-block-title">{t('routines.aiTitle')}</h3>
+              <span class="rt-count chip"><Icon name="spark" size={10} /></span>
+            </div>
+            <p class="rt-ai-desc">{t('routines.aiDesc')}</p>
+            <div class="rt-ai-input">
+              <textarea
+                rows="2"
+                bind:value={routinePrompt}
+                placeholder={t('routines.aiPlaceholder')}
+                onkeydown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    void generateRoutine();
+                  }
+                }}
+              ></textarea>
+              <button
+                type="button"
+                class="rt-btn rt-btn-primary"
+                disabled={routineBusy || routinePrompt.trim() === ''}
+                onclick={() => void generateRoutine()}
+              >
+                <Icon name="spark" size={11} />
+                {routineBusy ? t('prompt.thinking') : t('routines.aiGenerate')}
+              </button>
+            </div>
+
+            {#if routineDraft}
+              <article class="rt-card rt-ai-draft">
+                <span class="rt-card-icon rt-card-icon-on">
+                  <Icon name="spark" size={14} />
+                </span>
+                <div class="rt-card-body">
+                  <div class="rt-card-top">
+                    <p class="rt-card-name">{routineDraft.title}</p>
+                    <span class="rt-chip rt-chip-on">{cadenceLabel(routineDraft.cadence)}</span>
+                  </div>
+                  {#each routineDraft.paths as path (path)}
+                    <p class="rt-card-path" title={path}>{path}</p>
+                  {/each}
+                  {#if routineDraft.reason}
+                    <p class="rt-card-reason">{routineDraft.reason}</p>
+                  {/if}
+                </div>
+                <div class="rt-card-actions">
+                  <button
+                    type="button"
+                    class="rt-btn rt-btn-primary"
+                    disabled={routineBusy}
+                    onclick={saveDraft}
+                  >
+                    <Icon name="check" size={11} stroke={2.2} /> {t('routines.aiSave')}
+                  </button>
+                  <button type="button" class="rt-btn" onclick={() => (routineDraft = null)}>
+                    {t('routines.aiDiscard')}
+                  </button>
+                </div>
+              </article>
+            {/if}
+          </div>
+
+          <div class="rt-block">
+            <div class="rt-block-head">
               <h3 class="rt-block-title">{t('settings.rulesTitle')}</h3>
               <span class="rt-count chip">{store.cleanupRules.length}</span>
             </div>
@@ -651,49 +709,6 @@
         </div>
       </section>
 
-      {#if aiReady}
-        <section class="pager-panel" role="tabpanel" style="width:{panelWidth}%">
-          <div class="prompt-pane">
-            <div class="prompt-scroll">
-              <p class="prompt-title">{t('prompt.title')}</p>
-              <p class="prompt-note">{t('prompt.note')}</p>
-
-              {#if promptError}
-                <p class="prompt-error">{t('prompt.error', [promptError])}</p>
-              {:else if promptBusy}
-                <p class="prompt-hint">{t('prompt.thinking')}</p>
-              {:else if promptAnswer}
-                <div class="prompt-answer">{promptAnswer}</div>
-              {:else}
-                <p class="prompt-hint">{t('prompt.empty')}</p>
-              {/if}
-            </div>
-
-            <div class="prompt-composer">
-              <textarea
-                bind:value={promptText}
-                rows="3"
-                placeholder={t('prompt.placeholder')}
-                onkeydown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    void sendPrompt();
-                  }
-                }}
-              ></textarea>
-              <button
-                type="button"
-                class="btn btn-sm prompt-send"
-                disabled={promptBusy || promptText.trim() === ''}
-                onclick={() => void sendPrompt()}
-              >
-                <Icon name="spark" size={12} />
-                {promptBusy ? t('prompt.thinking') : t('prompt.send')}
-              </button>
-            </div>
-          </div>
-        </section>
-      {/if}
     </div>
   </div>
 
@@ -1590,86 +1605,43 @@
     color: var(--color-faint);
   }
 
-  /* assistant */
-  .prompt-pane {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 22px 26px 18px;
-    min-height: 0;
-  }
-  .prompt-scroll {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-  }
-  .prompt-title {
-    margin: 0 0 4px;
-    font-size: 15px;
-    font-weight: 650;
-  }
-  .prompt-note {
-    margin: 0 0 18px;
-    font-size: 11.5px;
+
+  .rt-ai-desc {
+    margin: 0 0 8px;
+    font-size: 11px;
     color: var(--color-faint);
+    line-height: 1.5;
   }
-  .prompt-hint {
-    margin: 0;
-    font-size: 12px;
-    color: var(--color-faint);
-  }
-  .prompt-answer {
-    margin: 0;
-    padding: 14px 16px;
-    border-radius: 12px;
-    border: 1px solid var(--color-border);
-    background: color-mix(in oklch, var(--color-surface-2) 55%, transparent);
-    font-size: 13px;
-    line-height: 1.7;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-  .prompt-error {
-    margin: 0;
-    padding: 12px 14px;
-    border-radius: 10px;
-    border: 1px solid color-mix(in oklch, var(--color-warn) 45%, transparent);
-    background: color-mix(in oklch, var(--color-warn) 10%, transparent);
-    color: var(--color-warn);
-    font-size: 12px;
-    white-space: pre-wrap;
-  }
-  .prompt-composer {
+  .rt-ai-input {
     display: flex;
     align-items: flex-end;
-    gap: 10px;
-    flex: none;
+    gap: 8px;
   }
-  .prompt-composer textarea {
+  .rt-ai-input textarea {
     flex: 1;
-    min-height: 64px;
-    max-height: 160px;
+    min-height: 52px;
+    max-height: 140px;
     resize: vertical;
-    padding: 10px 12px;
-    border-radius: 11px;
+    padding: 8px 10px;
+    border-radius: 10px;
     border: 1px solid var(--color-border);
     background: var(--color-surface);
     color: var(--color-fg);
     font-family: inherit;
-    font-size: 12.5px;
+    font-size: 11.5px;
     line-height: 1.5;
     outline: none;
   }
-  .prompt-composer textarea:focus {
+  .rt-ai-input textarea:focus {
     border-color: var(--color-violet);
     box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
   }
-  .prompt-send {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 34px;
+  .rt-ai-draft {
+    margin-top: 10px;
+    border-color: color-mix(in oklch, var(--color-violet) 35%, var(--color-border));
+  }
+  .rt-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
 </style>

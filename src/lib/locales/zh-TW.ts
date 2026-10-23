@@ -225,6 +225,7 @@ export const zhTW: Record<string, string> = {
   'common.back': '返回',
 
   'routine.cadence.weekly': '每週',
+  'routine.cadence.daily': '每天',
   'routine.cadence.monthly': '每月',
   'routine.mode.auto': '自動',
   'routine.mode.approve': '確認',
@@ -446,4 +447,14 @@ export const zhTW: Record<string, string> = {
   'err.aiProfileLimit': '設定數量已達上限（12）',
   'err.aiProfileMissing': '設定不存在',
   'settings.aiPresetArkPlan': '火山方舟 Agent Plan',
+  'routines.aiTitle': '用 AI 建立例行任務',
+  'routines.aiDesc': '描述想定期清理什麼，AI 會給出草稿；儲存前可確認路徑，儲存後仍需手動確認才會刪除。',
+  'routines.aiPlaceholder': '例如：每週清理 Xcode 的建置快取',
+  'routines.aiGenerate': '產生',
+  'routines.aiSave': '儲存為例行任務',
+  'routines.aiDiscard': '放棄',
+  'routines.aiSaved': '已儲存為例行任務',
+  'err.aiRoutineParse': 'AI 傳回的內容無法解析，請換個說法重試',
+  'err.aiRoutineNoPaths': 'AI 沒有給出可用的目錄（必須存在、絕對路徑、位於主目錄內）',
+  'err.aiRoutineTitle': '例行任務需要一個標題',
 };

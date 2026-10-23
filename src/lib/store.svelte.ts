@@ -12,8 +12,10 @@ import {
   deleteCleanupRule as apiDeleteCleanupRule,
   previewCleanupRule as apiPreviewCleanupRule,
   runCleanupRule as apiRunCleanupRule,
+  aiRoutine as apiAiRoutine,
   getAiConfig,
   saveAiProfile,
+  saveAiRoutine as apiSaveAiRoutine,
   selectAiProfile,
   deleteAiProfile,
   setAiEnabled,
@@ -58,6 +60,7 @@ import { findSurvivingAncestor, prunedSizeDeltas } from './tree-prune';
 import type {
   AiConfig,
   AiProfile,
+  AiRoutineDraft,
   Finding,
   HistoryEntry,
   MonitorStatus as MonitorStatusInfo,
@@ -86,7 +89,7 @@ export interface Toast {
 class AppStore {
   // ---- hub navigation ----
   view = $state<'home' | 'dashboard' | 'sub'>('home');
-  subTab = $state<'smart' | 'explorer' | 'history' | 'routines' | 'prompt'>('smart');
+  subTab = $state<'smart' | 'explorer' | 'history' | 'routines'>('smart');
   settingsOpen = $state(false);
   /** AI provider configuration behind the settings sheet. */
   aiConfig = $state<AiConfig | null>(null);
@@ -518,12 +521,12 @@ class AppStore {
     this.view = 'home';
   }
 
-  goSub(tab: 'smart' | 'explorer' | 'history' | 'routines' | 'prompt' = 'smart') {
+  goSub(tab: 'smart' | 'explorer' | 'history' | 'routines' = 'smart') {
     this.subTab = tab;
     this.view = 'sub';
   }
 
-  setSubTab(tab: 'smart' | 'explorer' | 'history' | 'routines' | 'prompt') {
+  setSubTab(tab: 'smart' | 'explorer' | 'history' | 'routines') {
     this.subTab = tab;
   }
 
@@ -1245,6 +1248,27 @@ class AppStore {
       this.routines = await listRoutines();
     } catch {
       // Routines are best-effort.
+    }
+  }
+
+  async generateAiRoutine(prompt: string): Promise<AiRoutineDraft | null> {
+    try {
+      return await apiAiRoutine(prompt);
+    } catch (error) {
+      this.toastError(tr(String(error)));
+      return null;
+    }
+  }
+
+  async saveAiRoutine(draft: AiRoutineDraft): Promise<boolean> {
+    try {
+      await apiSaveAiRoutine(draft);
+      await this.loadRoutines();
+      this.toast(t('routines.aiSaved'));
+      return true;
+    } catch (error) {
+      this.toastError(tr(String(error)));
+      return false;
     }
   }
 
