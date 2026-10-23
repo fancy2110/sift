@@ -7,11 +7,11 @@
 //! the token in the user's **macOS Keychain** (generic password, service
 //! `Sift`), where it is encrypted at rest and never lands in `settings.json`.
 //!
-//! On macOS a user-private (`0600`) file is also written when the Keychain
-//! cannot store or read the item: a locally built binary is re-signed on every
-//! rebuild, which invalidates the item's ACL (`errSecAuthFailed`). The file is
-//! consulted only when the Keychain fails, and cleared when the Keychain write
-//! succeeds or the token is deleted.
+//! On macOS the token is also mirrored to a user-private (`0600`) file: a
+//! locally built binary is re-signed on every rebuild, which invalidates the
+//! Keychain item's ACL (`errSecAuthFailed`) and would otherwise force a fresh
+//! save after each build. The Keychain stays the primary store and the file is
+//! consulted only when it fails; deleting the token clears both.
 //!
 //! Other platforms use the same user-private (`0600`) file; that path exists
 //! so the crate compiles and stays usable off macOS, not as a security equal.
@@ -228,13 +228,14 @@ mod imp {
             Ok(())
         })();
 
-        match keychain {
-            Ok(()) => {
-                clear_fallback();
-                Ok(())
+        // Mirror the token for rebuilds whose signature no longer matches the
+        // Keychain ACL; the Keychain result is ignored as long as one store
+        // succeeded.
+        match (keychain, write_fallback(token)) {
+            (Ok(()), _) | (Err(_), Ok(())) => Ok(()),
+            (Err(error), Err(fallback)) => {
+                Err(format!("{error}; fallback write failed: {fallback}"))
             }
-            Err(error) => write_fallback(token)
-                .map_err(|fallback| format!("{error}; fallback write failed: {fallback}")),
         }
     }
 
