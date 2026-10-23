@@ -490,4 +490,5 @@ export const ja: Record<string, string> = {
   'routines.ruleDesc': '「ディレクトリ + ファイル名の正規表現」で照合し、毎日の定期クリーンで実行されます。ファイルはゴミ箱へ移動します。',
   'routines.ruleBadge': 'ルール',
   'routines.disabled': '無効',
+  'routines.optional': '任意',
 };

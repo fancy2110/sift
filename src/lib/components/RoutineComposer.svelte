@@ -11,7 +11,7 @@
   import type { AiRoutineDraft } from '../types';
 
   let open = $state(false);
-  let mode = $state<'manual' | 'rule' | 'ai'>('manual');
+  let mode = $state<'manual' | 'ai'>('manual');
   let busy = $state(false);
 
   let title = $state('');
@@ -19,11 +19,9 @@
   let pathInput = $state('');
   let manualPaths = $state<string[]>([]);
 
-  // rule mode
-  let ruleName = $state('');
-  let ruleDir = $state('');
-  let rulePattern = $state('');
-  let ruleDays = $state(0);
+  // Optional rule filter on top of the same form.
+  let pattern = $state('');
+  let olderThanDays = $state(0);
 
   let prompt = $state('');
   let draft = $state<AiRoutineDraft | null>(null);
@@ -50,10 +48,8 @@
     cadence = 'routine.cadence.weekly';
     pathInput = '';
     manualPaths = [];
-    ruleName = '';
-    ruleDir = '';
-    rulePattern = '';
-    ruleDays = 0;
+    pattern = '';
+    olderThanDays = 0;
     prompt = '';
     draft = null;
     open = true;
@@ -79,29 +75,32 @@
     }
   }
 
+  /** With a pattern the entry becomes a rule (daily, directory + regex);
+   *  without one it is a path routine with the chosen cadence. */
+  async function persist(
+    titleValue: string,
+    cadenceValue: string,
+    paths: string[],
+    patternValue = pattern,
+    daysValue = olderThanDays
+  ) {
+    if (patternValue.trim()) {
+      return store.saveCleanupRuleDraft({
+        id: '',
+        name: titleValue,
+        dir: paths[0],
+        pattern: patternValue.trim(),
+        olderThanDays: daysValue,
+        enabled: true
+      });
+    }
+    return store.saveRoutineDraft({ title: titleValue, cadence: cadenceValue, paths });
+  }
+
   async function saveManual() {
     if (busy || !title.trim() || manualPaths.length === 0) return;
     busy = true;
-    const saved = await store.saveRoutineDraft({
-      title: title.trim(),
-      cadence,
-      paths: manualPaths
-    });
-    busy = false;
-    if (saved) open = false;
-  }
-
-  async function saveRule() {
-    if (busy || !ruleDir.trim() || !rulePattern.trim()) return;
-    busy = true;
-    const saved = await store.saveCleanupRuleDraft({
-      id: '',
-      name: ruleName.trim() || ruleDir.trim(),
-      dir: ruleDir.trim(),
-      pattern: rulePattern.trim(),
-      olderThanDays: ruleDays,
-      enabled: true
-    });
+    const saved = await persist(title.trim(), cadence, manualPaths);
     busy = false;
     if (saved) open = false;
   }
@@ -117,11 +116,13 @@
   async function saveDraft() {
     if (!draft || busy) return;
     busy = true;
-    const saved = await store.saveRoutineDraft({
-      title: draft.title,
-      cadence: draft.cadence,
-      paths: draft.paths
-    });
+    const saved = await persist(
+      draft.title,
+      draft.cadence,
+      draft.paths,
+      draft.pattern,
+      draft.olderThanDays
+    );
     busy = false;
     if (saved) open = false;
   }
@@ -163,17 +164,6 @@
         <button
           type="button"
           role="tab"
-          aria-selected={mode === 'rule'}
-          class="rc-tab"
-          class:rc-tab-on={mode === 'rule'}
-          onclick={() => (mode = 'rule')}
-        >
-          <Icon name="filter" size={11} />
-          {t('routines.ruleTab')}
-        </button>
-        <button
-          type="button"
-          role="tab"
           aria-selected={mode === 'ai'}
           class="rc-tab"
           class:rc-tab-on={mode === 'ai'}
@@ -197,6 +187,15 @@
             <option value="routine.cadence.weekly">{t('routine.cadence.weekly')}</option>
             <option value="routine.cadence.monthly">{t('routine.cadence.monthly')}</option>
           </select>
+        </label>
+
+        <label class="rc-field">
+          <span>{t('settings.rulePattern')} — {t('routines.optional')}</span>
+          <input class="rc-input" bind:value={pattern} placeholder={t('settings.rulePatternPh')} spellcheck="false" />
+        </label>
+        <label class="rc-field rc-field-inline">
+          <span>{t('settings.ruleDaysLabel')}</span>
+          <input type="number" min="0" max="3650" bind:value={olderThanDays} />
         </label>
 
         <p class="rc-label">{t('routines.pathsLabel')}</p>
@@ -251,37 +250,6 @@
             {t('routines.saveTask')}
           </button>
         </div>
-      {:else if mode === 'rule'}
-        <p class="rc-desc">{t('routines.ruleDesc')}</p>
-        <label class="rc-field">
-          <span>{t('settings.ruleName')}</span>
-          <input class="rc-input" bind:value={ruleName} placeholder={t('settings.ruleNamePh')} />
-        </label>
-        <label class="rc-field">
-          <span>{t('settings.ruleDir')}</span>
-          <input class="rc-input" bind:value={ruleDir} placeholder={t('settings.ruleDirPh')} spellcheck="false" />
-        </label>
-        <label class="rc-field">
-          <span>{t('settings.rulePattern')}</span>
-          <input class="rc-input" bind:value={rulePattern} placeholder={t('settings.rulePatternPh')} spellcheck="false" />
-        </label>
-        <label class="rc-field rc-field-inline">
-          <span>{t('settings.ruleDaysLabel')}</span>
-          <input type="number" min="0" max="3650" bind:value={ruleDays} />
-        </label>
-        <div class="rc-actions">
-          <button type="button" class="rc-btn" onclick={close}>
-            {t('settings.ruleCancel')}
-          </button>
-          <button
-            type="button"
-            class="rc-btn rc-primary"
-            disabled={busy || !ruleDir.trim() || !rulePattern.trim()}
-            onclick={saveRule}
-          >
-            {t('routines.saveTask')}
-          </button>
-        </div>
       {:else}
         <p class="rc-desc">{t('routines.aiDesc')}</p>
         <textarea
@@ -317,6 +285,14 @@
             {#each draft.paths as path (path)}
               <p class="rc-draft-path" title={path}>{path}</p>
             {/each}
+            {#if draft.pattern}
+              <p class="rc-draft-path" title={draft.pattern}>
+                <code>{draft.pattern}</code>
+                {#if draft.olderThanDays > 0}
+                  · {t('settings.ruleDays', [String(draft.olderThanDays)])}
+                {/if}
+              </p>
+            {/if}
             {#if draft.reason}
               <p class="rc-draft-reason">{draft.reason}</p>
             {/if}
@@ -406,7 +382,7 @@
   }
   .rc-tabs {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: 1fr 1fr;
     gap: 3px;
     padding: 3px;
     border-radius: 10px;

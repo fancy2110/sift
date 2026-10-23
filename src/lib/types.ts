@@ -94,6 +94,10 @@ export interface AiRoutineDraft {
   cadence: string;
   paths: string[];
   reason: string;
+  /** Optional file-name regex; empty means every file under the paths. */
+  pattern: string;
+  /** Only meaningful with a pattern; 0 = any age. */
+  olderThanDays: number;
 }
 
 /** One finished cleanup session from the backend timeline. */

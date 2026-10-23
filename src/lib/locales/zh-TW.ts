@@ -476,4 +476,5 @@ export const zhTW: Record<string, string> = {
   'routines.ruleDesc': '依「目錄 + 檔名正規表示式」比對，隨每日定時清理執行，僅進資源回收筒。',
   'routines.ruleBadge': '規則',
   'routines.disabled': '已停用',
+  'routines.optional': '選填',
 };

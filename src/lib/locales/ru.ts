@@ -494,4 +494,5 @@ export const ru: Record<string, string> = {
   'routines.ruleDesc': 'Сопоставление по «каталог + регулярное выражение имени файла» в рамках ежедневного расписания; файлы перемещаются в Корзину.',
   'routines.ruleBadge': 'Правило',
   'routines.disabled': 'Отключено',
+  'routines.optional': 'Необязательно',
 };

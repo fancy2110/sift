@@ -481,4 +481,5 @@ export const hi: Record<string, string> = {
   'routines.ruleDesc': '"निर्देशिका + फ़ाइल नाम रेगेक्स" से मिलान; दैनिक शेड्यूल के साथ चलता है और फ़ाइलें ट्रैश में जाती हैं।',
   'routines.ruleBadge': 'नियम',
   'routines.disabled': 'अक्षम',
+  'routines.optional': 'वैकल्पिक',
 };
