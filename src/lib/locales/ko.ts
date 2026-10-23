@@ -358,6 +358,7 @@ export const ko: Record<string, string> = {
   'settings.aiPreset': '빠른 프리셋',
   'settings.aiPresetArk': 'Volcano Ark',
   'settings.aiPresetOpenai': 'OpenAI',
+  'settings.aiPresetDeepseek': 'DeepSeek',
   'settings.aiEndpoint': '엔드포인트 URL',
   'settings.aiEndpointPh': 'https://api.openai.com/v1/chat/completions',
   'settings.aiModel': '모델',

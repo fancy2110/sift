@@ -372,6 +372,7 @@ export const hi: Record<string, string> = {
   'settings.aiPreset': 'त्वरित प्रीसेट',
   'settings.aiPresetArk': 'Volcano Ark',
   'settings.aiPresetOpenai': 'OpenAI',
+  'settings.aiPresetDeepseek': 'DeepSeek',
   'settings.aiEndpoint': 'Endpoint URL',
   'settings.aiEndpointPh': 'https://api.openai.com/v1/chat/completions',
   'settings.aiModel': 'मॉडल',

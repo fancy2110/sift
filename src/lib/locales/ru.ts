@@ -385,6 +385,7 @@ export const ru: Record<string, string> = {
   'settings.aiPreset': 'Быстрые пресеты',
   'settings.aiPresetArk': 'Volcano Ark',
   'settings.aiPresetOpenai': 'OpenAI',
+  'settings.aiPresetDeepseek': 'DeepSeek',
   'settings.aiEndpoint': 'URL эндпоинта',
   'settings.aiEndpointPh': 'https://api.openai.com/v1/chat/completions',
   'settings.aiModel': 'Модель',

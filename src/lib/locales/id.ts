@@ -389,6 +389,7 @@ export const id: Record<string, string> = {
   'settings.aiPreset': 'Preset cepat',
   'settings.aiPresetArk': 'Volcano Ark',
   'settings.aiPresetOpenai': 'OpenAI',
+  'settings.aiPresetDeepseek': 'DeepSeek',
   'settings.aiEndpoint': 'URL endpoint',
   'settings.aiEndpointPh': 'https://api.openai.com/v1/chat/completions',
   'settings.aiModel': 'Model',
