@@ -238,6 +238,7 @@ export const ru: Record<string, string> = {
   'common.back': 'Назад',
 
   'routine.cadence.weekly': 'Еженедельно',
+  'routine.cadence.daily': 'Ежедневно',
   'routine.cadence.monthly': 'Ежемесячно',
   'routine.mode.auto': 'Авто',
   'routine.mode.approve': 'Подтверждение',
@@ -464,4 +465,14 @@ export const ru: Record<string, string> = {
   'err.aiProfileLimit': 'Достигнут лимит конфигураций (12)',
   'err.aiProfileMissing': 'Конфигурация не найдена',
   'settings.aiPresetArkPlan': 'ARK Agent Plan',
+  'routines.aiTitle': 'Создать рутину с помощью AI',
+  'routines.aiDesc': 'Опишите, что нужно регулярно очищать; модель подготовит черновик. Проверьте пути перед сохранением — удаление по-прежнему требует подтверждения.',
+  'routines.aiPlaceholder': 'напр.: очищать кэш сборки Xcode каждую неделю',
+  'routines.aiGenerate': 'Создать',
+  'routines.aiSave': 'Сохранить как рутину',
+  'routines.aiDiscard': 'Отменить',
+  'routines.aiSaved': 'Сохранено как рутина',
+  'err.aiRoutineParse': 'Не удалось разобрать ответ модели; попробуйте переформулировать',
+  'err.aiRoutineNoPaths': 'Модель не предложила подходящий каталог (должен существовать, быть абсолютным и внутри домашнего каталога)',
+  'err.aiRoutineTitle': 'У рутины должно быть название',
 };

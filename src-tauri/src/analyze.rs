@@ -878,7 +878,7 @@ pub fn set_language(services: State<'_, AppServices>, language: String) -> Resul
 /// proxies, URLs with a query string) untouched.
 /// Provider-aware variant: DeepSeek's documented route is `/chat/completions`
 /// without a `/v1` prefix, while OpenAI's base is `/v1`.
-fn normalize_endpoint_for(raw: &str, provider: &str) -> String {
+pub(crate) fn normalize_endpoint_for(raw: &str, provider: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return String::new();
@@ -1131,7 +1131,7 @@ pub struct AiConfigDto {
 }
 
 /// Wire protocol for a provider: Anthropic speaks a different API.
-fn protocol_for(profile: &sift_store::AiProfile) -> sift_analyze::Protocol {
+pub(crate) fn protocol_for(profile: &sift_store::AiProfile) -> sift_analyze::Protocol {
     let provider = profile.provider.to_ascii_lowercase();
     let anthropic = provider == "anthropic"
         || provider == "claude"
@@ -1635,7 +1635,7 @@ pub fn save_routine(
             id,
             title,
             kind: CUSTOM_PATH_KIND.to_string(),
-            cadence: "cadence.weekly".to_string(),
+            cadence: "routine.cadence.weekly".to_string(),
             average_bytes,
             mode: sift_store::RoutineMode::Approve,
             paths: vec![path],
@@ -1649,7 +1649,7 @@ pub fn save_routine(
             id,
             title,
             kind: kind.clone(),
-            cadence: "cadence.weekly".to_string(),
+            cadence: "routine.cadence.weekly".to_string(),
             average_bytes,
             mode: sift_store::RoutineMode::Approve,
             paths: Vec::new(),

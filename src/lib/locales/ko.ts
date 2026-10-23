@@ -215,6 +215,7 @@ export const ko: Record<string, string> = {
   'common.back': '뒤로',
 
   'routine.cadence.weekly': '주간',
+  'routine.cadence.daily': '매일',
   'routine.cadence.monthly': '월간',
   'routine.mode.auto': '자동',
   'routine.mode.approve': '확인',
@@ -437,4 +438,14 @@ export const ko: Record<string, string> = {
   'err.aiProfileLimit': '구성 수가 최대(12)입니다',
   'err.aiProfileMissing': '구성을 찾을 수 없습니다',
   'settings.aiPresetArkPlan': '화산방주 Agent Plan',
+  'routines.aiTitle': 'AI로 정기 작업 만들기',
+  'routines.aiDesc': '정기적으로 무엇을 정리할지 설명하세요. AI가 초안을 만듭니다. 저장 전에 경로를 확인하고, 삭제에는 계속 확인이 필요합니다.',
+  'routines.aiPlaceholder': '예: 매주 Xcode 빌드 캐시 정리',
+  'routines.aiGenerate': '생성',
+  'routines.aiSave': '정기 작업으로 저장',
+  'routines.aiDiscard': '버리기',
+  'routines.aiSaved': '정기 작업으로 저장되었습니다',
+  'err.aiRoutineParse': 'AI 응답을 해석할 수 없습니다. 표현을 바꿔 다시 시도하세요',
+  'err.aiRoutineNoPaths': 'AI가 사용 가능한 디렉터리를 제시하지 않았습니다(존재하는 절대 경로, 홈 디렉터리 내여야 함)',
+  'err.aiRoutineTitle': '정기 작업에는 제목이 필요합니다',
 };

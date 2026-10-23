@@ -244,6 +244,7 @@ export const id: Record<string, string> = {
   'common.back': 'Kembali',
 
   'routine.cadence.weekly': 'Mingguan',
+  'routine.cadence.daily': 'Setiap hari',
   'routine.cadence.monthly': 'Bulanan',
   'routine.mode.auto': 'Otomatis',
   'routine.mode.approve': 'Setujui',
@@ -468,4 +469,14 @@ export const id: Record<string, string> = {
   'err.aiProfileLimit': 'Batas konfigurasi (12) tercapai',
   'err.aiProfileMissing': 'Konfigurasi tidak ditemukan',
   'settings.aiPresetArkPlan': 'ARK Agent Plan',
+  'routines.aiTitle': 'Buat tugas rutin dengan AI',
+  'routines.aiDesc': 'Jelaskan apa yang rutin dibersihkan; AI menyusun draf. Periksa jalur sebelum menyimpan - penghapusan tetap butuh konfirmasi.',
+  'routines.aiPlaceholder': 'mis. Bersihkan cache build Xcode setiap minggu',
+  'routines.aiGenerate': 'Buat',
+  'routines.aiSave': 'Simpan sebagai tugas rutin',
+  'routines.aiDiscard': 'Buang',
+  'routines.aiSaved': 'Disimpan sebagai tugas rutin',
+  'err.aiRoutineParse': 'Balasan AI tidak dapat diurai; coba ubah kalimat',
+  'err.aiRoutineNoPaths': 'AI tidak memberikan direktori yang layak (harus ada, absolut, di dalam direktori home)',
+  'err.aiRoutineTitle': 'Tugas rutin memerlukan judul',
 };

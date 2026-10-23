@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { isTauri } from './runtime';
 import type {
   AiConfig,
+  AiRoutineDraft,
   AnalysisSummary,
   MonitorStatus,
   Node,
@@ -332,6 +333,24 @@ export interface AiProfileDraft {
 export function saveAiProfile(draft: AiProfileDraft, token?: string): Promise<AiConfig> {
   return call<AiConfig>('save_ai_profile', {
     profile: { ...draft, token: token === undefined ? null : token }
+  });
+}
+
+/** Ask the model for a routine draft from a sentence. */
+export function aiRoutine(prompt: string): Promise<AiRoutineDraft> {
+  return call<AiRoutineDraft>('ai_routine', { prompt });
+}
+
+/** Save a confirmed draft; always starts in approve mode. */
+export function saveAiRoutine(draft: {
+  title: string;
+  cadence: string;
+  paths: string[];
+}): Promise<void> {
+  return call<void>('save_ai_routine', {
+    title: draft.title,
+    cadence: draft.cadence,
+    paths: draft.paths
   });
 }
 
