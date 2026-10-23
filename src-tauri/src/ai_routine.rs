@@ -127,7 +127,9 @@ fn parse_draft(text: &str, prompt: &str) -> Result<AiRoutineDraft, String> {
 
 /// Map a client error to the stable keys the UI already translates.
 fn map_client_error(error: &str, endpoint: &str) -> String {
-    if error.contains("HTTP 404") {
+    if error.contains("[timeout]") || error.contains("timed out") {
+        "err.aiTimeout".to_string()
+    } else if error.contains("HTTP 404") {
         format!("err.aiNotFound|{endpoint}")
     } else if error.contains("HTTP 401") || error.contains("HTTP 403") {
         format!("err.aiAuthKeychain|{endpoint}")
@@ -191,6 +193,7 @@ fn ai_routine_blocking(
         )
         .with_consent()
         .with_language(ai.language.clone())
+        .with_timeout(std::time::Duration::from_secs(120))
         .with_protocol(crate::analyze::protocol_for(&profile));
         let client = sift_analyze::OpenAiCompatibleAdjudicator::new(config)
             .map_err(|error| format!("err.aiRequest|{error}"))?;

@@ -976,6 +976,9 @@ fn ai_prompt_blocking(store: &sift_store::Store, prompt: String) -> Result<Strin
         )
         .with_consent()
         .with_language(ai.language.clone())
+        // A thinking model can exceed 45 s on a longer prompt; the UI has its
+        // own busy state, so waiting longer is better than failing.
+        .with_timeout(std::time::Duration::from_secs(120))
         .with_protocol(protocol_for(&profile));
         let client = sift_analyze::OpenAiCompatibleAdjudicator::new(config)
             .map_err(|error| format!("err.aiRequest|{error}"))?;
@@ -1027,7 +1030,9 @@ fn ai_prompt_blocking(store: &sift_store::Store, prompt: String) -> Result<Strin
         }
         answer.map_err(|error| {
             let text = error.to_string();
-            if text.contains("HTTP 404") {
+            if text.contains("[timeout]") || text.contains("timed out") {
+                "err.aiTimeout".to_string()
+            } else if text.contains("HTTP 404") {
                 let endpoint = normalize_endpoint_for(&profile.endpoint, &profile.provider);
                 format!("err.aiNotFound|{endpoint}")
             } else if text.contains("HTTP 401") || text.contains("HTTP 403") {
