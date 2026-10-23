@@ -475,6 +475,7 @@ const zh: Record<string, string> = {
   'settings.aiPresetClaude': 'Claude',
   'err.aiProfileLimit': '配置数量已达上限（12）',
   'err.aiProfileMissing': '配置不存在',
+  'settings.aiPresetArkPlan': '火山方舟 Agent Plan',
 };
 
 const en: Record<string, string> = {
@@ -911,6 +912,7 @@ const en: Record<string, string> = {
   'settings.aiPresetClaude': 'Claude',
   'err.aiProfileLimit': 'Too many configurations (12 max)',
   'err.aiProfileMissing': 'Configuration not found',
+  'settings.aiPresetArkPlan': 'ARK Agent Plan',
 };
 
 type ParamValue = string | number;

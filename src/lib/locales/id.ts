@@ -466,4 +466,5 @@ export const id: Record<string, string> = {
   'settings.aiPresetClaude': 'Claude',
   'err.aiProfileLimit': 'Batas konfigurasi (12) tercapai',
   'err.aiProfileMissing': 'Konfigurasi tidak ditemukan',
+  'settings.aiPresetArkPlan': 'ARK Agent Plan',
 };

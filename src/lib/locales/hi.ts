@@ -449,4 +449,5 @@ export const hi: Record<string, string> = {
   'settings.aiPresetClaude': 'Claude',
   'err.aiProfileLimit': 'कॉन्फ़िगरेशन सीमा (12) पूरी',
   'err.aiProfileMissing': 'कॉन्फ़िगरेशन नहीं मिला',
+  'settings.aiPresetArkPlan': 'ARK Agent Plan',
 };

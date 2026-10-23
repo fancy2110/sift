@@ -55,6 +55,14 @@
       endpoint: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
     },
     {
+      // Agent Plan keys (`ark-...`) are rejected by /api/v3; the plan
+      // gateway lives under /api/plan/v3 and routes through ark-code-latest.
+      label: 'settings.aiPresetArkPlan',
+      provider: 'ark',
+      endpoint: 'https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions',
+      model: 'ark-code-latest',
+    },
+    {
       label: 'settings.aiPresetOpenai',
       provider: 'openai',
       endpoint: 'https://api.openai.com/v1/chat/completions',
@@ -130,8 +138,10 @@
     if (ok) editorOpen = false;
   }
 
-  function providerLabel(provider: string) {
-    const preset = presets.find((item) => item.provider === provider);
+  function providerLabel(provider: string, endpoint: string) {
+    const preset =
+      presets.find((item) => item.endpoint === endpoint) ??
+      presets.find((item) => item.provider === provider);
     return preset ? t(preset.label) : t('settings.aiProviderCustom');
   }
 
@@ -243,7 +253,7 @@
                 <span class="ai-profile-text">
                   <span class="ai-profile-name">
                     {profile.name}
-                    <span class="ai-tag">{providerLabel(profile.provider)}</span>
+                    <span class="ai-tag">{providerLabel(profile.provider, profile.endpoint)}</span>
                   </span>
                   <span class="ai-profile-meta">
                     {endpointHost(profile.endpoint)} · {profile.model}
@@ -282,7 +292,7 @@
           <div class="ai-editor">
             <p class="ai-label">{t('settings.aiProvider')}</p>
             <div class="ai-presets">
-              {#each presets as preset (preset.provider)}
+              {#each presets as preset (preset.endpoint)}
                 <button
                   type="button"
                   class="ai-preset"

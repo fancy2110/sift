@@ -458,4 +458,5 @@ export const ja: Record<string, string> = {
   'settings.aiPresetClaude': 'Claude',
   'err.aiProfileLimit': '構成が上限（12）に達しました',
   'err.aiProfileMissing': '構成が見つかりません',
+  'settings.aiPresetArkPlan': '火山方舟 Agent Plan',
 };

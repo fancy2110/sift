@@ -462,4 +462,5 @@ export const ru: Record<string, string> = {
   'settings.aiPresetClaude': 'Claude',
   'err.aiProfileLimit': 'Достигнут лимит конфигураций (12)',
   'err.aiProfileMissing': 'Конфигурация не найдена',
+  'settings.aiPresetArkPlan': 'ARK Agent Plan',
 };

@@ -435,4 +435,5 @@ export const ko: Record<string, string> = {
   'settings.aiPresetClaude': 'Claude',
   'err.aiProfileLimit': '구성 수가 최대(12)입니다',
   'err.aiProfileMissing': '구성을 찾을 수 없습니다',
+  'settings.aiPresetArkPlan': '화산방주 Agent Plan',
 };
