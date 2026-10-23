@@ -424,4 +424,5 @@ export const zhTW: Record<string, string> = {
   'err.promptTooLong': '內容過長（最多 8000 字元）',
   'err.aiNotConfigured': '未設定可用的 AI 服務',
   'err.aiRequest': 'AI 請求失敗：{0}',
+  'err.aiNotFound': '介面位址傳回 404，通常需要以 /chat/completions 結尾（目前：{0}）',
 };

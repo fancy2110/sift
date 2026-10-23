@@ -446,4 +446,5 @@ export const id: Record<string, string> = {
   'err.promptTooLong': 'Terlalu panjang (maks 8000 karakter)',
   'err.aiNotConfigured': 'AI belum dikonfigurasi',
   'err.aiRequest': 'Permintaan AI gagal: {0}',
+  'err.aiNotFound': 'Endpoint mengembalikan 404; biasanya harus berakhir dengan /chat/completions (saat ini: {0})',
 };

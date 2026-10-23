@@ -438,4 +438,5 @@ export const ja: Record<string, string> = {
   'err.promptTooLong': '長すぎます（最大 8000 文字）',
   'err.aiNotConfigured': '利用可能な AI が設定されていません',
   'err.aiRequest': 'AI リクエストに失敗しました：{0}',
+  'err.aiNotFound': 'エンドポイントが 404 を返しました。通常は /chat/completions で終わる必要があります（現在：{0}）',
 };

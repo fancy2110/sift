@@ -255,8 +255,9 @@ impl OpenAiCompatibleAdjudicator {
             .map_err(|err| AdjudicateError::Transport(err.to_string()))?;
         if !status.is_success() {
             return Err(AdjudicateError::Transport(format!(
-                "HTTP {}: {}",
+                "HTTP {} from {}: {}",
                 status.as_u16(),
+                self.config.endpoint,
                 text.chars().take(300).collect::<String>()
             )));
         }

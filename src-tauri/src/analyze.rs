@@ -899,6 +899,40 @@ pub fn set_language(services: State<'_, AppServices>, language: String) -> Resul
     Ok(())
 }
 
+/// Accept a base URL as well as the full completions URL.
+///
+/// Users commonly paste `https://api.openai.com/v1` (the base) instead of
+/// `https://api.openai.com/v1/chat/completions`; posting to the base answers
+/// 404, which looks like a model problem. Append only the well-known suffix
+/// for base-style URLs and leave anything deeper (Azure deployments, custom
+/// proxies, URLs with a query string) untouched.
+fn normalize_endpoint(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.contains('?') || trimmed.contains('#') {
+        return trimmed.to_string();
+    }
+    let lower = trimmed.trim_end_matches('/').to_ascii_lowercase();
+    if lower.ends_with("/chat/completions") || lower.ends_with("/completions") {
+        return trimmed.to_string();
+    }
+    let after_scheme = trimmed.split("://").nth(1).unwrap_or(trimmed);
+    let path = match after_scheme.find('/') {
+        Some(index) => after_scheme[index..].trim_end_matches('/').to_string(),
+        None => String::new(),
+    };
+    let base = trimmed.trim_end_matches('/');
+    if path.is_empty() || path == "/" {
+        return format!("{base}/v1/chat/completions");
+    }
+    if path.ends_with("/v1") || path.ends_with("/v3") {
+        return format!("{base}/chat/completions");
+    }
+    trimmed.to_string()
+}
+
 /// Free-form question to the configured model (the assistant tab).
 ///
 /// Only the user's own text is sent: no file contents, paths, or scan data.
@@ -923,7 +957,7 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
         let api_key = stored_key.ok_or_else(|| "err.aiTokenRequired".to_string())?;
         let config = sift_analyze::LlmConfig::new(
             ai.provider.clone(),
-            ai.endpoint.clone(),
+            normalize_endpoint(&ai.endpoint),
             ai.model.clone(),
             api_key,
         )
@@ -932,9 +966,15 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
         let client = sift_analyze::OpenAiCompatibleAdjudicator::new(config)
             .map_err(|error| format!("err.aiRequest|{error}"))?;
         let system = "You are the built-in assistant of Sift, a disk space manager. Answer concisely in the user's language with practical, safe advice. You cannot delete files yourself and must never claim to have done so; suggest which Sift features or steps the user can use instead.";
-        client
-            .complete(system, &prompt)
-            .map_err(|error| format!("err.aiRequest|{error}"))
+        client.complete(system, &prompt).map_err(|error| {
+            let text = error.to_string();
+            if text.contains("HTTP 404") {
+                let endpoint = normalize_endpoint(&ai.endpoint);
+                format!("err.aiNotFound|{endpoint}")
+            } else {
+                format!("err.aiRequest|{text}")
+            }
+        })
     }
     #[cfg(not(feature = "remote-ai"))]
     {
@@ -1012,7 +1052,7 @@ pub fn save_ai_config(
     services: State<'_, AppServices>,
     config: SaveAiConfigInput,
 ) -> Result<AiConfigDto, String> {
-    let endpoint = config.endpoint.trim().to_string();
+    let endpoint = normalize_endpoint(&config.endpoint);
     let model = config.model.trim().to_string();
     let provider = config.provider.trim().to_string();
 
@@ -1086,7 +1126,7 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
             if let Some(api_key) = stored_key {
                 let config = sift_analyze::LlmConfig::new(
                     ai.provider.clone(),
-                    ai.endpoint.clone(),
+                    normalize_endpoint(&ai.endpoint),
                     ai.model.clone(),
                     api_key,
                 )
@@ -1585,6 +1625,35 @@ mod tests {
         let services = AppServices::new();
         assert!(!services.monitor_running());
         assert!(!services.store.root_display().is_empty());
+    }
+
+    #[test]
+    fn endpoint_normalization_fills_the_completions_route() {
+        assert_eq!(
+            normalize_endpoint("https://api.openai.com/v1"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            normalize_endpoint("https://ark.cn-beijing.volces.com/api/v3/"),
+            "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+        );
+        assert_eq!(
+            normalize_endpoint("https://api.openai.com/v1/chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            normalize_endpoint("https://api.example.com"),
+            "https://api.example.com/v1/chat/completions"
+        );
+        // Custom routes and Azure-style query strings are left alone.
+        assert_eq!(
+            normalize_endpoint("https://host/custom/route"),
+            "https://host/custom/route"
+        );
+        assert_eq!(
+            normalize_endpoint("https://x/openai/deployments/d/chat/completions?api-version=1"),
+            "https://x/openai/deployments/d/chat/completions?api-version=1"
+        );
     }
 
     #[test]

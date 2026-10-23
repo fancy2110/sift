@@ -442,4 +442,5 @@ export const ru: Record<string, string> = {
   'err.promptTooLong': 'Слишком длинно (не более 8000 символов)',
   'err.aiNotConfigured': 'AI не настроен',
   'err.aiRequest': 'Ошибка запроса к AI: {0}',
+  'err.aiNotFound': 'Эндпоинт вернул 404; обычно он должен оканчиваться на /chat/completions (сейчас: {0})',
 };

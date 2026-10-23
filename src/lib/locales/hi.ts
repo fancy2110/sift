@@ -429,4 +429,5 @@ export const hi: Record<string, string> = {
   'err.promptTooLong': 'बहुत लंबा (अधिकतम 8000 अक्षर)',
   'err.aiNotConfigured': 'कोई उपयोगी AI कॉन्फ़िगर नहीं है',
   'err.aiRequest': 'AI अनुरोध विफल: {0}',
+  'err.aiNotFound': 'एंडपॉइंट ने 404 लौटाया; सामान्यतः इसे /chat/completions पर समाप्त होना चाहिए (वर्तमान: {0})',
 };
