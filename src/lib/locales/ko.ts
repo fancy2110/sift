@@ -418,4 +418,6 @@ export const ko: Record<string, string> = {
   'err.aiRequest': 'AI 요청 실패: {0}',
   'err.aiNotFound': '엔드포인트가 404를 반환했습니다. 보통 /chat/completions로 끝나야 합니다(현재: {0})',
   'err.aiKeychain': '키체인에서 API token을 읽지 못했습니다({0}). 설정에서 token을 다시 입력하고 저장하세요.',
+  'err.aiAuthEnv': '인증 실패(401/403): 환경 변수의 API Key가 이 엔드포인트에서 거부되었습니다. SIFT_AI_API_KEY가 URL과 같은 제공자의 것인지 확인하세요(환경 변수가 키체인보다 우선).',
+  'err.aiAuthKeychain': '인증 실패(401/403): 키체인의 API Key가 이 엔드포인트에서 거부되었습니다. key와 URL은 같은 제공자의 것이어야 합니다(ARK는 ARK key, api.deepseek.com은 DeepSeek key).'
 };

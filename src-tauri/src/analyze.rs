@@ -963,7 +963,9 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
 
     #[cfg(feature = "remote-ai")]
     {
-        let stored_key = match ai.api_key_from_env() {
+        let env_key = ai.api_key_from_env();
+        let from_env = env_key.is_some();
+        let stored_key = match env_key {
             Some(key) => Some(key),
             None => crate::credentials::token_result()
                 .map_err(|error| format!("err.aiKeychain|{error}"))?,
@@ -985,6 +987,15 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
             if text.contains("HTTP 404") {
                 let endpoint = normalize_endpoint_for(&ai.endpoint, &ai.provider);
                 format!("err.aiNotFound|{endpoint}")
+            } else if text.contains("HTTP 401") || text.contains("HTTP 403") {
+                // Almost always a key from a different provider: an ARK
+                // endpoint rejects a DeepSeek key and vice versa. Say which
+                // source won so an exported env var is not overlooked.
+                if from_env {
+                    "err.aiAuthEnv".to_string()
+                } else {
+                    "err.aiAuthKeychain".to_string()
+                }
             } else {
                 format!("err.aiRequest|{text}")
             }

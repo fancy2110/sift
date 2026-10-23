@@ -432,4 +432,6 @@ export const hi: Record<string, string> = {
   'err.aiRequest': 'AI अनुरोध विफल: {0}',
   'err.aiNotFound': 'एंडपॉइंट ने 404 लौटाया; सामान्यतः इसे /chat/completions पर समाप्त होना चाहिए (वर्तमान: {0})',
   'err.aiKeychain': 'Keychain से API token पढ़ा नहीं जा सका ({0})। सेटिंग्स में token फिर से दर्ज कर सहेजें।',
+  'err.aiAuthEnv': 'प्रमाणीकरण विफल (401/403): पर्यावरण चर का API Key इस एंडपॉइंट द्वारा अस्वीकृत हुआ। जाँचें कि SIFT_AI_API_KEY URL के समान प्रदाता का है (पर्यावरण चर Keychain पर प्राथमिकता रखता है)।',
+  'err.aiAuthKeychain': 'प्रमाणीकरण विफल (401/403): Keychain का API Key इस एंडपॉइंट द्वारा अस्वीकृत हुआ। key और URL एक ही प्रदाता के होने चाहिए (ARK के लिए ARK key, api.deepseek.com के लिए DeepSeek key)।'
 };

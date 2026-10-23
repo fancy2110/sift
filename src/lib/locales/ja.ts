@@ -441,4 +441,6 @@ export const ja: Record<string, string> = {
   'err.aiRequest': 'AI リクエストに失敗しました：{0}',
   'err.aiNotFound': 'エンドポイントが 404 を返しました。通常は /chat/completions で終わる必要があります（現在：{0}）',
   'err.aiKeychain': 'キーチェーンから API token を読み取れませんでした（{0}）。設定で token を再入力して保存してください。',
+  'err.aiAuthEnv': '認証に失敗しました（401/403）：環境変数の API Key がこのエンドポイントで拒否されました。SIFT_AI_API_KEY が URL と同じプロバイダーのものか確認してください（環境変数はキーチェーンより優先されます）。',
+  'err.aiAuthKeychain': '認証に失敗しました（401/403）：キーチェーンの API Key がこのエンドポイントで拒否されました。key と URL は同じプロバイダーのものを使用してください（ARK なら ARK の key、api.deepseek.com なら DeepSeek の key）。'
 };

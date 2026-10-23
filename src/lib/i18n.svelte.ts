@@ -458,6 +458,8 @@ const zh: Record<string, string> = {
   'err.aiRequest': 'AI 请求失败：{0}',
   'err.aiNotFound': '接口地址返回 404，通常需要以 /chat/completions 结尾（当前：{0}）',
   'err.aiKeychain': '读取钥匙串中的 API token 失败（{0}）。请在设置里重新输入并保存 token。',
+  'err.aiAuthEnv': '鉴权失败（401/403）：环境变量里的 API Key 被当前接口地址拒绝。请检查 SIFT_AI_API_KEY 是否与地址属于同一服务商（环境变量优先于钥匙串）。',
+  'err.aiAuthKeychain': '鉴权失败（401/403）：钥匙串里的 API Key 被当前接口地址拒绝。请确认 key 与地址属于同一服务商——火山方舟用方舟的 Key，DeepSeek 官方用 DeepSeek 的 Key。'
 };
 
 const en: Record<string, string> = {
@@ -877,6 +879,8 @@ const en: Record<string, string> = {
   'err.aiRequest': 'AI request failed: {0}',
   'err.aiNotFound': 'The endpoint returned 404; it usually needs to end with /chat/completions (current: {0})',
   'err.aiKeychain': 'Could not read the API token from the Keychain ({0}). Re-enter and save the token in settings.',
+  'err.aiAuthEnv': 'Authentication failed (401/403): the API key from the environment was rejected by this endpoint. Check that SIFT_AI_API_KEY belongs to the same provider as the URL (the environment overrides the Keychain).',
+  'err.aiAuthKeychain': 'Authentication failed (401/403): the Keychain API key was rejected by this endpoint. The key and the URL must belong to the same provider - an ARK key for ARK, a DeepSeek key for api.deepseek.com.'
 };
 
 type ParamValue = string | number;

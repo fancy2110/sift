@@ -427,4 +427,6 @@ export const zhTW: Record<string, string> = {
   'err.aiRequest': 'AI 請求失敗：{0}',
   'err.aiNotFound': '介面位址傳回 404，通常需要以 /chat/completions 結尾（目前：{0}）',
   'err.aiKeychain': '讀取鑰匙圈中的 API token 失敗（{0}）。請在設定裡重新輸入並儲存 token。',
+  'err.aiAuthEnv': '驗證失敗（401/403）：環境變數裡的 API Key 被目前介面位址拒絕。請檢查 SIFT_AI_API_KEY 是否與位址屬於同一服務商（環境變數優先於鑰匙圈）。',
+  'err.aiAuthKeychain': '驗證失敗（401/403）：鑰匙圈裡的 API Key 被目前介面位址拒絕。請確認 key 與位址屬於同一服務商——火山方舟用方舟的 Key，DeepSeek 官方用 DeepSeek 的 Key。'
 };
