@@ -953,9 +953,11 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
         };
         let api_key = stored_key.ok_or_else(|| "err.aiTokenRequired".to_string())?;
         let plan_key = api_key.trim_start().to_ascii_lowercase().starts_with("ark-");
+        let api_key_for_retry = api_key.clone();
+        let config_endpoint = normalize_endpoint_for(&profile.endpoint, &profile.provider);
         let config = sift_analyze::LlmConfig::new(
             profile.provider.clone(),
-            normalize_endpoint_for(&profile.endpoint, &profile.provider),
+            config_endpoint.clone(),
             profile.model.clone(),
             api_key,
         )
@@ -965,7 +967,52 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
         let client = sift_analyze::OpenAiCompatibleAdjudicator::new(config)
             .map_err(|error| format!("err.aiRequest|{error}"))?;
         let system = "You are the built-in assistant of Sift, a disk space manager. Answer concisely in the user's language with practical, safe advice. You cannot delete files yourself and must never claim to have done so; suggest which Sift features or steps the user can use instead.";
-        client.complete(system, &prompt).map_err(|error| {
+        let answer = client.complete(system, &prompt);
+        if let Err(error) = &answer {
+            let text = error.to_string();
+            let plan_endpoint = agent_plan_endpoint(&config_endpoint);
+            let platform_ark = config_endpoint.contains("ark.cn-beijing.volces.com/api/v3")
+                && !config_endpoint.contains("/api/plan/");
+            if plan_key
+                && platform_ark
+                && (text.contains("HTTP 401") || text.contains("HTTP 403"))
+            {
+                if let Some(endpoint) = plan_endpoint {
+                    // The user is holding an Agent Plan key but the profile
+                    // still points at the platform gateway. Retry once on the
+                    // plan route and, if it works, heal the stored profile so
+                    // the next request goes straight there.
+                    let retry_config = sift_analyze::LlmConfig::new(
+                        profile.provider.clone(),
+                        endpoint.clone(),
+                        "ark-code-latest".to_string(),
+                        api_key_for_retry,
+                    )
+                    .with_consent()
+                    .with_language(ai.language.clone())
+                    .with_protocol(protocol_for(&profile));
+                    if let Ok(retry) = sift_analyze::OpenAiCompatibleAdjudicator::new(retry_config)
+                    {
+                        if let Ok(recovered) = retry.complete(system, &prompt) {
+                            services.store.update_settings(|settings| {
+                                if let Some(stored) = settings
+                                    .ai
+                                    .profiles
+                                    .iter_mut()
+                                    .find(|stored| stored.id == profile.id)
+                                {
+                                    stored.endpoint = endpoint.clone();
+                                    stored.model = "ark-code-latest".to_string();
+                                }
+                            });
+                            let _ = services.store.flush_if_dirty();
+                            return Ok(recovered);
+                        }
+                    }
+                }
+            }
+        }
+        answer.map_err(|error| {
             let text = error.to_string();
             if text.contains("HTTP 404") {
                 let endpoint = normalize_endpoint_for(&profile.endpoint, &profile.provider);
@@ -1084,6 +1131,18 @@ fn protocol_for(profile: &sift_store::AiProfile) -> sift_analyze::Protocol {
     } else {
         sift_analyze::Protocol::OpenAi
     }
+}
+
+/// Rewrite an ARK platform endpoint to its Agent Plan gateway.
+fn agent_plan_endpoint(endpoint: &str) -> Option<String> {
+    if endpoint.contains("/api/plan/") {
+        return None;
+    }
+    let index = endpoint.find("/api/v3")?;
+    Some(format!(
+        "{}/api/plan/v3/chat/completions",
+        &endpoint[..index]
+    ))
 }
 
 fn env_key_for(profile: &sift_store::AiProfile) -> Option<String> {
@@ -1851,6 +1910,23 @@ mod tests {
         let services = AppServices::new();
         assert!(!services.monitor_running());
         assert!(!services.store.root_display().is_empty());
+    }
+
+    #[test]
+    fn agent_plan_endpoint_rewrites_only_the_platform_gateway() {
+        assert_eq!(
+            agent_plan_endpoint("https://ark.cn-beijing.volces.com/api/v3/chat/completions")
+                .as_deref(),
+            Some("https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions")
+        );
+        assert_eq!(
+            agent_plan_endpoint("https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions"),
+            None
+        );
+        assert_eq!(
+            agent_plan_endpoint("https://api.deepseek.com/chat/completions"),
+            None
+        );
     }
 
     #[test]
