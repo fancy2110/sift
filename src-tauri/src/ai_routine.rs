@@ -39,14 +39,20 @@ struct ModelReply {
     reason: String,
 }
 
-const SYSTEM: &str = r#"You design one recurring cleanup routine for Sift, a macOS disk-space manager.
-Reply with JSON only, no markdown, no prose. Schema:
-{"title": "short name", "cadence": "cadence.daily|cadence.weekly|cadence.monthly", "paths": ["/absolute/path"], "reason": "one short sentence"}
-Rules:
-- paths must be existing absolute directories inside the user's home directory;
-- prefer caches, logs, temp and build output; never suggest system paths, /, or the home directory itself;
-- at most 5 paths;
-- the routine will always require a confirmation before deleting, so describe the intent honestly."#;
+const SYSTEM: &str = r#"You convert one user request into one Sift routine configuration.
+
+Output ONLY a single JSON object. No markdown fences, no explanation, no text before or after it, and no extra keys.
+
+Required keys:
+- "title": string, at most 40 characters.
+- "cadence": exactly one of "daily", "weekly", "monthly".
+- "paths": array of 1 to 5 directory paths that already exist in the user's home directory. Write them with a leading "~/" (the user's home), for example "~/Library/Caches". Prefer caches, logs, temporary files and build output. Never use "/", "~", or system paths.
+- "reason": string, at most 120 characters, explaining why this is safe.
+
+Write "title" and "reason" in the same language as the user's request.
+
+The exact shape (values are placeholders):
+{"title":"...","cadence":"weekly","paths":["~/Library/..."],"reason":"..."}"#;
 
 /// Extract the first JSON object from a model reply (which may add prose or
 /// code fences despite the instruction).
@@ -74,11 +80,26 @@ fn normalize_cadence(raw: &str) -> String {
 }
 
 /// Keep only absolute, existing directories inside the home directory.
+/// Expand a leading `~` so the model can name the home directory without
+/// knowing the account name.
+fn expand_tilde(raw: &str) -> Option<std::path::PathBuf> {
+    let home = dirs::home_dir()?;
+    if raw == "~" {
+        return Some(home);
+    }
+    match raw.strip_prefix("~/") {
+        Some(rest) => Some(home.join(rest)),
+        None => Some(std::path::PathBuf::from(raw)),
+    }
+}
+
 fn validated_paths(paths: &[String]) -> Vec<String> {
     let home = dirs::home_dir();
     let mut kept: Vec<String> = Vec::new();
     for raw in paths {
-        let candidate = Path::new(raw.trim());
+        let Some(candidate) = expand_tilde(raw.trim()) else {
+            continue;
+        };
         if !candidate.is_absolute() {
             continue;
         }
@@ -89,7 +110,8 @@ fn validated_paths(paths: &[String]) -> Vec<String> {
             continue;
         }
         if let Some(home) = &home {
-            if !canonical.starts_with(home) {
+            // The home directory itself is not a cleanup target.
+            if canonical == *home || !canonical.starts_with(home) {
                 continue;
             }
         }
@@ -261,6 +283,47 @@ mod tests {
         let draft = parse_draft(&reply, "prompt").unwrap();
         assert_eq!(draft.cadence, "routine.cadence.monthly");
         assert_eq!(draft.title, "清理构建缓存");
+    }
+
+    #[test]
+    fn tilde_paths_are_expanded_inside_home() {
+        let kept = validated_paths(&["~/Library".to_string()]);
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(kept.len(), 1);
+        assert!(std::path::Path::new(&kept[0]).starts_with(&home));
+        // A bare "~" is the home directory itself and must not be accepted.
+        assert!(validated_paths(&["~".to_string()]).is_empty());
+    }
+
+    /// Live check: needs `ARK_KEY` in the environment and network access.
+    /// Run with `cargo test -p sift --lib live_ai_routine -- --ignored`.
+    #[test]
+    #[ignore]
+    fn live_ai_routine_returns_a_usable_draft() {
+        if std::env::var("ARK_KEY").is_err() {
+            return;
+        }
+        let store = sift_store::Store::in_memory();
+        store.update_settings(|settings| {
+            settings.ai.enabled = true;
+            settings.ai.consent_granted = true;
+            settings.ai.api_key_env = "ARK_KEY".to_string();
+            settings.ai.profiles = vec![sift_store::AiProfile {
+                id: "live".to_string(),
+                name: "ark".to_string(),
+                provider: "ark".to_string(),
+                endpoint:
+                    "https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions".to_string(),
+                model: "ark-code-latest".to_string(),
+                api_key_env: String::new(),
+            }];
+            settings.ai.active_profile = "live".to_string();
+        });
+        let draft = ai_routine_blocking(&store, "每周清理 Xcode 构建缓存".to_string())
+            .expect("live draft");
+        assert!(!draft.paths.is_empty(), "no validated paths: {draft:?}");
+        assert!(draft.cadence.starts_with("routine.cadence."));
+        eprintln!("live draft: {draft:?}");
     }
 
     #[test]
