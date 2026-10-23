@@ -116,7 +116,9 @@
   function applyPreset(preset: (typeof presets)[number]) {
     editor.provider = preset.provider;
     editor.endpoint = preset.endpoint;
-    if (preset.model) editor.model = preset.model;
+    // Presets that do not name a model clear the field instead of leaving a
+    // model from a different provider (ARK needs an ep-... or model ID).
+    editor.model = preset.model ?? '';
     if (!editor.name.trim()) editor.name = t(preset.label);
   }
 
