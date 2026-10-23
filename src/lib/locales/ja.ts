@@ -381,6 +381,7 @@ export const ja: Record<string, string> = {
   'settings.aiPreset': 'クイックプリセット',
   'settings.aiPresetArk': 'Volcano Ark',
   'settings.aiPresetOpenai': 'OpenAI',
+  'settings.aiPresetDeepseek': 'DeepSeek',
   'settings.aiEndpoint': 'エンドポイント URL',
   'settings.aiEndpointPh': 'https://api.openai.com/v1/chat/completions',
   'settings.aiModel': 'モデル',

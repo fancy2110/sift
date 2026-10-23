@@ -63,11 +63,21 @@
       provider: 'openai',
       endpoint: 'https://api.openai.com/v1/chat/completions',
     },
+    {
+      // Official docs: base_url https://api.deepseek.com, route
+      // /chat/completions, model deepseek-flash.
+      label: 'settings.aiPresetDeepseek',
+      provider: 'deepseek',
+      endpoint: 'https://api.deepseek.com/chat/completions',
+      model: 'deepseek-flash',
+    },
   ];
 
-  function applyPreset(provider: string, endpoint: string) {
+  function applyPreset(provider: string, endpoint: string, model?: string) {
     draft.provider = provider;
     draft.endpoint = endpoint;
+    // A preset that names a model sets it; the user can still edit afterwards.
+    if (model) draft.model = model;
   }
 
   async function save() {
@@ -175,7 +185,7 @@
                 && draft.endpoint === preset.endpoint}
               aria-pressed={draft.provider === preset.provider
                 && draft.endpoint === preset.endpoint}
-              onclick={() => applyPreset(preset.provider, preset.endpoint)}
+              onclick={() => applyPreset(preset.provider, preset.endpoint, preset.model)}
             >
               {t(preset.label)}
             </button>

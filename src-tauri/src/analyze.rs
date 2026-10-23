@@ -906,7 +906,9 @@ pub fn set_language(services: State<'_, AppServices>, language: String) -> Resul
 /// 404, which looks like a model problem. Append only the well-known suffix
 /// for base-style URLs and leave anything deeper (Azure deployments, custom
 /// proxies, URLs with a query string) untouched.
-fn normalize_endpoint(raw: &str) -> String {
+/// Provider-aware variant: DeepSeek's documented route is `/chat/completions`
+/// without a `/v1` prefix, while OpenAI's base is `/v1`.
+fn normalize_endpoint_for(raw: &str, provider: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return String::new();
@@ -925,7 +927,15 @@ fn normalize_endpoint(raw: &str) -> String {
     };
     let base = trimmed.trim_end_matches('/');
     if path.is_empty() || path == "/" {
-        return format!("{base}/v1/chat/completions");
+        // DeepSeek documents https://api.deepseek.com/chat/completions;
+        // OpenAI documents the /v1 base. Everything else follows OpenAI.
+        let deepseek = provider.eq_ignore_ascii_case("deepseek")
+            || base.to_ascii_lowercase().contains("deepseek.com");
+        return if deepseek {
+            format!("{base}/chat/completions")
+        } else {
+            format!("{base}/v1/chat/completions")
+        };
     }
     if path.ends_with("/v1") || path.ends_with("/v3") {
         return format!("{base}/chat/completions");
@@ -957,7 +967,7 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
         let api_key = stored_key.ok_or_else(|| "err.aiTokenRequired".to_string())?;
         let config = sift_analyze::LlmConfig::new(
             ai.provider.clone(),
-            normalize_endpoint(&ai.endpoint),
+            normalize_endpoint_for(&ai.endpoint, &ai.provider),
             ai.model.clone(),
             api_key,
         )
@@ -969,7 +979,7 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
         client.complete(system, &prompt).map_err(|error| {
             let text = error.to_string();
             if text.contains("HTTP 404") {
-                let endpoint = normalize_endpoint(&ai.endpoint);
+                let endpoint = normalize_endpoint_for(&ai.endpoint, &ai.provider);
                 format!("err.aiNotFound|{endpoint}")
             } else {
                 format!("err.aiRequest|{text}")
@@ -1052,9 +1062,9 @@ pub fn save_ai_config(
     services: State<'_, AppServices>,
     config: SaveAiConfigInput,
 ) -> Result<AiConfigDto, String> {
-    let endpoint = normalize_endpoint(&config.endpoint);
-    let model = config.model.trim().to_string();
     let provider = config.provider.trim().to_string();
+    let endpoint = normalize_endpoint_for(&config.endpoint, &provider);
+    let model = config.model.trim().to_string();
 
     // Handle the token first so an enable without a secret cannot succeed
     // before storage fails below it.
@@ -1126,7 +1136,7 @@ fn build_adjudicator(services: &AppServices) -> Box<dyn Adjudicator> {
             if let Some(api_key) = stored_key {
                 let config = sift_analyze::LlmConfig::new(
                     ai.provider.clone(),
-                    normalize_endpoint(&ai.endpoint),
+                    normalize_endpoint_for(&ai.endpoint, &ai.provider),
                     ai.model.clone(),
                     api_key,
                 )
@@ -1630,28 +1640,40 @@ mod tests {
     #[test]
     fn endpoint_normalization_fills_the_completions_route() {
         assert_eq!(
-            normalize_endpoint("https://api.openai.com/v1"),
+            normalize_endpoint_for("https://api.openai.com/v1", ""),
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
-            normalize_endpoint("https://ark.cn-beijing.volces.com/api/v3/"),
+            normalize_endpoint_for("https://ark.cn-beijing.volces.com/api/v3/", ""),
             "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
         );
         assert_eq!(
-            normalize_endpoint("https://api.openai.com/v1/chat/completions"),
+            normalize_endpoint_for("https://api.openai.com/v1/chat/completions", ""),
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
-            normalize_endpoint("https://api.example.com"),
+            normalize_endpoint_for("https://api.example.com", ""),
             "https://api.example.com/v1/chat/completions"
+        );
+        assert_eq!(
+            normalize_endpoint_for("https://api.deepseek.com", "deepseek"),
+            "https://api.deepseek.com/chat/completions"
+        );
+        assert_eq!(
+            normalize_endpoint_for("https://api.deepseek.com/v1", "deepseek"),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+        assert_eq!(
+            normalize_endpoint_for("https://api.deepseek.com", ""),
+            "https://api.deepseek.com/chat/completions"
         );
         // Custom routes and Azure-style query strings are left alone.
         assert_eq!(
-            normalize_endpoint("https://host/custom/route"),
+            normalize_endpoint_for("https://host/custom/route", ""),
             "https://host/custom/route"
         );
         assert_eq!(
-            normalize_endpoint("https://x/openai/deployments/d/chat/completions?api-version=1"),
+            normalize_endpoint_for("https://x/openai/deployments/d/chat/completions?api-version=1", ""),
             "https://x/openai/deployments/d/chat/completions?api-version=1"
         );
     }

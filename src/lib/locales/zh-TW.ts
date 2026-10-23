@@ -367,6 +367,7 @@ export const zhTW: Record<string, string> = {
   'settings.aiPreset': '快速預設',
   'settings.aiPresetArk': '火山方舟',
   'settings.aiPresetOpenai': 'OpenAI',
+  'settings.aiPresetDeepseek': 'DeepSeek',
   'settings.aiEndpoint': '端點 URL',
   'settings.aiEndpointPh': 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
   'settings.aiModel': '模型',
