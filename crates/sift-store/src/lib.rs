@@ -41,7 +41,8 @@ pub use routines::{
     suggestion_key, RoutineDoc, RoutineEntry, RoutineList, RoutineMode, DEFAULT_ROUTINE_CAP,
 };
 pub use settings::{
-    AiSettings, AnalysisSettings, AutoCleanMode, CleanupRule, MonitorSettings, Settings,
+    AiProfile, AiSettings, AnalysisSettings, AutoCleanMode, CleanupRule, MonitorSettings, Settings,
+    MAX_AI_PROFILES,
 };
 pub use store::Store;
 pub use verdicts::{VerdictRecord, VerdictTable, DEFAULT_VERDICT_CAP};

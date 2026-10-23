@@ -358,11 +358,16 @@ export function createMockBackend(bus: EventBus): MockBackend {
     timers: [] as Array<ReturnType<typeof setTimeout>>,
     ai: {
       enabled: false,
-      provider: 'openai',
-      endpoint: 'https://api.openai.com/v1',
-      model: 'gpt-4o',
       language: 'zh' as 'zh' | 'en',
-      hasToken: false
+      activeProfile: '',
+      profiles: [] as Array<{
+        id: string;
+        name: string;
+        provider: string;
+        endpoint: string;
+        model: string;
+        hasToken: boolean;
+      }>
     },
     /** Absolute paths "moved to trash"; hidden from later scans. */
     deletedPaths: new Set<string>(),
@@ -855,52 +860,81 @@ export function createMockBackend(bus: EventBus): MockBackend {
           break;
         }
         case 'get_ai_config': {
-          const config: AiConfig = {
-            enabled: state.ai.enabled,
-            provider: state.ai.provider,
-            endpoint: state.ai.endpoint,
-            model: state.ai.model,
-            language: state.ai.language,
-            batchSize: 40,
-            hasToken: state.ai.hasToken
-          };
-          resolve(config as unknown as T);
+          resolve(mockAiConfig() as unknown as T);
           break;
         }
-        case 'save_ai_config': {
-          const config = (args.config as {
-            enabled: boolean;
+        case 'save_ai_profile': {
+          const draft = args.profile as {
+            id: string | null;
+            name: string;
             provider: string;
             endpoint: string;
             model: string;
-            language: string;
             token: string | null;
-          }) ?? {
-            enabled: false, provider: '', endpoint: '', model: '', language: '', token: null
           };
-          state.ai.enabled = config.enabled;
-          state.ai.provider = config.provider;
-          state.ai.endpoint = config.endpoint;
-          state.ai.model = config.model;
-          state.ai.language = config.language === 'en' ? 'en' : 'zh';
-          state.ai.hasToken = Boolean(config.token);
-          resolve(
-            {
-              enabled: state.ai.enabled,
-              provider: state.ai.provider,
-              endpoint: state.ai.endpoint,
-              model: state.ai.model,
-              language: state.ai.language,
-              batchSize: 40,
-              hasToken: state.ai.hasToken
-            } as unknown as T
-          );
+          const id = draft.id || `profile-${state.ai.profiles.length + 1}`;
+          const existing = state.ai.profiles.find((profile) => profile.id === id);
+          const profile = {
+            id,
+            name: draft.name || draft.endpoint,
+            provider: draft.provider,
+            endpoint: draft.endpoint,
+            model: draft.model,
+            hasToken:
+              draft.token === null
+                ? (existing?.hasToken ?? false)
+                : draft.token !== ''
+          };
+          state.ai.profiles = [
+            ...state.ai.profiles.filter((item) => item.id !== id),
+            profile
+          ];
+          if (!state.ai.activeProfile) state.ai.activeProfile = id;
+          resolve(mockAiConfig() as unknown as T);
+          break;
+        }
+        case 'select_ai_profile': {
+          state.ai.activeProfile = String(args.id ?? '');
+          resolve(mockAiConfig() as unknown as T);
+          break;
+        }
+        case 'delete_ai_profile': {
+          const id = String(args.id ?? '');
+          state.ai.profiles = state.ai.profiles.filter((profile) => profile.id !== id);
+          if (state.ai.activeProfile === id) {
+            state.ai.activeProfile = state.ai.profiles[0]?.id ?? '';
+          }
+          resolve(mockAiConfig() as unknown as T);
+          break;
+        }
+        case 'set_ai_enabled': {
+          state.ai.enabled = Boolean(args.enabled);
+          resolve(mockAiConfig() as unknown as T);
+          break;
+        }
+        case 'set_ai_language': {
+          state.ai.language = String(args.language) === 'en' ? 'en' : 'zh';
+          resolve(mockAiConfig() as unknown as T);
           break;
         }
         default:
           reject(new Error(`mock backend: unknown command "${command}"`));
       }
     });
+
+  function mockAiConfig(): AiConfig {
+    const active =
+      state.ai.profiles.find((profile) => profile.id === state.ai.activeProfile) ??
+      state.ai.profiles[0];
+    return {
+      enabled: state.ai.enabled,
+      activeProfile: active?.id ?? '',
+      profiles: state.ai.profiles,
+      language: state.ai.language,
+      batchSize: 40,
+      hasToken: active?.hasToken ?? false
+    };
+  }
 
   return { invoke };
 }

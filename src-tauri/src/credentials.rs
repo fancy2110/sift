@@ -36,20 +36,35 @@ mod imp {
     // unreadable (-25293 errSecAuthFailed) after a rebuild even though it
     // exists. Keep a 0600 fallback so a local build stays usable; it is only
     // consulted when the Keychain cannot read or write the item.
-    fn fallback_path() -> Option<PathBuf> {
-        dirs::data_local_dir().map(|dir| dir.join("Sift").join("ai-token"))
+    pub fn legacy_account() -> &'static str {
+        ACCOUNT
     }
 
-    fn read_fallback() -> Option<String> {
-        let path = fallback_path()?;
+    fn fallback_path(account: &str) -> Option<PathBuf> {
+        // The pre-profiles build used `ai-token`; keep reading it so an
+        // existing key survives the migration.
+        let name = if account == ACCOUNT {
+            "ai-token".to_string()
+        } else {
+            let safe: String = account
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+                .collect();
+            format!("ai-token-{safe}")
+        };
+        dirs::data_local_dir().map(|dir| dir.join("Sift").join(name))
+    }
+
+    fn read_fallback(account: &str) -> Option<String> {
+        let path = fallback_path(account)?;
         fs::read_to_string(path)
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
     }
 
-    fn write_fallback(token: &str) -> Result<(), String> {
-        let path = fallback_path().ok_or_else(|| "no data directory".to_string())?;
+    fn write_fallback(account: &str, token: &str) -> Result<(), String> {
+        let path = fallback_path(account).ok_or_else(|| "no data directory".to_string())?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
@@ -74,8 +89,8 @@ mod imp {
         Ok(())
     }
 
-    fn clear_fallback() {
-        if let Some(path) = fallback_path() {
+    fn clear_fallback(account: &str) {
+        if let Some(path) = fallback_path(account) {
             let _ = fs::remove_file(path);
         }
     }
@@ -115,6 +130,7 @@ mod imp {
     /// Any returned item ref is owned by the caller and must be `CFRelease`d;
     /// any returned password bytes must be `SecKeychainFreePassword`d.
     unsafe fn find_item(
+        account: &str,
         want_password: bool,
     ) -> Result<Option<(Option<String>, *const c_void)>, String> {
         let mut password_len: u32 = 0;
@@ -125,8 +141,8 @@ mod imp {
             ptr::null(), // default keychain search list
             SERVICE.len() as u32,
             SERVICE.as_ptr(),
-            ACCOUNT.len() as u32,
-            ACCOUNT.as_ptr(),
+            account.len() as u32,
+            account.as_ptr(),
             if want_password {
                 &mut password_len
             } else {
@@ -160,34 +176,30 @@ mod imp {
 
     /// Read the stored token, keeping the reason a present item could not be
     /// read (keychain locked, ACL denial for this binary, …).
-    pub fn token_result() -> Result<Option<String>, String> {
-        match unsafe { find_item(true) } {
+    pub fn token_result(account: &str) -> Result<Option<String>, String> {
+        match unsafe { find_item(account, true) } {
             Ok(Some((secret, item_ref))) => {
                 if !item_ref.is_null() {
                     unsafe { CFRelease(item_ref) };
                 }
                 match secret {
                     Some(value) if !value.trim().is_empty() => Ok(Some(value)),
-                    _ => Ok(read_fallback()),
+                    _ => Ok(read_fallback(account)),
                 }
             }
-            Ok(None) => Ok(read_fallback()),
-            Err(error) => match read_fallback() {
+            Ok(None) => Ok(read_fallback(account)),
+            Err(error) => match read_fallback(account) {
                 Some(value) => Ok(Some(value)),
                 None => Err(error),
             },
         }
     }
 
-    pub fn token() -> Option<String> {
-        token_result().ok().flatten()
-    }
-
-    pub fn has_token() -> bool {
-        if read_fallback().is_some() {
+    pub fn has_token(account: &str) -> bool {
+        if read_fallback(account).is_some() {
             return true;
         }
-        let found = unsafe { find_item(false) };
+        let found = unsafe { find_item(account, false) };
         let Ok(Some((_, item_ref))) = found else {
             return false;
         };
@@ -197,10 +209,10 @@ mod imp {
         true
     }
 
-    pub fn set_token(token: &str) -> Result<(), String> {
+    pub fn set_token(account: &str, token: &str) -> Result<(), String> {
         let keychain = (|| -> Result<(), String> {
             // Replace in place: delete the old item if one exists, then add.
-            if let Some((_, item_ref)) = unsafe { find_item(false) }? {
+            if let Some((_, item_ref)) = unsafe { find_item(account, false) }? {
                 if !item_ref.is_null() {
                     let status = unsafe { SecKeychainItemDelete(item_ref) };
                     unsafe { CFRelease(item_ref) };
@@ -215,8 +227,8 @@ mod imp {
                     ptr::null(), // default keychain
                     SERVICE.len() as u32,
                     SERVICE.as_ptr(),
-                    ACCOUNT.len() as u32,
-                    ACCOUNT.as_ptr(),
+                    account.len() as u32,
+                    account.as_ptr(),
                     token.len() as u32,
                     token.as_ptr(),
                     ptr::null_mut(),
@@ -231,7 +243,7 @@ mod imp {
         // Mirror the token for rebuilds whose signature no longer matches the
         // Keychain ACL; the Keychain result is ignored as long as one store
         // succeeded.
-        match (keychain, write_fallback(token)) {
+        match (keychain, write_fallback(account, token)) {
             (Ok(()), _) | (Err(_), Ok(())) => Ok(()),
             (Err(error), Err(fallback)) => {
                 Err(format!("{error}; fallback write failed: {fallback}"))
@@ -239,9 +251,9 @@ mod imp {
         }
     }
 
-    pub fn delete_token() -> Result<(), String> {
-        clear_fallback();
-        if let Some((_, item_ref)) = unsafe { find_item(false) }? {
+    pub fn delete_token(account: &str) -> Result<(), String> {
+        clear_fallback(account);
+        if let Some((_, item_ref)) = unsafe { find_item(account, false) }? {
             if !item_ref.is_null() {
                 let status = unsafe { SecKeychainItemDelete(item_ref) };
                 unsafe { CFRelease(item_ref) };
@@ -259,25 +271,38 @@ mod imp {
     use std::fs;
     use std::path::PathBuf;
 
-    fn token_path() -> Option<PathBuf> {
-        dirs::data_local_dir().map(|dir| dir.join("Sift").join("ai-token"))
+    pub fn legacy_account() -> &'static str {
+        "ai-api-key"
     }
 
-    pub fn token_result() -> Result<Option<String>, String> {
-        Ok(token())
+    fn token_path(account: &str) -> Option<PathBuf> {
+        let name = if account == "ai-api-key" {
+            "ai-token".to_string()
+        } else {
+            let safe: String = account
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+                .collect();
+            format!("ai-token-{safe}")
+        };
+        dirs::data_local_dir().map(|dir| dir.join("Sift").join(name))
     }
 
-    pub fn token() -> Option<String> {
-        let path = token_path()?;
+    pub fn token_result(account: &str) -> Result<Option<String>, String> {
+        Ok(token(account))
+    }
+
+    pub fn token(account: &str) -> Option<String> {
+        let path = token_path(account)?;
         fs::read_to_string(path).ok().map(|value| value.trim().to_owned())
     }
 
-    pub fn has_token() -> bool {
-        token().is_some()
+    pub fn has_token(account: &str) -> bool {
+        token(account).is_some()
     }
 
-    pub fn set_token(token: &str) -> Result<(), String> {
-        let path = token_path().ok_or_else(|| "no data directory".to_string())?;
+    pub fn set_token(account: &str, token: &str) -> Result<(), String> {
+        let path = token_path(account).ok_or_else(|| "no data directory".to_string())?;
         fs::create_dir_all(path.parent().unwrap()).map_err(|err| err.to_string())?;
         // Create the file with 0600 *before* anything sensitive is written:
         // writing first and chmod-ing afterwards leaves a world-readable token
@@ -320,4 +345,14 @@ mod imp {
     }
 }
 
-pub use imp::{delete_token, has_token, set_token, token, token_result};
+pub use imp::{delete_token, has_token, set_token, token_result};
+
+/// Keychain/file account for one provider profile.
+pub fn account_for(profile_id: &str) -> String {
+    format!("ai-api-key:{profile_id}")
+}
+
+/// The account used by the single-profile builds, read for migration.
+pub fn legacy_account() -> &'static str {
+    imp::legacy_account()
+}

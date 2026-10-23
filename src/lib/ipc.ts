@@ -317,24 +317,38 @@ export function getAiConfig(): Promise<AiConfig> {
   return call<AiConfig>('get_ai_config');
 }
 
+export interface AiProfileDraft {
+  id: string | null;
+  name: string;
+  provider: string;
+  endpoint: string;
+  model: string;
+}
+
 /**
- * Persist the AI provider settings. `token` semantics:
+ * Create or update one provider configuration. `token` semantics:
  * `undefined` keeps the stored secret, `''` clears it, a value replaces it.
  */
-export function saveAiConfig(
-  config: Omit<AiConfig, 'hasToken' | 'batchSize'>,
-  token?: string,
-): Promise<AiConfig> {
-  return call<AiConfig>('save_ai_config', {
-    config: {
-      enabled: config.enabled,
-      provider: config.provider,
-      endpoint: config.endpoint,
-      model: config.model,
-      language: config.language,
-      token: token === undefined ? null : token
-    }
+export function saveAiProfile(draft: AiProfileDraft, token?: string): Promise<AiConfig> {
+  return call<AiConfig>('save_ai_profile', {
+    profile: { ...draft, token: token === undefined ? null : token }
   });
+}
+
+export function selectAiProfile(id: string): Promise<AiConfig> {
+  return call<AiConfig>('select_ai_profile', { id });
+}
+
+export function deleteAiProfile(id: string): Promise<AiConfig> {
+  return call<AiConfig>('delete_ai_profile', { id });
+}
+
+export function setAiEnabled(enabled: boolean): Promise<AiConfig> {
+  return call<AiConfig>('set_ai_enabled', { enabled });
+}
+
+export function setAiLanguage(language: string): Promise<AiConfig> {
+  return call<AiConfig>('set_ai_language', { language });
 }
 
 // ---- streamed events --------------------------------------------------------

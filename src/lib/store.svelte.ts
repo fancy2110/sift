@@ -13,7 +13,11 @@ import {
   previewCleanupRule as apiPreviewCleanupRule,
   runCleanupRule as apiRunCleanupRule,
   getAiConfig,
-  saveAiConfig,
+  saveAiProfile,
+  selectAiProfile,
+  deleteAiProfile,
+  setAiEnabled,
+  setAiLanguage,
   deleteRoutine,
   dismissRoutineSuggestion,
   listHistory,
@@ -53,6 +57,7 @@ import {
 import { findSurvivingAncestor, prunedSizeDeltas } from './tree-prune';
 import type {
   AiConfig,
+  AiProfile,
   Finding,
   HistoryEntry,
   MonitorStatus as MonitorStatusInfo,
@@ -895,21 +900,60 @@ class AppStore {
   }
 
   /**
-   * Persist the AI settings sheet. `token`: omitted keeps the stored secret,
-   * '' clears it, a value replaces it. Returns whether the save succeeded so
-   * the sheet can stay open for correction.
+   * Create or update one AI profile. `token`: omitted keeps the stored
+   * secret, '' clears it, a value replaces it. Returns whether it succeeded
+   * so the sheet can stay open for correction.
    */
-  async saveAiSettings(
-    config: Omit<AiConfig, 'hasToken' | 'batchSize'>,
+  async saveAiProfile(
+    draft: {
+      id: string | null;
+      name: string;
+      provider: string;
+      endpoint: string;
+      model: string;
+    },
     token?: string,
   ): Promise<boolean> {
     try {
-      this.aiConfig = await saveAiConfig(config, token);
+      this.aiConfig = await saveAiProfile(draft, token);
       this.toast(t('settings.aiSaved'));
       return true;
     } catch (error) {
       this.toastError(t('toast.aiSaveFailed', [tr(String(error))]));
       return false;
+    }
+  }
+
+  async selectAiProfile(id: string) {
+    try {
+      this.aiConfig = await selectAiProfile(id);
+    } catch (error) {
+      this.toastError(tr(String(error)));
+    }
+  }
+
+  async deleteAiProfile(id: string) {
+    try {
+      this.aiConfig = await deleteAiProfile(id);
+      this.toast(t('settings.aiProfileDeleted'));
+    } catch (error) {
+      this.toastError(tr(String(error)));
+    }
+  }
+
+  async setAiEnabled(enabled: boolean) {
+    try {
+      this.aiConfig = await setAiEnabled(enabled);
+    } catch (error) {
+      this.toastError(tr(String(error)));
+    }
+  }
+
+  async setAiLanguage(language: string) {
+    try {
+      this.aiConfig = await setAiLanguage(language);
+    } catch (error) {
+      this.toastError(tr(String(error)));
     }
   }
 
