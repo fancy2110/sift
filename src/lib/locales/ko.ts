@@ -415,4 +415,5 @@ export const ko: Record<string, string> = {
   'err.promptTooLong': '너무 깁니다(최대 8000자)',
   'err.aiNotConfigured': '사용 가능한 AI가 설정되지 않았습니다',
   'err.aiRequest': 'AI 요청 실패: {0}',
+  'err.aiNotFound': '엔드포인트가 404를 반환했습니다. 보통 /chat/completions로 끝나야 합니다(현재: {0})',
 };

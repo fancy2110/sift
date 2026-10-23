@@ -455,6 +455,7 @@ const zh: Record<string, string> = {
   'err.promptTooLong': '内容过长（最多 8000 字符）',
   'err.aiNotConfigured': '未配置可用的 AI 服务',
   'err.aiRequest': 'AI 请求失败：{0}',
+  'err.aiNotFound': '接口地址返回 404，通常需要以 /chat/completions 结尾（当前：{0}）',
 };
 
 const en: Record<string, string> = {
@@ -871,6 +872,7 @@ const en: Record<string, string> = {
   'err.promptTooLong': 'Too long (8000 characters max)',
   'err.aiNotConfigured': 'AI is not configured',
   'err.aiRequest': 'AI request failed: {0}',
+  'err.aiNotFound': 'The endpoint returned 404; it usually needs to end with /chat/completions (current: {0})',
 };
 
 type ParamValue = string | number;
