@@ -457,6 +457,7 @@ const zh: Record<string, string> = {
   'err.aiNotConfigured': '未配置可用的 AI 服务',
   'err.aiRequest': 'AI 请求失败：{0}',
   'err.aiNotFound': '接口地址返回 404，通常需要以 /chat/completions 结尾（当前：{0}）',
+  'err.aiKeychain': '读取钥匙串中的 API token 失败（{0}）。请在设置里重新输入并保存 token。',
 };
 
 const en: Record<string, string> = {
@@ -875,6 +876,7 @@ const en: Record<string, string> = {
   'err.aiNotConfigured': 'AI is not configured',
   'err.aiRequest': 'AI request failed: {0}',
   'err.aiNotFound': 'The endpoint returned 404; it usually needs to end with /chat/completions (current: {0})',
+  'err.aiKeychain': 'Could not read the API token from the Keychain ({0}). Re-enter and save the token in settings.',
 };
 
 type ParamValue = string | number;

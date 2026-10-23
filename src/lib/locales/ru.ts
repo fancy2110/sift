@@ -444,4 +444,5 @@ export const ru: Record<string, string> = {
   'err.aiNotConfigured': 'AI не настроен',
   'err.aiRequest': 'Ошибка запроса к AI: {0}',
   'err.aiNotFound': 'Эндпоинт вернул 404; обычно он должен оканчиваться на /chat/completions (сейчас: {0})',
+  'err.aiKeychain': 'Не удалось прочитать API token из связки ключей ({0}). Введите token заново в настройках и сохраните.',
 };

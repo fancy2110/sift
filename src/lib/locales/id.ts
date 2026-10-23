@@ -448,4 +448,5 @@ export const id: Record<string, string> = {
   'err.aiNotConfigured': 'AI belum dikonfigurasi',
   'err.aiRequest': 'Permintaan AI gagal: {0}',
   'err.aiNotFound': 'Endpoint mengembalikan 404; biasanya harus berakhir dengan /chat/completions (saat ini: {0})',
+  'err.aiKeychain': 'Tidak dapat membaca API token dari Keychain ({0}). Masukkan ulang dan simpan token di pengaturan.',
 };

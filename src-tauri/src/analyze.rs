@@ -963,7 +963,11 @@ pub fn ai_prompt(services: State<'_, AppServices>, prompt: String) -> Result<Str
 
     #[cfg(feature = "remote-ai")]
     {
-        let stored_key = ai.api_key_from_env().or_else(crate::credentials::token);
+        let stored_key = match ai.api_key_from_env() {
+            Some(key) => Some(key),
+            None => crate::credentials::token_result()
+                .map_err(|error| format!("err.aiKeychain|{error}"))?,
+        };
         let api_key = stored_key.ok_or_else(|| "err.aiTokenRequired".to_string())?;
         let config = sift_analyze::LlmConfig::new(
             ai.provider.clone(),
