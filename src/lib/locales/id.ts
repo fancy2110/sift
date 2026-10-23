@@ -449,4 +449,6 @@ export const id: Record<string, string> = {
   'err.aiRequest': 'Permintaan AI gagal: {0}',
   'err.aiNotFound': 'Endpoint mengembalikan 404; biasanya harus berakhir dengan /chat/completions (saat ini: {0})',
   'err.aiKeychain': 'Tidak dapat membaca API token dari Keychain ({0}). Masukkan ulang dan simpan token di pengaturan.',
+  'err.aiAuthEnv': 'Autentikasi gagal (401/403): API Key dari variabel lingkungan ditolak oleh endpoint ini. Periksa apakah SIFT_AI_API_KEY berasal dari penyedia yang sama dengan URL (variabel lingkungan mengalahkan Keychain).',
+  'err.aiAuthKeychain': 'Autentikasi gagal (401/403): API Key dari Keychain ditolak oleh endpoint ini. key dan URL harus dari penyedia yang sama — ARK untuk endpoint ARK, DeepSeek untuk api.deepseek.com.'
 };
