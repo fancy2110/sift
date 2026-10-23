@@ -11,13 +11,19 @@
   import type { AiRoutineDraft } from '../types';
 
   let open = $state(false);
-  let mode = $state<'manual' | 'ai'>('manual');
+  let mode = $state<'manual' | 'rule' | 'ai'>('manual');
   let busy = $state(false);
 
   let title = $state('');
   let cadence = $state('routine.cadence.weekly');
   let pathInput = $state('');
   let manualPaths = $state<string[]>([]);
+
+  // rule mode
+  let ruleName = $state('');
+  let ruleDir = $state('');
+  let rulePattern = $state('');
+  let ruleDays = $state(0);
 
   let prompt = $state('');
   let draft = $state<AiRoutineDraft | null>(null);
@@ -44,6 +50,10 @@
     cadence = 'routine.cadence.weekly';
     pathInput = '';
     manualPaths = [];
+    ruleName = '';
+    ruleDir = '';
+    rulePattern = '';
+    ruleDays = 0;
     prompt = '';
     draft = null;
     open = true;
@@ -76,6 +86,21 @@
       title: title.trim(),
       cadence,
       paths: manualPaths
+    });
+    busy = false;
+    if (saved) open = false;
+  }
+
+  async function saveRule() {
+    if (busy || !ruleDir.trim() || !rulePattern.trim()) return;
+    busy = true;
+    const saved = await store.saveCleanupRuleDraft({
+      id: '',
+      name: ruleName.trim() || ruleDir.trim(),
+      dir: ruleDir.trim(),
+      pattern: rulePattern.trim(),
+      olderThanDays: ruleDays,
+      enabled: true
     });
     busy = false;
     if (saved) open = false;
@@ -134,6 +159,17 @@
           onclick={() => (mode = 'manual')}
         >
           {t('routines.manualTab')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'rule'}
+          class="rc-tab"
+          class:rc-tab-on={mode === 'rule'}
+          onclick={() => (mode = 'rule')}
+        >
+          <Icon name="filter" size={11} />
+          {t('routines.ruleTab')}
         </button>
         <button
           type="button"
@@ -211,6 +247,37 @@
             class="rc-btn rc-primary"
             disabled={busy || !title.trim() || manualPaths.length === 0}
             onclick={saveManual}
+          >
+            {t('routines.saveTask')}
+          </button>
+        </div>
+      {:else if mode === 'rule'}
+        <p class="rc-desc">{t('routines.ruleDesc')}</p>
+        <label class="rc-field">
+          <span>{t('settings.ruleName')}</span>
+          <input class="rc-input" bind:value={ruleName} placeholder={t('settings.ruleNamePh')} />
+        </label>
+        <label class="rc-field">
+          <span>{t('settings.ruleDir')}</span>
+          <input class="rc-input" bind:value={ruleDir} placeholder={t('settings.ruleDirPh')} spellcheck="false" />
+        </label>
+        <label class="rc-field">
+          <span>{t('settings.rulePattern')}</span>
+          <input class="rc-input" bind:value={rulePattern} placeholder={t('settings.rulePatternPh')} spellcheck="false" />
+        </label>
+        <label class="rc-field rc-field-inline">
+          <span>{t('settings.ruleDaysLabel')}</span>
+          <input type="number" min="0" max="3650" bind:value={ruleDays} />
+        </label>
+        <div class="rc-actions">
+          <button type="button" class="rc-btn" onclick={close}>
+            {t('settings.ruleCancel')}
+          </button>
+          <button
+            type="button"
+            class="rc-btn rc-primary"
+            disabled={busy || !ruleDir.trim() || !rulePattern.trim()}
+            onclick={saveRule}
           >
             {t('routines.saveTask')}
           </button>
@@ -339,7 +406,7 @@
   }
   .rc-tabs {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, 1fr);
     gap: 3px;
     padding: 3px;
     border-radius: 10px;
@@ -400,6 +467,23 @@
     resize: vertical;
     line-height: 1.5;
     font-family: inherit;
+  }
+  .rc-field-inline {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .rc-field-inline input {
+    width: 76px;
+    height: 30px;
+    padding: 0 8px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    outline: none;
   }
   .rc-paths {
     display: flex;

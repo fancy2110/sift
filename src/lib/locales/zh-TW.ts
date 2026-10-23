@@ -471,4 +471,9 @@ export const zhTW: Record<string, string> = {
   'routines.removePath': '移除',
   'routines.saveTask': '儲存定時任務',
   'routines.pathEmpty': '尚未新增目錄',
+  'routines.tasksTitle': '定時任務',
+  'routines.ruleTab': '規則比對',
+  'routines.ruleDesc': '依「目錄 + 檔名正規表示式」比對，隨每日定時清理執行，僅進資源回收筒。',
+  'routines.ruleBadge': '規則',
+  'routines.disabled': '已停用',
 };

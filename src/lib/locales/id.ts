@@ -493,4 +493,9 @@ export const id: Record<string, string> = {
   'routines.removePath': 'Hapus',
   'routines.saveTask': 'Simpan tugas rutin',
   'routines.pathEmpty': 'Belum ada direktori',
+  'routines.tasksTitle': 'Tugas terjadwal',
+  'routines.ruleTab': 'Cocok aturan',
+  'routines.ruleDesc': 'Cocokkan berdasarkan direktori + regex nama berkas mengikuti jadwal harian; berkas selalu masuk Tong Sampah.',
+  'routines.ruleBadge': 'Aturan',
+  'routines.disabled': 'Nonaktif',
 };

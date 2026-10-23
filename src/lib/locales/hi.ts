@@ -476,4 +476,9 @@ export const hi: Record<string, string> = {
   'routines.removePath': 'हटाएँ',
   'routines.saveTask': 'नियमित कार्य सहेजें',
   'routines.pathEmpty': 'अभी कोई निर्देशिका नहीं',
+  'routines.tasksTitle': 'नियमित कार्य',
+  'routines.ruleTab': 'नियम मिलान',
+  'routines.ruleDesc': '"निर्देशिका + फ़ाइल नाम रेगेक्स" से मिलान; दैनिक शेड्यूल के साथ चलता है और फ़ाइलें ट्रैश में जाती हैं।',
+  'routines.ruleBadge': 'नियम',
+  'routines.disabled': 'अक्षम',
 };

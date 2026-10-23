@@ -462,4 +462,9 @@ export const ko: Record<string, string> = {
   'routines.removePath': '제거',
   'routines.saveTask': '정기 작업 저장',
   'routines.pathEmpty': '추가된 디렉터리가 없습니다',
+  'routines.tasksTitle': '정기 작업',
+  'routines.ruleTab': '규칙 일치',
+  'routines.ruleDesc': '"디렉터리 + 파일 이름 정규식"으로 일치시키며 매일 예약 정리 시 실행되고 항상 휴지통으로 이동합니다.',
+  'routines.ruleBadge': '규칙',
+  'routines.disabled': '사용 중지',
 };
