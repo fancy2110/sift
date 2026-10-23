@@ -417,4 +417,5 @@ export const ko: Record<string, string> = {
   'err.aiNotConfigured': '사용 가능한 AI가 설정되지 않았습니다',
   'err.aiRequest': 'AI 요청 실패: {0}',
   'err.aiNotFound': '엔드포인트가 404를 반환했습니다. 보통 /chat/completions로 끝나야 합니다(현재: {0})',
+  'err.aiKeychain': '키체인에서 API token을 읽지 못했습니다({0}). 설정에서 token을 다시 입력하고 저장하세요.',
 };

@@ -440,4 +440,5 @@ export const ja: Record<string, string> = {
   'err.aiNotConfigured': '利用可能な AI が設定されていません',
   'err.aiRequest': 'AI リクエストに失敗しました：{0}',
   'err.aiNotFound': 'エンドポイントが 404 を返しました。通常は /chat/completions で終わる必要があります（現在：{0}）',
+  'err.aiKeychain': 'キーチェーンから API token を読み取れませんでした（{0}）。設定で token を再入力して保存してください。',
 };

@@ -101,13 +101,21 @@ mod imp {
         Ok(Some((secret, item_ref)))
     }
 
-    pub fn token() -> Option<String> {
-        let found = unsafe { find_item(true) }.ok()??;
-        let item_ref = found.1;
+    /// Read the stored token, keeping the reason a present item could not be
+    /// read (keychain locked, ACL denial for this binary, …).
+    pub fn token_result() -> Result<Option<String>, String> {
+        let found = unsafe { find_item(true) }?;
+        let Some((secret, item_ref)) = found else {
+            return Ok(None);
+        };
         if !item_ref.is_null() {
             unsafe { CFRelease(item_ref) };
         }
-        found.0
+        Ok(secret)
+    }
+
+    pub fn token() -> Option<String> {
+        token_result().ok().flatten()
     }
 
     pub fn has_token() -> bool {
@@ -174,6 +182,10 @@ mod imp {
         dirs::data_local_dir().map(|dir| dir.join("Sift").join("ai-token"))
     }
 
+    pub fn token_result() -> Result<Option<String>, String> {
+        Ok(token())
+    }
+
     pub fn token() -> Option<String> {
         let path = token_path()?;
         fs::read_to_string(path).ok().map(|value| value.trim().to_owned())
@@ -227,4 +239,4 @@ mod imp {
     }
 }
 
-pub use imp::{delete_token, has_token, set_token, token};
+pub use imp::{delete_token, has_token, set_token, token, token_result};

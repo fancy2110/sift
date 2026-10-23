@@ -431,4 +431,5 @@ export const hi: Record<string, string> = {
   'err.aiNotConfigured': 'कोई उपयोगी AI कॉन्फ़िगर नहीं है',
   'err.aiRequest': 'AI अनुरोध विफल: {0}',
   'err.aiNotFound': 'एंडपॉइंट ने 404 लौटाया; सामान्यतः इसे /chat/completions पर समाप्त होना चाहिए (वर्तमान: {0})',
+  'err.aiKeychain': 'Keychain से API token पढ़ा नहीं जा सका ({0})। सेटिंग्स में token फिर से दर्ज कर सहेजें।',
 };
