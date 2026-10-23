@@ -723,7 +723,9 @@ export function createMockBackend(bus: EventBus): MockBackend {
               title: '每周清理 Xcode 缓存',
               cadence: 'cadence.weekly',
               paths: ['/Users/you/Library/Developer/Xcode/DerivedData'],
-              reason: '（模拟）这里是 Xcode 的构建产物，可安全重建。'
+              reason: '（模拟）这里是 Xcode 的构建产物，可安全重建。',
+              pattern: '',
+              olderThanDays: 0
             } as unknown as T
           );
           break;

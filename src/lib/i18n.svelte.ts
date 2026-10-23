@@ -507,6 +507,7 @@ const zh: Record<string, string> = {
   'routines.ruleDesc': '按「目录 + 文件名正则」匹配，随每日定时清理执行，只进回收站。',
   'routines.ruleBadge': '规则',
   'routines.disabled': '已停用',
+  'routines.optional': '可选',
 };
 
 const en: Record<string, string> = {
@@ -975,6 +976,7 @@ const en: Record<string, string> = {
   'routines.ruleDesc': 'Match by directory + file-name regex as part of the daily schedule; files always go to the Trash.',
   'routines.ruleBadge': 'Rule',
   'routines.disabled': 'Disabled',
+  'routines.optional': 'Optional',
 };
 
 type ParamValue = string | number;

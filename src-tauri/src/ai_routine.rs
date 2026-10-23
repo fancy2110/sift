@@ -29,6 +29,12 @@ pub struct AiRoutineDraft {
     pub cadence: String,
     pub paths: Vec<String>,
     pub reason: String,
+    /// Optional file-name regex; empty means "every file under the paths".
+    #[serde(default)]
+    pub pattern: String,
+    /// Only meaningful with a pattern; 0 = any age.
+    #[serde(default)]
+    pub older_than_days: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +46,10 @@ struct ModelReply {
     paths: Vec<String>,
     #[serde(default)]
     reason: String,
+    #[serde(default)]
+    pattern: String,
+    #[serde(default)]
+    older_than_days: u32,
 }
 
 /// Build the system prompt with the real home directory substituted, so the
@@ -58,6 +68,8 @@ Required keys:
 - "cadence": exactly one of "daily", "weekly", "monthly".
 - "paths": array of 1 to 5 absolute directory paths that already exist under {home}. Prefer caches, logs, temporary files and build output. Never use "/", "{home}" itself, or system paths.
 - "reason": string, at most 120 characters, explaining why this is safe.
+- "pattern": optional file-name regex such as "^.*\\.(dmg|zip)$" when the request targets a kind of file; use "" when every file under the paths qualifies.
+- "olderThanDays": integer, 0 means any age; only meaningful together with a pattern.
 
 Write "title" and "reason" in the same language as the user's request.
 
@@ -156,6 +168,8 @@ fn parse_draft(text: &str, prompt: &str) -> Result<AiRoutineDraft, String> {
         cadence: normalize_cadence(&reply.cadence),
         paths,
         reason: reply.reason.trim().to_string(),
+        pattern: reply.pattern.trim().to_string(),
+        older_than_days: reply.older_than_days.min(3650),
     })
 }
 

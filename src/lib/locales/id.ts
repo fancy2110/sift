@@ -498,4 +498,5 @@ export const id: Record<string, string> = {
   'routines.ruleDesc': 'Cocokkan berdasarkan direktori + regex nama berkas mengikuti jadwal harian; berkas selalu masuk Tong Sampah.',
   'routines.ruleBadge': 'Aturan',
   'routines.disabled': 'Nonaktif',
+  'routines.optional': 'Opsional',
 };

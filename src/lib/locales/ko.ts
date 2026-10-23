@@ -467,4 +467,5 @@ export const ko: Record<string, string> = {
   'routines.ruleDesc': '"디렉터리 + 파일 이름 정규식"으로 일치시키며 매일 예약 정리 시 실행되고 항상 휴지통으로 이동합니다.',
   'routines.ruleBadge': '규칙',
   'routines.disabled': '사용 중지',
+  'routines.optional': '선택',
 };
