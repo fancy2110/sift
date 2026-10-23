@@ -7,12 +7,20 @@
 //! the token in the user's **macOS Keychain** (generic password, service
 //! `Sift`), where it is encrypted at rest and never lands in `settings.json`.
 //!
-//! Other platforms fall back to a user-private (`0600`) file; that path exists
+//! On macOS a user-private (`0600`) file is also written when the Keychain
+//! cannot store or read the item: a locally built binary is re-signed on every
+//! rebuild, which invalidates the item's ACL (`errSecAuthFailed`). The file is
+//! consulted only when the Keychain fails, and cleared when the Keychain write
+//! succeeds or the token is deleted.
+//!
+//! Other platforms use the same user-private (`0600`) file; that path exists
 //! so the crate compiles and stays usable off macOS, not as a security equal.
 
 #[cfg(target_os = "macos")]
 mod imp {
     use std::ffi::c_void;
+    use std::fs;
+    use std::path::PathBuf;
     use std::ptr;
 
     type OsStatus = i32;
@@ -22,6 +30,55 @@ mod imp {
 
     const SERVICE: &str = "Sift";
     const ACCOUNT: &str = "ai-api-key";
+
+    // Dev builds are re-signed on every rebuild, and macOS ties a generic
+    // password's ACL to the creating binary's signature. That makes the item
+    // unreadable (-25293 errSecAuthFailed) after a rebuild even though it
+    // exists. Keep a 0600 fallback so a local build stays usable; it is only
+    // consulted when the Keychain cannot read or write the item.
+    fn fallback_path() -> Option<PathBuf> {
+        dirs::data_local_dir().map(|dir| dir.join("Sift").join("ai-token"))
+    }
+
+    fn read_fallback() -> Option<String> {
+        let path = fallback_path()?;
+        fs::read_to_string(path)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn write_fallback(token: &str) -> Result<(), String> {
+        let path = fallback_path().ok_or_else(|| "no data directory".to_string())?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        use std::io::Write;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)
+                .map_err(|error| error.to_string())?;
+            file.write_all(token.as_bytes())
+                .map_err(|error| error.to_string())?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(&path, token).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn clear_fallback() {
+        if let Some(path) = fallback_path() {
+            let _ = fs::remove_file(path);
+        }
+    }
 
     #[link(name = "Security", kind = "framework")]
     unsafe extern "C" {
@@ -104,14 +161,22 @@ mod imp {
     /// Read the stored token, keeping the reason a present item could not be
     /// read (keychain locked, ACL denial for this binary, …).
     pub fn token_result() -> Result<Option<String>, String> {
-        let found = unsafe { find_item(true) }?;
-        let Some((secret, item_ref)) = found else {
-            return Ok(None);
-        };
-        if !item_ref.is_null() {
-            unsafe { CFRelease(item_ref) };
+        match unsafe { find_item(true) } {
+            Ok(Some((secret, item_ref))) => {
+                if !item_ref.is_null() {
+                    unsafe { CFRelease(item_ref) };
+                }
+                match secret {
+                    Some(value) if !value.trim().is_empty() => Ok(Some(value)),
+                    _ => Ok(read_fallback()),
+                }
+            }
+            Ok(None) => Ok(read_fallback()),
+            Err(error) => match read_fallback() {
+                Some(value) => Ok(Some(value)),
+                None => Err(error),
+            },
         }
-        Ok(secret)
     }
 
     pub fn token() -> Option<String> {
@@ -119,6 +184,9 @@ mod imp {
     }
 
     pub fn has_token() -> bool {
+        if read_fallback().is_some() {
+            return true;
+        }
         let found = unsafe { find_item(false) };
         let Ok(Some((_, item_ref))) = found else {
             return false;
@@ -130,36 +198,48 @@ mod imp {
     }
 
     pub fn set_token(token: &str) -> Result<(), String> {
-        // Replace in place: delete the old item if one exists, then add.
-        if let Some((_, item_ref)) = unsafe { find_item(false) }? {
-            if !item_ref.is_null() {
-                let status = unsafe { SecKeychainItemDelete(item_ref) };
-                unsafe { CFRelease(item_ref) };
-                if status != ERR_SEC_SUCCESS {
-                    return Err(format!("keychain delete failed (OSStatus {status})"));
+        let keychain = (|| -> Result<(), String> {
+            // Replace in place: delete the old item if one exists, then add.
+            if let Some((_, item_ref)) = unsafe { find_item(false) }? {
+                if !item_ref.is_null() {
+                    let status = unsafe { SecKeychainItemDelete(item_ref) };
+                    unsafe { CFRelease(item_ref) };
+                    if status != ERR_SEC_SUCCESS {
+                        return Err(format!("keychain delete failed (OSStatus {status})"));
+                    }
                 }
             }
-        }
 
-        let status = unsafe {
-            SecKeychainAddGenericPassword(
-                ptr::null(), // default keychain
-                SERVICE.len() as u32,
-                SERVICE.as_ptr(),
-                ACCOUNT.len() as u32,
-                ACCOUNT.as_ptr(),
-                token.len() as u32,
-                token.as_ptr(),
-                ptr::null_mut(),
-            )
-        };
-        if status != ERR_SEC_SUCCESS {
-            return Err(format!("keychain add failed (OSStatus {status})"));
+            let status = unsafe {
+                SecKeychainAddGenericPassword(
+                    ptr::null(), // default keychain
+                    SERVICE.len() as u32,
+                    SERVICE.as_ptr(),
+                    ACCOUNT.len() as u32,
+                    ACCOUNT.as_ptr(),
+                    token.len() as u32,
+                    token.as_ptr(),
+                    ptr::null_mut(),
+                )
+            };
+            if status != ERR_SEC_SUCCESS {
+                return Err(format!("keychain add failed (OSStatus {status})"));
+            }
+            Ok(())
+        })();
+
+        match keychain {
+            Ok(()) => {
+                clear_fallback();
+                Ok(())
+            }
+            Err(error) => write_fallback(token)
+                .map_err(|fallback| format!("{error}; fallback write failed: {fallback}")),
         }
-        Ok(())
     }
 
     pub fn delete_token() -> Result<(), String> {
+        clear_fallback();
         if let Some((_, item_ref)) = unsafe { find_item(false) }? {
             if !item_ref.is_null() {
                 let status = unsafe { SecKeychainItemDelete(item_ref) };
