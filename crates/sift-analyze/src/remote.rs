@@ -137,6 +137,12 @@ impl LlmConfig {
         self
     }
 
+    /// Override the request timeout (default 45 s).
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     pub fn with_protocol(mut self, protocol: Protocol) -> Self {
         self.protocol = protocol;
         self
@@ -275,7 +281,7 @@ impl OpenAiCompatibleAdjudicator {
         };
         let response = request
             .send()
-            .map_err(|err| AdjudicateError::Transport(err.to_string()))?;
+            .map_err(|err| AdjudicateError::Transport(describe_transport(&err)))?;
         let status = response.status();
         let text = response
             .text()
@@ -396,7 +402,7 @@ impl OpenAiCompatibleAdjudicator {
                 if is_rate_limit_error(&err) {
                     Retry::RateLimited(DEFAULT_RETRY_WAIT_MS)
                 } else {
-                    Retry::Fatal(err.to_string())
+                    Retry::Fatal(describe_transport(&err))
                 }
             })?;
 
@@ -466,6 +472,29 @@ fn parse_retry_after(value: &str) -> Option<u64> {
     let secs: u64 = value.trim().parse().ok()?;
     // Cap a single wait at 1 h so a header typo cannot park the app for days.
     Some(secs.clamp(1, 3600) * 1000)
+}
+
+/// Flatten a reqwest error with its causes so the UI can say *why* the
+/// request failed (DNS, TLS, timeout, connection reset, …) instead of the
+/// generic "error sending request".
+fn describe_transport(err: &reqwest::Error) -> String {
+    use std::error::Error;
+    let mut text = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        let detail = cause.to_string();
+        if !detail.is_empty() {
+            text.push_str(": ");
+            text.push_str(&detail);
+        }
+        source = cause.source();
+    }
+    if err.is_timeout() {
+        text.push_str(" [timeout]");
+    } else if err.is_connect() {
+        text.push_str(" [connect]");
+    }
+    text
 }
 
 /// Whether a connection-level error reads as a rate limit.
@@ -711,6 +740,33 @@ mod tests {
         assert!(lower.contains("anthropic-version: 2023-06-01"), "{request}");
         assert!(request.contains("\"system\":\"be brief\""), "{request}");
         assert!(request.contains("\"max_tokens\""), "{request}");
+    }
+
+    #[test]
+    fn a_slow_endpoint_is_reported_as_a_timeout() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            // Accept and never answer, so the client hits its own timeout.
+            // Bind to a name: `let _ =` would drop the stream immediately.
+            let _connection = listener.accept();
+            std::thread::sleep(std::time::Duration::from_millis(800));
+        });
+
+        let config = LlmConfig::new(
+            "test",
+            format!("http://{addr}/v1/chat/completions"),
+            "m",
+            "k",
+        )
+        .with_consent()
+        .with_timeout(std::time::Duration::from_millis(200));
+        let client = OpenAiCompatibleAdjudicator::new(config).unwrap();
+        let error = client.complete("system", "hello").unwrap_err().to_string();
+        assert!(error.contains("[timeout]"), "{error}");
+        server.join().unwrap();
     }
 
     #[test]

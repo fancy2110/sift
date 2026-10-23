@@ -488,6 +488,7 @@ const zh: Record<string, string> = {
   'err.aiRoutineParse': 'AI 返回的内容无法解析，请换个说法重试',
   'err.aiRoutineNoPaths': 'AI 没有给出可用的目录（必须存在、绝对路径、位于主目录内）',
   'err.aiRoutineTitle': '例行任务需要一个标题',
+  'err.aiTimeout': '请求超时：模型思考时间较长或网络较慢，请重试（已等待 120 秒）。',
 };
 
 const en: Record<string, string> = {
@@ -937,6 +938,7 @@ const en: Record<string, string> = {
   'err.aiRoutineParse': 'The model reply could not be parsed; try rephrasing',
   'err.aiRoutineNoPaths': 'The model gave no usable directory (must exist, be absolute, inside the home directory)',
   'err.aiRoutineTitle': 'A routine needs a title',
+  'err.aiTimeout': 'Request timed out: the model took too long or the network is slow. Try again (waited 120 s).',
 };
 
 type ParamValue = string | number;

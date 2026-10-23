@@ -457,4 +457,5 @@ export const zhTW: Record<string, string> = {
   'err.aiRoutineParse': 'AI 傳回的內容無法解析，請換個說法重試',
   'err.aiRoutineNoPaths': 'AI 沒有給出可用的目錄（必須存在、絕對路徑、位於主目錄內）',
   'err.aiRoutineTitle': '例行任務需要一個標題',
+  'err.aiTimeout': '請求逾時：模型思考時間較長或網路較慢，請重試（已等待 120 秒）。',
 };

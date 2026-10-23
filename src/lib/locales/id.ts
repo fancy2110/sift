@@ -479,4 +479,5 @@ export const id: Record<string, string> = {
   'err.aiRoutineParse': 'Balasan AI tidak dapat diurai; coba ubah kalimat',
   'err.aiRoutineNoPaths': 'AI tidak memberikan direktori yang layak (harus ada, absolut, di dalam direktori home)',
   'err.aiRoutineTitle': 'Tugas rutin memerlukan judul',
+  'err.aiTimeout': 'Permintaan habis waktu: model terlalu lama atau jaringan lambat. Coba lagi (menunggu 120 detik).',
 };

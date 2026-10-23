@@ -471,4 +471,5 @@ export const ja: Record<string, string> = {
   'err.aiRoutineParse': 'AI の応答を解析できませんでした。言い換えて再試行してください',
   'err.aiRoutineNoPaths': 'AI が使用可能なディレクトリを提示しませんでした（存在する絶対パスでホーム内である必要があります）',
   'err.aiRoutineTitle': '例行タスクにはタイトルが必要です',
+  'err.aiTimeout': 'リクエストがタイムアウトしました。モデルの思考に時間がかかったか、ネットワークが遅い可能性があります。再試行してください（120 秒待機）。',
 };

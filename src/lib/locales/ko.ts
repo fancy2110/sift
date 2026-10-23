@@ -448,4 +448,5 @@ export const ko: Record<string, string> = {
   'err.aiRoutineParse': 'AI 응답을 해석할 수 없습니다. 표현을 바꿔 다시 시도하세요',
   'err.aiRoutineNoPaths': 'AI가 사용 가능한 디렉터리를 제시하지 않았습니다(존재하는 절대 경로, 홈 디렉터리 내여야 함)',
   'err.aiRoutineTitle': '정기 작업에는 제목이 필요합니다',
+  'err.aiTimeout': '요청 시간이 초과되었습니다. 모델 응답이 오래 걸리거나 네트워크가 느립니다. 다시 시도하세요(120초 대기).',
 };
