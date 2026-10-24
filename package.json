@@ -16,7 +16,8 @@
     "@tauri-apps/plugin-autostart": "3.0.0-alpha.1",
     "@tauri-apps/plugin-dialog": "3.0.0-alpha.1",
     "@tauri-apps/plugin-notification": "3.0.0-alpha.1",
-    "@tauri-apps/plugin-opener": "3.0.0-alpha.1"
+    "@tauri-apps/plugin-opener": "3.0.0-alpha.1",
+    "lucide-svelte": "^1.0.1"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
