@@ -5,6 +5,7 @@
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
   import type { Node } from '../lib/types';
+  import type { CleanupRule } from '../lib/ipc';
   type SubTab = 'smart' | 'explorer' | 'history' | 'routines';
   import { onMount } from 'svelte';
   import { fade, scale } from 'svelte/transition';
@@ -15,6 +16,8 @@
   onMount(() => {
     void store.loadCleanupRules();
   });
+
+  let composerRef = $state<{ editRule: (rule: CleanupRule) => void } | null>(null);
 
   function selectAllSmart() {
     store.selectedIds = new Set(store.smartItems.map((i) => i.id));
@@ -555,7 +558,7 @@
             <div class="rt-block-head">
               <h3 class="rt-block-title">{t('routines.tasksTitle')}</h3>
               <span class="rt-count chip">{store.routines.length + store.cleanupRules.length}</span>
-              <RoutineComposer />
+              <RoutineComposer bind:this={composerRef} />
             </div>
             {#each store.routines as r, i (r.id)}
               <article class="rt-card" in:listIn={{ index: i }}>
@@ -643,11 +646,11 @@
                   <button
                     type="button"
                     class="rt-btn"
-                    title={t('settings.toggleMode')}
-                    aria-label={t('settings.toggleMode')}
-                    onclick={() => store.toggleCleanupRule(rule)}
+                    title={t('settings.aiEditProfile')}
+                    aria-label={t('settings.aiEditProfile')}
+                    onclick={() => composerRef?.editRule(rule)}
                   >
-                    <Icon name="refresh" size={12} />
+                    <Icon name="sliders" size={12} />
                   </button>
                   <button
                     type="button"
