@@ -9,10 +9,12 @@
   import { t } from '../i18n.svelte';
   import { pickDirectory } from '../dialog';
   import type { AiRoutineDraft } from '../types';
+  import type { CleanupRule } from '../ipc';
 
   let open = $state(false);
   let mode = $state<'manual' | 'ai'>('manual');
   let busy = $state(false);
+  let editingRuleId = $state('');
 
   let title = $state('');
   let cadence = $state('routine.cadence.weekly');
@@ -41,7 +43,23 @@
     return t(value.startsWith('routine.') ? value : `routine.${value}`);
   }
 
+  /** Pre-fill the form with an existing rule and switch to update mode. */
+  export function editRule(rule: CleanupRule) {
+    mode = 'manual';
+    busy = false;
+    editingRuleId = rule.id;
+    title = rule.name;
+    cadence = 'routine.cadence.daily';
+    pattern = rule.pattern;
+    olderThanDays = rule.olderThanDays;
+    manualPaths = [rule.dir];
+    pathInput = '';
+    draft = null;
+    open = true;
+  }
+
   function openDialog() {
+    editingRuleId = '';
     mode = 'manual';
     busy = false;
     title = '';
@@ -86,7 +104,7 @@
   ) {
     if (patternValue.trim()) {
       return store.saveCleanupRuleDraft({
-        id: '',
+        id: editingRuleId,
         name: titleValue,
         dir: paths[0],
         pattern: patternValue.trim(),
