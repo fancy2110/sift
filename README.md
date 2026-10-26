@@ -1,5 +1,7 @@
 # Sift — AI 原生的磁盘空间管理器
 
+[English](README.en.md) · 简体中文
+
 跨平台（macOS / Windows / Linux）磁盘空间管理与清理工具，基于 **Tauri v2 + Svelte 5**，产品逻辑全部在共享 Rust crate 中。
 
 ## 现在能做什么
@@ -10,6 +12,12 @@
 - **AI 判定，但不能单独决定删除**：本地规则先提名，再给「可删 / 安全等级 / 原因」；接远程 LLM 时它只能**确认或削弱**，永远无法凭一句话把东西标成 `Safe`。
 - **结论记得住**：明确可清理的清单按路径指纹落盘（原子写、版本化、有上限），重启后仍在，并作为习惯挖掘与自动清理的依据。
 - **后台值守**：长期监听剩余空间，低于阈值时提示；可按「已批准的安全清单」自动清理，全部进回收站。
+
+## 文档
+
+- [软件说明（中文）](docs/product/description.zh.md) · [English](docs/product/description.en.md)
+- [v0.1.0 发布说明](docs/release/v0.1.0/release-notes.zh.md) · [English](docs/release/v0.1.0/release-notes.en.md)
+- [变更日志](CHANGELOG.md)
 
 ## 快速开始
 
