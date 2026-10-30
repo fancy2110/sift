@@ -1,20 +1,20 @@
 //! Daily scheduled cleanup.
 //!
 //! A small background thread that wakes a few times a minute and, when the
-//! local clock reaches the configured hour (default 04:00), runs the same
-//! real pipeline the user triggers manually: scan the system volume, analyse
-//! it, then send the remembered, individually approved safe items inside the
-//! home directory to the trash. Nothing outside home is removed and only Safe
-//! entries the user has approved for automatic cleanup qualify, so the safety
-//! guardrails are identical to an interactive cleanup.
+//! local clock reaches the configured hour (default 04:00), scans the system
+//! volume and analyses it. It deliberately **does not delete anything**: the
+//! result is a list of cleanable items the user reviews and confirms in the
+//! app. Scheduled cleanup is an analysis pass, not an unattended deletion.
 
+#[cfg(test)]
 use std::path::Path;
 use std::time::Duration;
 
 use chrono::{Datelike, Timelike};
 use sift_analyze::Safety;
+#[cfg(test)]
 use sift_store::CleanableEntry;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::analyze::AppServices;
 use crate::scanner::ScanManager;
@@ -168,34 +168,49 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
 
     crate::analyze::analyze_current_with(&services, &manager)?;
 
+    // Scheduled cleanup stops here: nothing is trashed unattended. Count what
+    // the pass found, bring the window forward and let the front end show the
+    // smart list for confirmation.
     let home = dirs::home_dir();
-    let paths = select_approved_paths(services.store.cleanable().entries(), home.as_deref());
-
-    // Re-check the schedule's own switch at act time: the user may have turned
-    // it off while the hour-long scan was running. The per-item guards
-    // (Safe + approved + home + fingerprint) are enforced downstream.
-    let still_allowed = services
+    let pending = services
         .store
-        .settings()
-        .monitor
-        .scheduled_cleanup_enabled;
-    if !still_allowed {
-        return Ok(());
-    }
-    if !paths.is_empty() {
-        crate::analyze::perform_cleanup(&services, &paths, true);
-    }
+        .cleanable()
+        .entries()
+        .iter()
+        .filter(|entry| entry.safety == Safety::Safe)
+        .filter(|entry| sift_monitor::policy::resolved_inside_home(&entry.path, home.as_deref()))
+        .count();
 
-    // User-defined "directory + regex" rules run after the recommendation
-    // pass. Each rule is bounded and reports through the history like any
-    // other automatic cleanup; one bad rule never blocks the rest.
+    // Rules are previewed, not executed: the matches are part of the pending
+    // review, and running a rule stays an explicit user action.
     let rules = services.store.settings().monitor.cleanup_rules;
+    let mut rule_matches = 0usize;
     for rule in rules.iter().filter(|rule| rule.enabled) {
-        if let Err(error) = crate::cleanup_rules::run_rule(&services.store, rule) {
-            eprintln!("scheduled cleanup rule \"{}\" failed: {error}", rule.name);
+        if let Ok(preview) = crate::cleanup_rules::preview_cleanup_rule(rule.clone()) {
+            rule_matches += preview.matched;
         }
     }
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let _ = app.emit(
+        "scheduled://ready",
+        ScheduledReady {
+            pending,
+            rule_matches,
+        },
+    );
     Ok(())
+}
+
+/// Payload for the front end when a scheduled analysis pass finishes.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScheduledReady {
+    pending: usize,
+    rule_matches: usize,
 }
 
 /// Select remembered entries for unattended scheduled cleanup: `Safe`,
@@ -209,6 +224,7 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
 /// `clean_now` re-checks immediately before a move, so selection and execution
 /// share one boundary rule. A path that cannot be resolved counts as "outside"
 /// — it would fail the pre-delete fingerprint check anyway.
+#[cfg(test)]
 pub(crate) fn select_approved_paths(
     entries: &[CleanableEntry],
     home: Option<&Path>,

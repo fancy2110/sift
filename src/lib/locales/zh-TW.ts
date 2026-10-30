@@ -477,4 +477,5 @@ export const zhTW: Record<string, string> = {
   'routines.ruleBadge': '規則',
   'routines.disabled': '已停用',
   'routines.optional': '選填',
+  'toast.scheduledReady': '定時清理已完成分析：{0} 項待確認，已切換到智慧列表。',
 };

@@ -30,6 +30,7 @@ import {
   monitorStatus,
   onFsDeleted,
   onMonitorEvent,
+  onScheduledReady,
   onScanBatch,
   onScanDone,
   onScanRefreshed,
@@ -351,7 +352,8 @@ class AppStore {
       onScanDone((event) => this.handleScanDone(event)),
       onScanRefreshed((event) => this.handleRefreshed(event)),
       onFsDeleted((event) => this.pruneIds(new Set([event.id]))),
-      onMonitorEvent((event) => this.handleMonitorEvent(event))
+      onMonitorEvent((event) => this.handleMonitorEvent(event)),
+      onScheduledReady((event) => this.handleScheduledReady(event))
     ]);
 
     // All remaining bootstrap calls are independent; issuing them together
@@ -806,6 +808,13 @@ class AppStore {
     if (event.epoch !== this.scanEpoch) return;
     this.rebuildCurrentEntries();
     await this.runAnalysis();
+  }
+
+  /** Scheduled analysis finished: show the smart list and wait for confirmation. */
+  private async handleScheduledReady(event: { pending: number; ruleMatches: number }) {
+    this.goSub('smart');
+    await this.runAnalysis();
+    this.toast(t('toast.scheduledReady', [String(event.pending + event.ruleMatches)]));
   }
 
   /** Ask the backend to analyse the finished scan and adopt the conclusions. */

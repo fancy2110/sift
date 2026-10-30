@@ -499,4 +499,5 @@ export const id: Record<string, string> = {
   'routines.ruleBadge': 'Aturan',
   'routines.disabled': 'Nonaktif',
   'routines.optional': 'Opsional',
+  'toast.scheduledReady': 'Analisis terjadwal selesai: {0} item menunggu konfirmasi — beralih ke daftar Cerdas.',
 };

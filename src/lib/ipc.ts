@@ -436,6 +436,13 @@ export function onFsDeleted(cb: (e: DeletedEvent) => void): Promise<UnlistenFn> 
   return subscribe<DeletedEvent>('fs://deleted', cb);
 }
 
+/** Emitted after the daily scheduled analysis pass (nothing is deleted). */
+export function onScheduledReady(
+  cb: (e: { pending: number; ruleMatches: number }) => void
+): Promise<UnlistenFn> {
+  return subscribe('scheduled://ready', cb);
+}
+
 export function onMonitorEvent(cb: (e: unknown) => void): Promise<UnlistenFn> {
   return subscribe<unknown>('monitor://event', cb);
 }

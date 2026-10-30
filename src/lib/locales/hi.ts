@@ -482,4 +482,5 @@ export const hi: Record<string, string> = {
   'routines.ruleBadge': 'नियम',
   'routines.disabled': 'अक्षम',
   'routines.optional': 'वैकल्पिक',
+  'toast.scheduledReady': 'नियत विश्लेषण पूरा: {0} आइटम पुष्टि की प्रतीक्षा में हैं; स्मार्ट सूची पर स्विच किया गया।',
 };
