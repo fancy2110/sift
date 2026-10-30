@@ -373,6 +373,29 @@
         <p class="ai-consent">{t('settings.aiConsent')}</p>
       </div>
 
+      <div class="set-card">
+        <div class="set-card-info">
+          <p class="set-card-title">{t('settings.scheduledAutoTitle')}</p>
+          <p class="set-card-desc">{t('settings.scheduledAutoDesc')}</p>
+        </div>
+        <button
+          type="button"
+          class="switch"
+          class:switch-on={store.scheduledAutoExecute}
+          role="switch"
+          aria-label={t('settings.scheduledAutoTitle')}
+          aria-checked={store.scheduledAutoExecute}
+          onclick={() =>
+            store.saveScheduled(
+              store.scheduledOn,
+              store.scheduledHour,
+              !store.scheduledAutoExecute
+            )}
+        >
+          <span class="switch-knob"></span>
+        </button>
+      </div>
+
       <p class="set-section-label" style="margin-top: 22px">{t('settings.automation')}</p>
 
       <div class="set-group">

@@ -143,6 +143,7 @@ class AppStore {
   monitorRunning = $state(false);
   scheduledOn = $state(false);
   scheduledHour = $state(4);
+  scheduledAutoExecute = $state(false);
 
   /** User-defined directory + regex cleanup rules (persisted server-side). */
   cleanupRules = $state<CleanupRule[]>([]);
@@ -1386,15 +1387,17 @@ class AppStore {
       this.monitorRunning = status.running;
       this.scheduledOn = status.scheduledCleanupEnabled;
       this.scheduledHour = status.scheduledHour;
+      this.scheduledAutoExecute = status.scheduledAutoExecute;
     } catch {
       // Status is best-effort.
     }
   }
 
-  async saveScheduled(enabled: boolean, hour: number) {
+  async saveScheduled(enabled: boolean, hour: number, autoExecute = this.scheduledAutoExecute) {
     try {
-      await setScheduledCleanup(enabled, hour);
+      await setScheduledCleanup(enabled, hour, autoExecute);
       this.scheduledOn = enabled;
+      this.scheduledAutoExecute = autoExecute;
       this.scheduledHour = hour;
     } catch (error) {
       this.toastError(t('toast.settingsFailed', [String(error)]));

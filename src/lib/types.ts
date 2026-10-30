@@ -134,6 +134,7 @@ export interface MonitorStatus {
   lastTotalBytes: number;
   scheduledCleanupEnabled: boolean;
   scheduledHour: number;
+  scheduledAutoExecute: boolean;
 }
 
 export interface VolumeInfo {

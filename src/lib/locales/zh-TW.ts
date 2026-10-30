@@ -478,4 +478,6 @@ export const zhTW: Record<string, string> = {
   'routines.disabled': '已停用',
   'routines.optional': '選填',
   'toast.scheduledReady': '定時清理已完成分析：{0} 項待確認，已切換到智慧列表。',
+  'settings.scheduledAutoTitle': '分析後自動清理',
+  'settings.scheduledAutoDesc': '關閉時（預設）只做分析並等待你在智慧列表中確認；開啟後到點直接執行已批准的清理，並記錄到歷史。',
 };

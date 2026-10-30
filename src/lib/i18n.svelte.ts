@@ -509,6 +509,8 @@ const zh: Record<string, string> = {
   'routines.disabled': '已停用',
   'routines.optional': '可选',
   'toast.scheduledReady': '定时清理已完成分析：{0} 项待确认，已切换到智能列表。',
+  'settings.scheduledAutoTitle': '分析后自动清理',
+  'settings.scheduledAutoDesc': '关闭时（默认）只做分析并等待你在智能列表中确认；开启后到点直接执行已批准的清理，并记录到历史。',
 };
 
 const en: Record<string, string> = {
@@ -979,6 +981,8 @@ const en: Record<string, string> = {
   'routines.disabled': 'Disabled',
   'routines.optional': 'Optional',
   'toast.scheduledReady': 'Scheduled analysis finished: {0} items awaiting your confirmation — switched to the Smart list.',
+  'settings.scheduledAutoTitle': 'Clean automatically after analysis',
+  'settings.scheduledAutoDesc': 'Off (default): analyse and wait for your confirmation in the Smart list. On: execute the approved cleanup at the scheduled time and record it in history.',
 };
 
 type ParamValue = string | number;

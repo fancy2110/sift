@@ -500,4 +500,6 @@ export const id: Record<string, string> = {
   'routines.disabled': 'Nonaktif',
   'routines.optional': 'Opsional',
   'toast.scheduledReady': 'Analisis terjadwal selesai: {0} item menunggu konfirmasi — beralih ke daftar Cerdas.',
+  'settings.scheduledAutoTitle': 'Bersihkan otomatis setelah analisis',
+  'settings.scheduledAutoDesc': 'Mati (default): hanya analisis dan tunggu konfirmasi di daftar Cerdas. Nyala: jalankan pembersihan yang disetujui pada waktu terjadwal dan catat ke riwayat.',
 };
