@@ -491,4 +491,5 @@ export const ja: Record<string, string> = {
   'routines.ruleBadge': 'ルール',
   'routines.disabled': '無効',
   'routines.optional': '任意',
+  'toast.scheduledReady': '定期クリーンアップの分析が完了しました：{0} 件が確認待ちです。スマートリストに切り替えました。',
 };

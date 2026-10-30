@@ -495,4 +495,5 @@ export const ru: Record<string, string> = {
   'routines.ruleBadge': 'Правило',
   'routines.disabled': 'Отключено',
   'routines.optional': 'Необязательно',
+  'toast.scheduledReady': 'Плановый анализ завершён: {0} элементов ждут подтверждения — открыт умный список.',
 };

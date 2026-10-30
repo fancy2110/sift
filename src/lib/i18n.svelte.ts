@@ -508,6 +508,7 @@ const zh: Record<string, string> = {
   'routines.ruleBadge': '规则',
   'routines.disabled': '已停用',
   'routines.optional': '可选',
+  'toast.scheduledReady': '定时清理已完成分析：{0} 项待确认，已切换到智能列表。',
 };
 
 const en: Record<string, string> = {
@@ -977,6 +978,7 @@ const en: Record<string, string> = {
   'routines.ruleBadge': 'Rule',
   'routines.disabled': 'Disabled',
   'routines.optional': 'Optional',
+  'toast.scheduledReady': 'Scheduled analysis finished: {0} items awaiting your confirmation — switched to the Smart list.',
 };
 
 type ParamValue = string | number;

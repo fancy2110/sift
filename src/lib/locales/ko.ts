@@ -468,4 +468,5 @@ export const ko: Record<string, string> = {
   'routines.ruleBadge': '규칙',
   'routines.disabled': '사용 중지',
   'routines.optional': '선택',
+  'toast.scheduledReady': '예약 분석 완료: {0}개 항목이 확인을 기다립니다. 스마트 목록으로 전환했습니다.',
 };
