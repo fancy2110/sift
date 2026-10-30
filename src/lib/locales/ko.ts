@@ -471,4 +471,6 @@ export const ko: Record<string, string> = {
   'toast.scheduledReady': '예약 분석 완료: {0}개 항목이 확인을 기다립니다. 스마트 목록으로 전환했습니다.',
   'settings.scheduledAutoTitle': '분석 후 자동 정리',
   'settings.scheduledAutoDesc': '꺼짐(기본)은 분석만 하고 스마트 목록에서 확인을 기다립니다. 켜면 예약 시각에 승인된 정리를 실행하고 기록에 남깁니다.',
+  'scheduled.pending': '예약 분석에서 {0}개 항목 확인 필요',
+  'scheduled.later': '나중에',
 };

@@ -494,4 +494,6 @@ export const ja: Record<string, string> = {
   'toast.scheduledReady': '定期クリーンアップの分析が完了しました：{0} 件が確認待ちです。スマートリストに切り替えました。',
   'settings.scheduledAutoTitle': '分析後に自動クリーン',
   'settings.scheduledAutoDesc': 'オフ（既定）は分析のみ行い、スマートリストで確認を待ちます。オンにすると定刻に承認済みのクリーンを実行し、履歴に記録します。',
+  'scheduled.pending': '定期クリーンアップで {0} 件が確認待ちです',
+  'scheduled.later': '後で',
 };
