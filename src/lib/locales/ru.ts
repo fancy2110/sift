@@ -496,4 +496,6 @@ export const ru: Record<string, string> = {
   'routines.disabled': 'Отключено',
   'routines.optional': 'Необязательно',
   'toast.scheduledReady': 'Плановый анализ завершён: {0} элементов ждут подтверждения — открыт умный список.',
+  'settings.scheduledAutoTitle': 'Автоочистка после анализа',
+  'settings.scheduledAutoDesc': 'Выкл. (по умолчанию): только анализ и ожидание подтверждения в умном списке. Вкл.: выполнить одобренную очистку по расписанию и записать в историю.',
 };

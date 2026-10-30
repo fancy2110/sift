@@ -225,8 +225,12 @@ export function setAutoCleanMode(mode: 'off' | 'notify' | 'auto'): Promise<void>
   return call('set_auto_clean_mode', { mode });
 }
 
-export function setScheduledCleanup(enabled: boolean, hour: number): Promise<void> {
-  return call('set_scheduled_cleanup', { enabled, hour });
+export function setScheduledCleanup(
+  enabled: boolean,
+  hour: number,
+  autoExecute: boolean
+): Promise<void> {
+  return call('set_scheduled_cleanup', { enabled, hour, autoExecute });
 }
 
 export function markPath(path: string, sizeHint?: number): Promise<import('./types').Finding> {

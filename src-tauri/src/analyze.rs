@@ -165,6 +165,7 @@ pub struct MonitorStatusDto {
     pub last_total_bytes: u64,
     pub scheduled_cleanup_enabled: bool,
     pub scheduled_hour: u32,
+    pub scheduled_auto_execute: bool,
 }
 
 // ---- commands --------------------------------------------------------------
@@ -638,6 +639,7 @@ pub fn monitor_status(
         last_total_bytes: total,
         scheduled_cleanup_enabled: settings.monitor.scheduled_cleanup_enabled,
         scheduled_hour: settings.monitor.scheduled_hour,
+        scheduled_auto_execute: settings.monitor.scheduled_auto_execute,
     }
 }
 
@@ -647,6 +649,7 @@ pub fn set_scheduled_cleanup(
     services: State<'_, AppServices>,
     enabled: bool,
     hour: u32,
+    auto_execute: bool,
 ) -> Result<(), String> {
     if hour > 23 {
         return Err("err.invalidHour".to_string());
@@ -654,6 +657,7 @@ pub fn set_scheduled_cleanup(
     services.store.update_settings(|settings| {
         settings.monitor.scheduled_cleanup_enabled = enabled;
         settings.monitor.scheduled_hour = hour;
+        settings.monitor.scheduled_auto_execute = auto_execute;
     });
     Ok(())
 }

@@ -355,6 +355,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
     autoMode: 'off' as 'off' | 'notify' | 'auto',
     scheduled: false,
     scheduledHour: 2,
+    scheduledAutoExecute: false,
     timers: [] as Array<ReturnType<typeof setTimeout>>,
     ai: {
       enabled: false,
@@ -690,7 +691,8 @@ export function createMockBackend(bus: EventBus): MockBackend {
             lastAvailableBytes: VOLUMES[0].availableBytes,
             lastTotalBytes: VOLUMES[0].totalBytes,
             scheduledCleanupEnabled: state.scheduled,
-            scheduledHour: state.scheduledHour
+            scheduledHour: state.scheduledHour,
+            scheduledAutoExecute: state.scheduledAutoExecute ?? false
           };
           resolve(status as unknown as T);
           break;
@@ -708,6 +710,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
           resolve(undefined as T);
           break;
         case 'set_scheduled_cleanup':
+          state.scheduledAutoExecute = Boolean(args.autoExecute);
           state.scheduled = Boolean(args.enabled);
           state.scheduledHour = Number(args.hour ?? 2);
           resolve(undefined as T);

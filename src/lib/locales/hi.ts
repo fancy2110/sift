@@ -483,4 +483,6 @@ export const hi: Record<string, string> = {
   'routines.disabled': 'अक्षम',
   'routines.optional': 'वैकल्पिक',
   'toast.scheduledReady': 'नियत विश्लेषण पूरा: {0} आइटम पुष्टि की प्रतीक्षा में हैं; स्मार्ट सूची पर स्विच किया गया।',
+  'settings.scheduledAutoTitle': 'विश्लेषण के बाद स्वतः सफ़ाई',
+  'settings.scheduledAutoDesc': 'बंद (डिफ़ॉल्ट): केवल विश्लेषण करें और स्मार्ट सूची में पुष्टि की प्रतीक्षा करें। चालू: निर्धारित समय पर स्वीकृत सफ़ाई चलाएँ और इतिहास में दर्ज करें।',
 };

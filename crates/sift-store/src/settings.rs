@@ -124,6 +124,10 @@ pub struct MonitorSettings {
     /// Local hour the daily cleanup runs at.
     #[serde(default = "default_scheduled_hour")]
     pub scheduled_hour: u32,
+    /// When false (default) the scheduled pass only analyses and waits for the
+    /// user; when true it executes the approved cleanup and records history.
+    #[serde(default)]
+    pub scheduled_auto_execute: bool,
     /// Local ordinal day (`year-ordinal`) on which the scheduled cleanup last
     /// fired. Persisted (rather than held in scheduler memory) so a slot missed
     /// while the app was closed is visible on the next launch and can be made
@@ -173,6 +177,7 @@ impl Default for MonitorSettings {
             dismissed_findings: Vec::new(),
             cleanup_rules: Vec::new(),
             scheduled_hour: 4,
+            scheduled_auto_execute: false,
             scheduled_last_run: None,
             scheduled_catchup_hours: 12,
             notify_cooldown_secs: 1800,
