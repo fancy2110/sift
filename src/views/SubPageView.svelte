@@ -221,6 +221,16 @@
       <!-- SMART -->
       <section class="pager-panel" role="tabpanel" style="width:{panelWidth}%">
         <div class="smart-scroll">
+          {#if store.scheduledPending}
+            <div class="sched-banner">
+              <span class="sched-banner-text">
+                {t('scheduled.pending', [String(store.scheduledPending.pending + store.scheduledPending.ruleMatches)])}
+              </span>
+              <button type="button" class="sched-banner-btn" onclick={() => store.dismissScheduledPending()}>
+                {t('scheduled.later')}
+              </button>
+            </div>
+          {/if}
           {#each smartRows as item, i (item.id)}
             {@const checked = store.isSelected(item.id)}
             <article class="smart-card" class:smart-card-off={!checked} in:listIn={{ index: i }}>
@@ -832,6 +842,32 @@
     min-width: 0;
     height: 100%;
     overflow: hidden;
+  }
+  .sched-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 12px 16px 0;
+    padding: 9px 12px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in oklch, var(--color-violet) 40%, transparent);
+    background: color-mix(in oklch, var(--color-violet) 10%, transparent);
+  }
+  .sched-banner-text {
+    font-size: 11.5px;
+    color: var(--color-fg);
+  }
+  .sched-banner-btn {
+    flex: none;
+    padding: 4px 10px;
+    border-radius: 7px;
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-muted);
+    font-size: 10.5px;
+    font-weight: 600;
+    cursor: pointer;
   }
   .sp-status {
     display: flex;

@@ -144,6 +144,8 @@ class AppStore {
   scheduledOn = $state(false);
   scheduledHour = $state(4);
   scheduledAutoExecute = $state(false);
+  /** Set by the daily analysis pass; cleared when the user acts on it. */
+  scheduledPending = $state<{ pending: number; ruleMatches: number } | null>(null);
 
   /** User-defined directory + regex cleanup rules (persisted server-side). */
   cleanupRules = $state<CleanupRule[]>([]);
@@ -814,8 +816,12 @@ class AppStore {
   /** Scheduled analysis finished: show the smart list and wait for confirmation. */
   private async handleScheduledReady(event: { pending: number; ruleMatches: number }) {
     this.goSub('smart');
+    this.scheduledPending = event;
     await this.runAnalysis();
-    this.toast(t('toast.scheduledReady', [String(event.pending + event.ruleMatches)]));
+  }
+
+  dismissScheduledPending() {
+    this.scheduledPending = null;
   }
 
   /** Ask the backend to analyse the finished scan and adopt the conclusions. */
@@ -976,6 +982,7 @@ class AppStore {
     const targets = this.candidates;
     if (this.cleaning || targets.length === 0) return 0;
     this.cleaning = true;
+    this.scheduledPending = null;
     this.cleanupCancelled = false;
 
     const paths = targets.map((f) => f.path);
