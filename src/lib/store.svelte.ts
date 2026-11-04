@@ -1287,6 +1287,30 @@ class AppStore {
     }
   }
 
+  /** Finding already in the queue for this path, if any. */
+  findingForPath(path: string) {
+    return this.findings.find((finding) => finding.path === path);
+  }
+
+  /** One-click add/remove from the Explorer (works for files and folders). */
+  async toggleExplorerCandidate(entry: DirEntry) {
+    const existing = this.findingForPath(entry.path);
+    if (existing) {
+      this.toggleSelected(existing.id);
+      return;
+    }
+    try {
+      const finding = await markPath(entry.path, entry.size || undefined);
+      this.findings = [...this.findings, finding];
+      const next = new Set(this.selectedIds);
+      next.add(finding.id);
+      this.selectedIds = next;
+      this.toast(t('toast.addedToQueue', [entry.name]));
+    } catch (error) {
+      this.toastError(t('toast.cannotAdd', [entry.name, String(error)]));
+    }
+  }
+
   toggleSelected(id: string) {
     const next = new Set(this.selectedIds);
     const wasSelected = next.has(id);
