@@ -503,4 +503,5 @@ export const ja: Record<string, string> = {
   'explorer.filesEmpty': 'このフォルダにファイルはありません',
   'explorer.pickFolder': '左側のフォルダを選ぶとファイルが表示されます',
   'explorer.folderBadge': 'フォルダ',
+  'explorer.aiReading': '解説中…',
 };

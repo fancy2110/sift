@@ -489,4 +489,5 @@ export const zhTW: Record<string, string> = {
   'explorer.filesEmpty': '這個目錄下沒有檔案',
   'explorer.pickFolder': '在左側選擇資料夾查看檔案',
   'explorer.folderBadge': '目錄',
+  'explorer.aiReading': '正在解讀…',
 };

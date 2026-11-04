@@ -480,4 +480,5 @@ export const ko: Record<string, string> = {
   'explorer.filesEmpty': '이 폴더에 파일이 없습니다',
   'explorer.pickFolder': '왼쪽에서 폴더를 선택하면 파일이 표시됩니다',
   'explorer.folderBadge': '폴더',
+  'explorer.aiReading': '해석 중…',
 };

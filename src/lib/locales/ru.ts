@@ -507,4 +507,5 @@ export const ru: Record<string, string> = {
   'explorer.filesEmpty': 'В этой папке нет файлов',
   'explorer.pickFolder': 'Выберите папку слева, чтобы увидеть файлы',
   'explorer.folderBadge': 'Папка',
+  'explorer.aiReading': 'Читаю…',
 };
