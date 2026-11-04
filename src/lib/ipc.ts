@@ -102,6 +102,24 @@ export interface DirSize {
   partial: boolean;
 }
 
+export interface FileEntry {
+  /** Path relative to the listed directory. */
+  relative: string;
+  name: string;
+  path: string;
+  size: number;
+}
+
+/** All files below a directory, capped by the backend. */
+export function listFilesUnder(path: string, limit?: number): Promise<FileEntry[]> {
+  return call<FileEntry[]>('list_files_under', { path, limit: limit ?? null });
+}
+
+/** Ask the model what a directory is for (names only, never contents). */
+export function aiExplainDir(path: string, names: string[]): Promise<string> {
+  return call<string>('ai_explain_dir', { path, names });
+}
+
 /** One directory listing plus the resolved absolute path. */
 export interface DirListing {
   path: string;

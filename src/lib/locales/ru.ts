@@ -501,4 +501,9 @@ export const ru: Record<string, string> = {
   'scheduled.pending': 'Плановый анализ: {0} элементов ждут подтверждения',
   'scheduled.later': 'Позже',
   'explorer.loading': 'Загрузка…',
+  'explorer.filesSummary': '{0} файлов · {1}',
+  'explorer.aiButton': 'Объяснить с AI',
+  'explorer.aiLoading': 'Анализирую этот каталог…',
+  'explorer.filesEmpty': 'В этой папке нет файлов',
+  'explorer.pickFolder': 'Выберите папку слева, чтобы увидеть файлы',
 };

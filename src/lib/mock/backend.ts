@@ -556,6 +556,22 @@ export function createMockBackend(bus: EventBus): MockBackend {
           resolve({ path: base, entries } as unknown as T);
           break;
         }
+        case 'list_files_under': {
+          const base = String(args.path ?? '') || '/Users/you';
+          resolve(
+            [
+              { relative: 'Chrome/Cache/data_0', name: 'data_0', path: `${base}/Chrome/Cache/data_0`, size: 8_400_000 },
+              { relative: 'Safari/WebKit/Cache.db', name: 'Cache.db', path: `${base}/Safari/WebKit/Cache.db`, size: 3_200_000 },
+              { relative: 'readme.txt', name: 'readme.txt', path: `${base}/readme.txt`, size: 1_024 }
+            ] as unknown as T
+          );
+          break;
+        }
+        case 'ai_explain_dir':
+          resolve(
+            '（模拟）这是一个应用缓存目录，存放浏览器与应用生成的临时数据。\n\n其中的文件通常可以安全清理，应用会在需要时重新生成。' as unknown as T
+          );
+          break;
         case 'dir_sizes': {
           const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
           resolve(

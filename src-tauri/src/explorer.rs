@@ -19,6 +19,17 @@ pub struct DirEntryDto {
     pub size: u64,
 }
 
+/// One file below a directory (recursive listing for the right pane).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntryDto {
+    /// Path relative to the listed directory, using `/` separators.
+    pub relative: String,
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+}
+
 /// One directory listing with the resolved absolute path.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +156,59 @@ fn recursive_size(path: &str) -> DirSizeDto {
     }
 }
 
+/// Upper bound on files returned for the right pane.
+const MAX_FILES_PER_LIST: usize = 2_000;
+
+#[tauri::command]
+pub async fn list_files_under(
+    path: String,
+    limit: Option<usize>,
+) -> Result<Vec<FileEntryDto>, String> {
+    let limit = limit.unwrap_or(MAX_FILES_PER_LIST).min(MAX_FILES_PER_LIST);
+    tauri::async_runtime::spawn_blocking(move || list_files(&path, limit))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn list_files(path: &str, limit: usize) -> Result<Vec<FileEntryDto>, String> {
+    let root = resolve(path)?;
+    let mut files = Vec::new();
+    let mut stack: Vec<PathBuf> = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(reader) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for item in reader.flatten() {
+            if files.len() >= limit {
+                break;
+            }
+            let Ok(meta) = std::fs::symlink_metadata(item.path()) else {
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                stack.push(item.path());
+                continue;
+            }
+            let path = item.path();
+            let relative = path
+                .strip_prefix(&root)
+                .map(|rest| rest.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
+                .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+            files.push(FileEntryDto {
+                relative,
+                name: item.file_name().to_string_lossy().into_owned(),
+                path: path.to_string_lossy().into_owned(),
+                size: meta.len(),
+            });
+        }
+    }
+    files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.relative.cmp(&b.relative)));
+    Ok(files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +245,16 @@ mod tests {
         let total = recursive_size(root.join("a").to_str().unwrap());
         assert_eq!(total.size, 8, "5 + 3 bytes, symlink skipped");
         assert!(!total.partial);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn files_are_listed_recursively_with_relative_paths() {
+        let root = fixture("files");
+        let files = list_files(root.to_str().unwrap(), 100).unwrap();
+        assert_eq!(files.len(), 4);
+        assert!(files.iter().any(|file| file.relative == "a/nested/two.txt"));
+        assert!(files.iter().any(|file| file.name == "top.txt"));
         std::fs::remove_dir_all(&root).ok();
     }
 

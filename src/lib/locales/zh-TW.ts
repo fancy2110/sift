@@ -483,4 +483,9 @@ export const zhTW: Record<string, string> = {
   'scheduled.pending': '定時清理發現 {0} 項待確認',
   'scheduled.later': '稍後',
   'explorer.loading': '載入中…',
+  'explorer.filesSummary': '{0} 個檔案 · {1}',
+  'explorer.aiButton': 'AI 解讀',
+  'explorer.aiLoading': '正在分析這個目錄…',
+  'explorer.filesEmpty': '這個目錄下沒有檔案',
+  'explorer.pickFolder': '在左側選擇資料夾查看檔案',
 };

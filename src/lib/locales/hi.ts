@@ -488,4 +488,9 @@ export const hi: Record<string, string> = {
   'scheduled.pending': 'नियत विश्लेषण में {0} आइटम पुष्टि हेतु',
   'scheduled.later': 'बाद में',
   'explorer.loading': 'लोड हो रहा है…',
+  'explorer.filesSummary': '{0} फ़ाइलें · {1}',
+  'explorer.aiButton': 'AI से समझें',
+  'explorer.aiLoading': 'इस निर्देशिका का विश्लेषण हो रहा है…',
+  'explorer.filesEmpty': 'इस फ़ोल्डर में कोई फ़ाइल नहीं',
+  'explorer.pickFolder': 'फ़ाइलें देखने के लिए बाएँ से फ़ोल्डर चुनें',
 };
