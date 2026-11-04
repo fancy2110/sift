@@ -19,6 +19,14 @@ pub struct DirEntryDto {
     pub size: u64,
 }
 
+/// One directory listing with the resolved absolute path.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirListingDto {
+    pub path: String,
+    pub entries: Vec<DirEntryDto>,
+}
+
 /// Recursive total for one directory (or one file).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -46,13 +54,13 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub async fn list_dir_entries(path: String) -> Result<Vec<DirEntryDto>, String> {
+pub async fn list_dir_entries(path: String) -> Result<DirListingDto, String> {
     tauri::async_runtime::spawn_blocking(move || list_entries(&path))
         .await
         .map_err(|error| error.to_string())?
 }
 
-fn list_entries(path: &str) -> Result<Vec<DirEntryDto>, String> {
+fn list_entries(path: &str) -> Result<DirListingDto, String> {
     let dir = resolve(path)?;
     let reader = std::fs::read_dir(&dir).map_err(|error| error.to_string())?;
     let mut entries = Vec::new();
@@ -78,7 +86,10 @@ fn list_entries(path: &str) -> Result<Vec<DirEntryDto>, String> {
             .cmp(&a.is_dir)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
-    Ok(entries)
+    Ok(DirListingDto {
+        path: dir.to_string_lossy().into_owned(),
+        entries,
+    })
 }
 
 #[tauri::command]
@@ -153,7 +164,8 @@ mod tests {
     #[test]
     fn lists_directories_first_and_sizes_files() {
         let root = fixture("list");
-        let entries = list_entries(root.to_str().unwrap()).unwrap();
+        let listing = list_entries(root.to_str().unwrap()).unwrap();
+        let entries = &listing.entries;
         assert_eq!(entries[0].name, "a");
         assert!(entries[0].is_dir);
         let top = entries.iter().find(|entry| entry.name == "top.txt").unwrap();
