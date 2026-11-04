@@ -76,7 +76,7 @@ import type {
 } from './types';
 import { t, tr, renderStoreWarning } from './i18n.svelte';
 import { startupMark } from './startup';
-import type { DirEntry, FileEntry } from './ipc';
+import type { DirEntry } from './ipc';
 
 export interface ExplorerColumn {
   path: string;
@@ -133,13 +133,19 @@ class AppStore {
   /** Reactive slice: entries of the open folder, folders first then size. */
   listEntries = $state<Node[]>([]);
 
-  // ---- scan-independent explorer (Finder-style columns) ----
-  explorerColumns = $state<ExplorerColumn[]>([]);
+  // ---- scan-independent explorer ----
+  /** Directory currently opened (breadcrumb + left list). */
+  explorerPath = $state('');
+  /** Subdirectories of `explorerPath` shown on the left. */
+  explorerLeft = $state<DirEntry[]>([]);
+  explorerLeftLoading = $state(false);
+  /** The folder selected on the left; the right pane shows its children. */
+  explorerSelectedDir = $state<DirEntry | null>(null);
+  /** Children (directories + files) of the selected folder. */
+  explorerRight = $state<DirEntry[]>([]);
+  explorerRightPath = $state('');
+  explorerRightLoading = $state(false);
   explorerSelected = $state<DirEntry | null>(null);
-  /** Folder whose files fill the right pane. */
-  explorerFolder = $state<DirEntry | null>(null);
-  explorerFiles = $state<FileEntry[]>([]);
-  explorerFilesLoading = $state(false);
   explorerAi = $state({ loading: false, text: '', error: '' });
 
   scanning = $state(false);
@@ -719,81 +725,83 @@ class AppStore {
    * Open the Explorer at a path (default: the scanned root, else the user's
    * home). Reading a directory does not require a completed scan.
    */
+  /** Open a directory without requiring a scan (home when no path is given). */
   async openExplorer(path?: string) {
-    const start = path ?? this.currentNode?.path ?? '';
+    const startPath = path ?? this.currentNode?.path ?? '';
     this.explorerSelected = null;
-    this.explorerFolder = null;
-    this.explorerFiles = [];
+    this.explorerSelectedDir = null;
     this.explorerAi = { loading: false, text: '', error: '' };
-    this.explorerColumns = [];
-    await this.pushExplorerColumn(start);
+    this.explorerLeftLoading = true;
+    this.explorerLeft = [];
+    let resolved = startPath;
+    try {
+      const listing = await listDirEntries(startPath);
+      resolved = listing.path || startPath;
+      this.explorerLeft = listing.entries.filter((entry) => entry.isDir);
+    } catch {
+      this.explorerLeft = [];
+    }
+    this.explorerPath = resolved;
+    this.explorerLeftLoading = false;
+    this.fillExplorerSizes(this.explorerLeft, () => {
+      if (this.explorerPath === resolved) this.explorerLeft = [...this.explorerLeft];
+    });
+    await this.loadExplorerRight(resolved);
   }
 
-  private async pushExplorerColumn(path: string) {
-    const index = this.explorerColumns.length;
-    const name = path.split('/').filter(Boolean).pop() ?? '/';
-    this.explorerColumns = [
-      ...this.explorerColumns,
-      { path, name, entries: [], loading: true, sized: false }
-    ];
+  /** Right pane: children (directories + files) of `path`. */
+  private async loadExplorerRight(path: string) {
+    this.explorerRightPath = path;
+    this.explorerRightLoading = true;
+    this.explorerRight = [];
     let entries: DirEntry[] = [];
-    let resolved = path;
     try {
-      const listing = await listDirEntries(path);
-      entries = listing.entries;
-      resolved = listing.path || path;
+      entries = (await listDirEntries(path)).entries;
     } catch {
       entries = [];
     }
-    if (this.explorerColumns[index]?.path !== path) return;
-    const resolvedName = resolved.split('/').filter(Boolean).pop() ?? '/';
-    this.explorerColumns = this.explorerColumns.map((column, i) =>
-      i === index
-        ? { ...column, path: resolved, name: resolvedName, entries, loading: false }
-        : column
-    );
+    if (this.explorerRightPath !== path) return;
+    this.explorerRight = entries;
+    this.explorerRightLoading = false;
+    this.fillExplorerSizes(entries, () => {
+      if (this.explorerRightPath === path) this.explorerRight = [...this.explorerRight];
+    });
+  }
 
-    const firstDir = entries.find((entry) => entry.isDir);
-    if (firstDir && this.explorerFolder?.path !== firstDir.path) {
-      void this.selectExplorerFolder(firstDir);
-    }
-
+  /** Lazy child-folder totals for a pane (best-effort, applied in place). */
+  private async fillExplorerSizes(entries: DirEntry[], apply: () => void) {
     const dirs = entries.filter((entry) => entry.isDir).map((entry) => entry.path);
     if (dirs.length === 0) return;
     try {
       const sizes = await dirSizes(dirs);
-      if (this.explorerColumns[index]?.path !== resolved) return;
       const byPath = new Map(sizes.map((size) => [size.path, size.size]));
-      this.explorerColumns = this.explorerColumns.map((column, i) =>
-        i === index
-          ? {
-              ...column,
-              sized: true,
-              entries: column.entries.map((entry) => ({
-                ...entry,
-                size: entry.isDir ? (byPath.get(entry.path) ?? entry.size) : entry.size
-              }))
-            }
-          : column
-      );
+      for (const list of [this.explorerLeft, this.explorerRight]) {
+        for (const entry of list) {
+          const size = byPath.get(entry.path);
+          if (size !== undefined) entry.size = size;
+        }
+      }
+      apply();
     } catch {
-      // Sizes are best-effort; names stay browsable without them.
+      // Sizes are best-effort.
     }
   }
 
-  /** Single click selects (right pane); a folder also loads its files. */
-  async selectExplorerEntry(_columnIndex: number, entry: DirEntry) {
+  /** Left click: the right pane follows the selected folder. */
+  async selectExplorerDir(entry: DirEntry) {
+    this.explorerSelected = null;
+    this.explorerSelectedDir = entry;
+    this.explorerAi = { loading: false, text: '', error: '' };
+    await this.loadExplorerRight(entry.path);
+  }
+
+  /** Right click on a folder / double click: make it the current directory. */
+  async enterExplorerFolder(entry: DirEntry) {
     if (!entry.isDir) {
       this.explorerSelected = entry;
       return;
     }
-    this.explorerSelected = null;
-    await this.selectExplorerFolder(entry);
-  }
-
-  /** Double click enters the folder (the left pane shows its children). */
-  async enterExplorerFolder(entry: DirEntry) {
-    if (entry.isDir) await this.openExplorer(entry.path);
+    await this.openExplorer(entry.path);
   }
 
   async explorerAt(path: string) {
@@ -801,34 +809,20 @@ class AppStore {
   }
 
   explorerUp() {
-    const current = this.explorerColumns.at(-1)?.path;
-    if (!current) return;
-    const parent = current.replace(/\/[^/]+\/?$/, '') || '/';
+    if (!this.explorerPath) return;
+    const parent = this.explorerPath.replace(/\/[^/]+\/?$/, '') || '/';
     void this.openExplorer(parent);
   }
 
-  /** Load all files under the selected folder for the right pane. */
-  async selectExplorerFolder(entry: DirEntry) {
-    this.explorerFolder = entry;
-    this.explorerSelected = null;
-    this.explorerAi = { loading: false, text: '', error: '' };
-    this.explorerFilesLoading = true;
-    this.explorerFiles = [];
-    try {
-      this.explorerFiles = await listFilesUnder(entry.path);
-    } catch {
-      this.explorerFiles = [];
-    }
-    this.explorerFilesLoading = false;
-  }
-
+  /** Explain the folder currently shown on the right. */
   async askExplorerAi() {
-    const folder = this.explorerFolder;
-    if (!folder) return;
+    const folder = this.explorerSelectedDir;
+    const path = folder?.path ?? this.explorerPath;
+    if (!path) return;
     this.explorerAi = { loading: true, text: '', error: '' };
-    const names = this.explorerFiles.slice(0, 40).map((file) => file.name);
+    const names = this.explorerRight.slice(0, 40).map((entry) => entry.name);
     try {
-      const text = await aiExplainDir(folder.path, names);
+      const text = await aiExplainDir(path, names);
       this.explorerAi = { loading: false, text, error: '' };
     } catch (error) {
       this.explorerAi = { loading: false, text: '', error: tr(String(error)) };

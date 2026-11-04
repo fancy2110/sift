@@ -519,6 +519,7 @@ const zh: Record<string, string> = {
   'explorer.aiLoading': '正在分析这个目录…',
   'explorer.filesEmpty': '这个目录下没有文件',
   'explorer.pickFolder': '在左侧选择文件夹查看文件',
+  'explorer.folderBadge': '目录',
 };
 
 const en: Record<string, string> = {
@@ -999,6 +1000,7 @@ const en: Record<string, string> = {
   'explorer.aiLoading': 'Analysing this directory…',
   'explorer.filesEmpty': 'No files under this folder',
   'explorer.pickFolder': 'Pick a folder on the left to see its files',
+  'explorer.folderBadge': 'Folder',
 };
 
 type ParamValue = string | number;

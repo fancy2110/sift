@@ -506,4 +506,5 @@ export const ru: Record<string, string> = {
   'explorer.aiLoading': 'Анализирую этот каталог…',
   'explorer.filesEmpty': 'В этой папке нет файлов',
   'explorer.pickFolder': 'Выберите папку слева, чтобы увидеть файлы',
+  'explorer.folderBadge': 'Папка',
 };

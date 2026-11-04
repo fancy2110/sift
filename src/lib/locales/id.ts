@@ -510,4 +510,5 @@ export const id: Record<string, string> = {
   'explorer.aiLoading': 'Menganalisis direktori ini…',
   'explorer.filesEmpty': 'Tidak ada berkas di folder ini',
   'explorer.pickFolder': 'Pilih folder di kiri untuk melihat berkas',
+  'explorer.folderBadge': 'Folder',
 };
