@@ -481,4 +481,7 @@ export const ko: Record<string, string> = {
   'explorer.pickFolder': '왼쪽에서 폴더를 선택하면 파일이 표시됩니다',
   'explorer.folderBadge': '폴더',
   'explorer.aiReading': '해석 중…',
+  'explorer.verdictSafe': '삭제 가능',
+  'explorer.verdictCaution': '주의',
+  'explorer.verdictKeep': '유지',
 };

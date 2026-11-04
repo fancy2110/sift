@@ -571,9 +571,14 @@ export function createMockBackend(bus: EventBus): MockBackend {
           // Small delay so the button's「正在解读…」state is observable.
           setTimeout(
             () =>
-              resolve(
-                '（模拟）这是一个应用缓存目录，存放浏览器与应用生成的临时数据。\n\n其中的文件通常可以安全清理，应用会在需要时重新生成。' as unknown as T
-              ),
+              resolve({
+                items: [
+                  { name: 'Library', verdict: 'caution', purpose: '应用的缓存与支持文件，删除可能丢失登录状态。' },
+                  { name: 'Documents', verdict: 'keep', purpose: '你的文档，删除会丢失数据。' },
+                  { name: 'Downloads', verdict: 'caution', purpose: '下载的文件，确认后可以清理。' },
+                  { name: 'readme.txt', verdict: 'keep', purpose: '说明文件。' }
+                ]
+              } as unknown as T),
             700
           );
           break;

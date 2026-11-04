@@ -495,4 +495,7 @@ export const hi: Record<string, string> = {
   'explorer.pickFolder': 'फ़ाइलें देखने के लिए बाएँ से फ़ोल्डर चुनें',
   'explorer.folderBadge': 'फ़ोल्डर',
   'explorer.aiReading': 'पढ़ा जा रहा है…',
+  'explorer.verdictSafe': 'हटा सकते हैं',
+  'explorer.verdictCaution': 'सावधान',
+  'explorer.verdictKeep': 'रखें',
 };

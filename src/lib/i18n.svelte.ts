@@ -521,6 +521,9 @@ const zh: Record<string, string> = {
   'explorer.pickFolder': '在左侧选择文件夹查看文件',
   'explorer.folderBadge': '目录',
   'explorer.aiReading': '正在解读…',
+  'explorer.verdictSafe': '可删',
+  'explorer.verdictCaution': '谨慎',
+  'explorer.verdictKeep': '保留',
 };
 
 const en: Record<string, string> = {
@@ -1003,6 +1006,9 @@ const en: Record<string, string> = {
   'explorer.pickFolder': 'Pick a folder on the left to see its files',
   'explorer.folderBadge': 'Folder',
   'explorer.aiReading': 'Reading…',
+  'explorer.verdictSafe': 'Deletable',
+  'explorer.verdictCaution': 'Careful',
+  'explorer.verdictKeep': 'Keep',
 };
 
 type ParamValue = string | number;

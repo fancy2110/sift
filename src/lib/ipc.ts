@@ -115,13 +115,24 @@ export function listFilesUnder(path: string, limit?: number): Promise<FileEntry[
   return call<FileEntry[]>('list_files_under', { path, limit: limit ?? null });
 }
 
-/** Ask the model what a directory is for (names only, never contents). */
+export interface DirVerdict {
+  name: string;
+  /** safe | caution | keep */
+  verdict: string;
+  purpose: string;
+}
+
+export interface DirVerdicts {
+  items: DirVerdict[];
+}
+
+/** Ask the model to classify every child (names only, never contents). */
 export function aiExplainDir(
   path: string,
   names: string[],
   language?: string
-): Promise<string> {
-  return call<string>('ai_explain_dir', { path, names, language: language ?? null });
+): Promise<DirVerdicts> {
+  return call<DirVerdicts>('ai_explain_dir', { path, names, language: language ?? null });
 }
 
 /** One directory listing plus the resolved absolute path. */

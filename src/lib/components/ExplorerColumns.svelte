@@ -158,9 +158,9 @@
         </button>
       </div>
 
-      {#if store.explorerAi.text || store.explorerAi.error}
-        <div class="fx-ai-card" class:fx-ai-error={Boolean(store.explorerAi.error)}>
-          <p class="fx-ai-text">{store.explorerAi.error || store.explorerAi.text}</p>
+      {#if store.explorerAi.error}
+        <div class="fx-ai-card fx-ai-error">
+          <p class="fx-ai-text">{store.explorerAi.error}</p>
         </div>
       {/if}
 
@@ -169,6 +169,9 @@
           <p class="fx-hint">{t('explorer.loading')}</p>
         {:else}
           {#each store.explorerRight as entry (entry.path)}
+            {@const finding = store.findingForPath(entry.path)}
+            {@const queued = finding ? store.isSelected(finding.id) : false}
+            {@const verdict = store.explorerAi.items[entry.name]}
             <div
               class="fx-file"
               class:fx-file-on={store.explorerSelected?.path === entry.path}
@@ -191,18 +194,32 @@
               <span class="fx-file-name">{entry.name}</span>
               <span class="fx-file-dir">{entry.isDir ? t('explorer.folderBadge') : ''}</span>
               <span class="fx-size">{entry.size ? formatSize(entry.size) : '…'}</span>
+              {#if verdict}
+                <span
+                  class="fx-verdict"
+                  class:fx-verdict-safe={verdict.verdict === 'safe'}
+                  class:fx-verdict-keep={verdict.verdict === 'keep'}
+                  title={verdict.purpose}
+                >
+                  {verdict.verdict === 'safe'
+                    ? t('explorer.verdictSafe')
+                    : verdict.verdict === 'keep'
+                      ? t('explorer.verdictKeep')
+                      : t('explorer.verdictCaution')}
+                </span>
+              {/if}
               <button
                 type="button"
                 class="fx-act"
-                class:fx-act-on={queued(entry)}
-                title={queued(entry) ? t('sub.remove') : t('sub.add')}
-                aria-label={`${queued(entry) ? t('sub.remove') : t('sub.add')} ${entry.name}`}
+                class:fx-act-on={queued}
+                title={queued ? t('sub.remove') : t('sub.add')}
+                aria-label={`${queued ? t('sub.remove') : t('sub.add')} ${entry.name}`}
                 onclick={(event) => {
                   event.stopPropagation();
                   void store.toggleExplorerCandidate(entry);
                 }}
               >
-                <Icon name={queued(entry) ? 'undo' : 'trash'} size={11} />
+                <Icon name={queued ? 'undo' : 'trash'} size={11} />
               </button>
             </div>
           {:else}
@@ -369,6 +386,24 @@
     font-family: var(--font-mono);
     font-size: 11.5px;
     color: var(--color-faint);
+  }
+  .fx-verdict {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in oklch, var(--color-warn) 45%, transparent);
+    color: var(--color-warn);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .fx-verdict-safe {
+    color: var(--color-ok);
+    border-color: color-mix(in oklch, var(--color-ok) 45%, transparent);
+  }
+  .fx-verdict-keep {
+    color: var(--color-faint);
+    border-color: var(--color-border);
   }
   .fx-act {
     flex: none;

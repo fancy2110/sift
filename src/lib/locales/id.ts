@@ -512,4 +512,7 @@ export const id: Record<string, string> = {
   'explorer.pickFolder': 'Pilih folder di kiri untuk melihat berkas',
   'explorer.folderBadge': 'Folder',
   'explorer.aiReading': 'Membaca…',
+  'explorer.verdictSafe': 'Bisa dihapus',
+  'explorer.verdictCaution': 'Hati-hati',
+  'explorer.verdictKeep': 'Simpan',
 };
