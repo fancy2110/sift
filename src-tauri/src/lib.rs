@@ -5,6 +5,7 @@
 //! `sift-*` crates. Nothing here contains product logic; it only registers
 //! commands and translates event vocabularies.
 
+mod ai_explain;
 mod ai_routine;
 mod explorer;
 mod analyze;
@@ -94,6 +95,8 @@ pub fn run() {
             resolve_permission,
             list_dir_files,
             explorer::list_dir_entries,
+            explorer::list_files_under,
+            ai_explain::ai_explain_dir,
             explorer::dir_sizes,
             // deletion and filesystem awareness
             watch_fs,

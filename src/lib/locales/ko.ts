@@ -474,4 +474,9 @@ export const ko: Record<string, string> = {
   'scheduled.pending': '예약 분석에서 {0}개 항목 확인 필요',
   'scheduled.later': '나중에',
   'explorer.loading': '불러오는 중…',
+  'explorer.filesSummary': '{0}개 파일 · {1}',
+  'explorer.aiButton': 'AI 해설',
+  'explorer.aiLoading': '이 디렉터리를 분석하는 중…',
+  'explorer.filesEmpty': '이 폴더에 파일이 없습니다',
+  'explorer.pickFolder': '왼쪽에서 폴더를 선택하면 파일이 표시됩니다',
 };

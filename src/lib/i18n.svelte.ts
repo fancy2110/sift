@@ -514,6 +514,11 @@ const zh: Record<string, string> = {
   'scheduled.pending': '定时清理发现 {0} 项待确认',
   'scheduled.later': '稍后',
   'explorer.loading': '加载中…',
+  'explorer.filesSummary': '{0} 个文件 · {1}',
+  'explorer.aiButton': 'AI 解读',
+  'explorer.aiLoading': '正在分析这个目录…',
+  'explorer.filesEmpty': '这个目录下没有文件',
+  'explorer.pickFolder': '在左侧选择文件夹查看文件',
 };
 
 const en: Record<string, string> = {
@@ -989,6 +994,11 @@ const en: Record<string, string> = {
   'scheduled.pending': 'Scheduled analysis found {0} items to confirm',
   'scheduled.later': 'Later',
   'explorer.loading': 'Loading…',
+  'explorer.filesSummary': '{0} files · {1}',
+  'explorer.aiButton': 'Explain with AI',
+  'explorer.aiLoading': 'Analysing this directory…',
+  'explorer.filesEmpty': 'No files under this folder',
+  'explorer.pickFolder': 'Pick a folder on the left to see its files',
 };
 
 type ParamValue = string | number;

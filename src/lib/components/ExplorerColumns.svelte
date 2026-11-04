@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
-   * Finder-style column browser. Works without a completed scan: each column
-   * lists one directory on demand and fills in child-folder totals lazily.
+   * Two-pane browser: left lists the current directory's entries, right shows
+   * every file under the selected folder, plus an AI explanation of that folder.
+   * Works without a scan.
    */
   import Icon from './Icon.svelte';
   import LocationPicker from './LocationPicker.svelte';
@@ -14,13 +15,9 @@
     if (store.explorerColumns.length === 0) void store.openExplorer();
   });
 
-  function openDisk(id: string) {
-    const volume = store.volumes.find((item) => item.id === id);
-    if (volume) void store.openExplorer(volume.mountPoint);
-  }
-
+  const column = $derived(store.explorerColumns.at(-1));
   const crumbs = $derived.by(() => {
-    const path = store.explorerColumns.at(-1)?.path ?? '';
+    const path = column?.path ?? '';
     const parts = path.split('/').filter(Boolean);
     const out: { label: string; path: string }[] = [];
     let acc = '';
@@ -30,6 +27,14 @@
     }
     return out;
   });
+  const totalBytes = $derived(
+    store.explorerFiles.reduce((sum, file) => sum + file.size, 0)
+  );
+
+  function openDisk(id: string) {
+    const volume = store.volumes.find((item) => item.id === id);
+    if (volume) void store.openExplorer(volume.mountPoint);
+  }
 </script>
 
 <div class="fx">
@@ -38,7 +43,6 @@
     <button
       type="button"
       class="fx-back"
-      disabled={store.explorerColumns.length <= 1}
       aria-label={t('sub.goUp')}
       title={t('sub.goUp')}
       onclick={() => store.explorerUp()}
@@ -68,61 +72,135 @@
     {/if}
   </div>
 
-  <div class="fx-columns">
-    {#each store.explorerColumns as column, ci (column.path + ci)}
-      <div class="fx-col">
-        <div class="fx-col-head" title={column.path}>{column.name}</div>
-        <div class="fx-col-body">
-          {#if column.loading}
-            <p class="fx-hint">{t('explorer.loading')}</p>
-          {:else}
-            {#each column.entries as entry (entry.path)}
-              {@const finding = store.findingForPath(entry.path)}
-              {@const queued = finding ? store.isSelected(finding.id) : false}
-              <div
-                class="fx-row"
-                class:fx-row-on={store.explorerSelected?.path === entry.path}
-                role="button"
-                tabindex="0"
-                title={entry.path}
-                onclick={() => void store.selectExplorerEntry(ci, entry)}
-                onkeydown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    void store.selectExplorerEntry(ci, entry);
-                  }
-                }}
-                oncontextmenu={(event) => {
+  <div class="fx-body">
+    <!-- left: current directory entries -->
+    <div class="fx-left">
+      <div class="fx-col-head" title={column?.path}>{column?.name ?? ''}</div>
+      <div class="fx-list">
+        {#if column?.loading}
+          <p class="fx-hint">{t('explorer.loading')}</p>
+        {:else}
+          {#each column?.entries ?? [] as entry (entry.path)}
+            {@const finding = store.findingForPath(entry.path)}
+            {@const queued = finding ? store.isSelected(finding.id) : false}
+            <div
+              class="fx-row"
+              class:fx-row-on={store.explorerFolder?.path === entry.path}
+              role="button"
+              tabindex="0"
+              title={entry.path}
+              onclick={() => void store.selectExplorerEntry(0, entry)}
+              ondblclick={() => void store.enterExplorerFolder(entry)}
+              onkeydown={(event) => {
+                if (event.key === 'Enter') {
                   event.preventDefault();
+                  void store.enterExplorerFolder(entry);
+                } else if (event.key === ' ') {
+                  event.preventDefault();
+                  void store.selectExplorerEntry(0, entry);
+                }
+              }}
+            >
+              <Icon name={entry.isDir ? 'folder' : 'file'} size={14} />
+              <span class="fx-name">{entry.name}</span>
+              <span class="fx-size">
+                {entry.isDir && !column?.sized ? '…' : formatSize(entry.size)}
+              </span>
+              <button
+                type="button"
+                class="fx-act"
+                class:fx-act-on={queued}
+                title={queued ? t('sub.remove') : t('sub.add')}
+                aria-label={`${queued ? t('sub.remove') : t('sub.add')} ${entry.name}`}
+                onclick={(event) => {
+                  event.stopPropagation();
                   void store.toggleExplorerCandidate(entry);
                 }}
               >
-                <Icon name={entry.isDir ? 'folder' : 'file'} size={14} />
-                <span class="fx-name">{entry.name}</span>
-                <span class="fx-size">
-                  {entry.isDir && !column.sized ? '…' : formatSize(entry.size)}
-                </span>
+                <Icon name={queued ? 'undo' : 'trash'} size={11} />
+              </button>
+            </div>
+          {:else}
+            <p class="fx-hint">{t('list.folderEmpty')}</p>
+          {/each}
+        {/if}
+      </div>
+    </div>
+
+    <!-- right: files under the selected folder -->
+    <div class="fx-right">
+      {#if store.explorerFolder}
+        <div class="fx-right-head">
+          <div class="fx-right-title">
+            <p class="fx-folder-name">{store.explorerFolder.name}</p>
+            <p class="fx-folder-meta">
+              {t('explorer.filesSummary', [
+                String(store.explorerFiles.length),
+                formatSize(totalBytes)
+              ])}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="fx-ai"
+            disabled={store.explorerAi.loading}
+            onclick={() => void store.askExplorerAi()}
+          >
+            <Icon name="spark" size={12} />
+            {t('explorer.aiButton')}
+          </button>
+        </div>
+
+        {#if store.explorerAi.loading || store.explorerAi.text || store.explorerAi.error}
+          <div class="fx-ai-card" class:fx-ai-error={Boolean(store.explorerAi.error)}>
+            {#if store.explorerAi.loading}
+              <p class="fx-ai-text">{t('explorer.aiLoading')}</p>
+            {:else if store.explorerAi.error}
+              <p class="fx-ai-text">{store.explorerAi.error}</p>
+            {:else}
+              <p class="fx-ai-text">{store.explorerAi.text}</p>
+            {/if}
+          </div>
+        {/if}
+
+        <div class="fx-files">
+          {#if store.explorerFilesLoading}
+            <p class="fx-hint">{t('explorer.loading')}</p>
+          {:else}
+            {#each store.explorerFiles as file (file.path)}
+              {@const finding = store.findingForPath(file.path)}
+              {@const queued = finding ? store.isSelected(finding.id) : false}
+              <div class="fx-file" title={file.path}>
+                <Icon name="file" size={13} />
+                <span class="fx-file-name">{file.name}</span>
+                <span class="fx-file-dir">{file.relative !== file.name ? file.relative : ''}</span>
+                <span class="fx-size">{formatSize(file.size)}</span>
                 <button
                   type="button"
                   class="fx-act"
-                  class:fx-act-on={Boolean(queued)}
+                  class:fx-act-on={queued}
                   title={queued ? t('sub.remove') : t('sub.add')}
-                  aria-label={`${queued ? t('sub.remove') : t('sub.add')} ${entry.name}`}
-                  onclick={(event) => {
-                    event.stopPropagation();
-                    void store.toggleExplorerCandidate(entry);
-                  }}
+                  aria-label={`${queued ? t('sub.remove') : t('sub.add')} ${file.name}`}
+                  onclick={() =>
+                    void store.toggleExplorerCandidate({
+                      name: file.name,
+                      path: file.path,
+                      isDir: false,
+                      size: file.size
+                    })}
                 >
                   <Icon name={queued ? 'undo' : 'trash'} size={11} />
                 </button>
               </div>
             {:else}
-              <p class="fx-hint">{t('list.folderEmpty')}</p>
+              <p class="fx-hint">{t('explorer.filesEmpty')}</p>
             {/each}
           {/if}
         </div>
-      </div>
-    {/each}
+      {:else}
+        <p class="fx-hint">{t('explorer.pickFolder')}</p>
+      {/if}
+    </div>
   </div>
 </div>
 
@@ -153,12 +231,8 @@
     color: var(--color-faint);
     cursor: pointer;
   }
-  .fx-back:hover:not(:disabled) {
+  .fx-back:hover {
     color: var(--color-fg);
-  }
-  .fx-back:disabled {
-    opacity: 0.4;
-    cursor: default;
   }
   .fx-crumbs {
     display: flex;
@@ -200,22 +274,17 @@
     font-size: 11px;
     color: var(--color-faint);
   }
-  .fx-columns {
+  .fx-body {
     flex: 1;
     min-height: 0;
-    display: flex;
-    overflow-x: auto;
+    display: grid;
+    grid-template-columns: 3fr 7fr;
   }
-  .fx-col {
-    flex: none;
-    width: 250px;
+  .fx-left {
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    min-height: 0;
     border-right: 1px solid var(--color-border);
-  }
-  .fx-col:last-child {
-    border-right: none;
   }
   .fx-col-head {
     flex: none;
@@ -230,43 +299,65 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .fx-col-body {
+  .fx-list,
+  .fx-files {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 4px;
+    padding: 6px;
   }
-  .fx-row {
-    width: 100%;
+  .fx-row,
+  .fx-file {
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 34px;
+    min-height: 34px;
     padding: 0 8px;
-    border: none;
     border-radius: 7px;
-    background: transparent;
     color: var(--color-fg);
-    text-align: left;
     cursor: pointer;
   }
-  .fx-row:hover {
+  .fx-row:hover,
+  .fx-file:hover {
     background: color-mix(in oklch, var(--color-surface-2) 70%, transparent);
   }
   .fx-row-on {
     background: color-mix(in oklch, var(--color-violet) 22%, transparent);
   }
-  .fx-row :global(svg) {
+  .fx-row :global(svg),
+  .fx-file :global(svg) {
     flex: none;
     color: var(--color-faint);
   }
-  .fx-name {
-    flex: 1;
-    min-width: 0;
+  .fx-name,
+  .fx-file-name {
     font-size: 13.5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .fx-name {
+    flex: 1;
+    min-width: 0;
+  }
+  .fx-file-name {
+    flex: none;
+    max-width: 45%;
+  }
+  .fx-file-dir {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--color-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .fx-size {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--color-faint);
   }
   .fx-act {
     flex: none;
@@ -284,6 +375,7 @@
     transition: opacity 0.12s ease;
   }
   .fx-row:hover .fx-act,
+  .fx-file:hover .fx-act,
   .fx-act:focus-visible {
     opacity: 1;
   }
@@ -295,15 +387,80 @@
   .fx-act:hover {
     color: var(--color-fg);
   }
-  .fx-size {
-    flex: none;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    color: var(--color-faint);
-  }
   .fx-hint {
-    margin: 10px 8px;
+    margin: 12px 10px;
     font-size: 12px;
     color: var(--color-faint);
+  }
+  .fx-right {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .fx-right-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .fx-right-title {
+    min-width: 0;
+  }
+  .fx-folder-name {
+    margin: 0;
+    font-size: 13.5px;
+    font-weight: 650;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .fx-folder-meta {
+    margin: 1px 0 0;
+    font-size: 11px;
+    color: var(--color-faint);
+  }
+  .fx-ai {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 11px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in oklch, var(--color-violet) 50%, transparent);
+    background: transparent;
+    color: var(--color-violet);
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .fx-ai:hover:not(:disabled) {
+    background: color-mix(in oklch, var(--color-violet) 10%, transparent);
+  }
+  .fx-ai:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .fx-ai-card {
+    flex: none;
+    margin: 10px 14px 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in oklch, var(--color-violet) 30%, var(--color-border));
+    background: color-mix(in oklch, var(--color-violet) 7%, transparent);
+  }
+  .fx-ai-error {
+    border-color: color-mix(in oklch, var(--color-warn) 45%, transparent);
+    background: color-mix(in oklch, var(--color-warn) 8%, transparent);
+  }
+  .fx-ai-text {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    color: var(--color-fg);
   }
 </style>

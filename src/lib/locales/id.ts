@@ -505,4 +505,9 @@ export const id: Record<string, string> = {
   'scheduled.pending': 'Analisis terjadwal menemukan {0} item untuk dikonfirmasi',
   'scheduled.later': 'Nanti',
   'explorer.loading': 'Memuat…',
+  'explorer.filesSummary': '{0} berkas · {1}',
+  'explorer.aiButton': 'Jelaskan dengan AI',
+  'explorer.aiLoading': 'Menganalisis direktori ini…',
+  'explorer.filesEmpty': 'Tidak ada berkas di folder ini',
+  'explorer.pickFolder': 'Pilih folder di kiri untuk melihat berkas',
 };

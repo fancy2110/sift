@@ -497,4 +497,9 @@ export const ja: Record<string, string> = {
   'scheduled.pending': '定期クリーンアップで {0} 件が確認待ちです',
   'scheduled.later': '後で',
   'explorer.loading': '読み込み中…',
+  'explorer.filesSummary': '{0} ファイル · {1}',
+  'explorer.aiButton': 'AI で解説',
+  'explorer.aiLoading': 'このディレクトリを分析中…',
+  'explorer.filesEmpty': 'このフォルダにファイルはありません',
+  'explorer.pickFolder': '左側のフォルダを選ぶとファイルが表示されます',
 };
