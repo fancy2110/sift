@@ -102,9 +102,15 @@ export interface DirSize {
   partial: boolean;
 }
 
+/** One directory listing plus the resolved absolute path. */
+export interface DirListing {
+  path: string;
+  entries: DirEntry[];
+}
+
 /** List one directory (works without any scan). */
-export function listDirEntries(path: string): Promise<DirEntry[]> {
-  return call<DirEntry[]>('list_dir_entries', { path });
+export function listDirEntries(path: string): Promise<DirListing> {
+  return call<DirListing>('list_dir_entries', { path });
 }
 
 /** Recursive totals for a batch of directories. */

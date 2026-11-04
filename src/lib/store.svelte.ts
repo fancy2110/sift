@@ -727,21 +727,27 @@ class AppStore {
       { path, name, entries: [], loading: true, sized: false }
     ];
     let entries: DirEntry[] = [];
+    let resolved = path;
     try {
-      entries = await listDirEntries(path);
+      const listing = await listDirEntries(path);
+      entries = listing.entries;
+      resolved = listing.path || path;
     } catch {
       entries = [];
     }
     if (this.explorerColumns[index]?.path !== path) return;
+    const resolvedName = resolved.split('/').filter(Boolean).pop() ?? '/';
     this.explorerColumns = this.explorerColumns.map((column, i) =>
-      i === index ? { ...column, entries, loading: false } : column
+      i === index
+        ? { ...column, path: resolved, name: resolvedName, entries, loading: false }
+        : column
     );
 
     const dirs = entries.filter((entry) => entry.isDir).map((entry) => entry.path);
     if (dirs.length === 0) return;
     try {
       const sizes = await dirSizes(dirs);
-      if (this.explorerColumns[index]?.path !== path) return;
+      if (this.explorerColumns[index]?.path !== resolved) return;
       const byPath = new Map(sizes.map((size) => [size.path, size.size]));
       this.explorerColumns = this.explorerColumns.map((column, i) =>
         i === index
@@ -769,6 +775,17 @@ class AppStore {
     this.explorerSelected = null;
     this.explorerColumns = this.explorerColumns.slice(0, columnIndex + 1);
     await this.pushExplorerColumn(entry.path);
+  }
+
+  /** Jump within the current column trail; fall back to a fresh chain. */
+  async explorerAt(path: string) {
+    const index = this.explorerColumns.findIndex((column) => column.path === path);
+    if (index >= 0) {
+      this.explorerColumns = this.explorerColumns.slice(0, index + 1);
+      this.explorerSelected = null;
+      return;
+    }
+    await this.openExplorer(path);
   }
 
   explorerUp() {

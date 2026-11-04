@@ -4,11 +4,13 @@
   import { formatSize } from '../format';
   import { t } from '../i18n.svelte';
 
+  let { onselect }: { onselect?: (id: string) => void } = $props();
   let open = $state(false);
   let panel: HTMLElement;
 
   function pickDisk(id: string) {
     store.selectDisk(id);
+    onselect?.(id);
     open = false;
   }
 

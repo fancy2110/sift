@@ -4,6 +4,7 @@
    * lists one directory on demand and fills in child-folder totals lazily.
    */
   import Icon from './Icon.svelte';
+  import LocationPicker from './LocationPicker.svelte';
   import { store } from '../store.svelte';
   import { formatSize } from '../format';
   import { t } from '../i18n.svelte';
@@ -12,6 +13,11 @@
   onMount(() => {
     if (store.explorerColumns.length === 0) void store.openExplorer();
   });
+
+  function openDisk(id: string) {
+    const volume = store.volumes.find((item) => item.id === id);
+    if (volume) void store.openExplorer(volume.mountPoint);
+  }
 
   const crumbs = $derived.by(() => {
     const path = store.explorerColumns.at(-1)?.path ?? '';
@@ -28,6 +34,7 @@
 
 <div class="fx">
   <div class="fx-bar">
+    <LocationPicker onselect={openDisk} />
     <button
       type="button"
       class="fx-back"
@@ -47,7 +54,7 @@
           type="button"
           class="fx-crumb"
           class:fx-crumb-on={i === crumbs.length - 1}
-          onclick={() => void store.openExplorer(crumb.path)}
+          onclick={() => void store.explorerAt(crumb.path)}
         >
           {crumb.label}
         </button>

@@ -553,7 +553,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
             { name: 'Downloads', path: `${base}/Downloads`, isDir: true, size: 0 },
             { name: 'readme.txt', path: `${base}/readme.txt`, isDir: false, size: 1024 }
           ];
-          resolve(entries as unknown as T);
+          resolve({ path: base, entries } as unknown as T);
           break;
         }
         case 'dir_sizes': {
