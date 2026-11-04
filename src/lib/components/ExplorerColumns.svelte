@@ -18,7 +18,10 @@
   const currentName = $derived(
     store.explorerPath.split('/').filter(Boolean).pop() ?? '/'
   );
-  const rightName = $derived(store.explorerSelectedDir?.name ?? currentName);
+  const parentName = $derived.by(() => {
+    const parent = store.explorerPath.replace(/\/[^/]+\/?$/, '') || '/';
+    return parent.split('/').filter(Boolean).pop() ?? '/';
+  });
   const crumbs = $derived.by(() => {
     const parts = store.explorerPath.split('/').filter(Boolean);
     const out: { label: string; path: string }[] = [];
@@ -82,7 +85,7 @@
   <div class="fx-body">
     <!-- left: folders of the current directory -->
     <div class="fx-left">
-      <div class="fx-col-head" title={store.explorerPath}>{currentName}</div>
+      <div class="fx-col-head" title={store.explorerPath}>{parentName}</div>
       <div class="fx-list">
         {#if store.explorerLeftLoading}
           <p class="fx-hint">{t('explorer.loading')}</p>
@@ -90,7 +93,7 @@
           {#each store.explorerLeft as entry (entry.path)}
             <div
               class="fx-row"
-              class:fx-row-on={store.explorerSelectedDir?.path === entry.path}
+              class:fx-row-on={entry.path === store.explorerPath}
               role="button"
               tabindex="0"
               title={entry.path}
@@ -134,7 +137,7 @@
     <div class="fx-right">
       <div class="fx-right-head">
         <div class="fx-right-title">
-          <p class="fx-folder-name">{rightName}</p>
+          <p class="fx-folder-name">{currentName}</p>
           <p class="fx-folder-meta">
             {t('explorer.filesSummary', [
               String(store.explorerRight.length),

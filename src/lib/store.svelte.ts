@@ -729,24 +729,45 @@ class AppStore {
   async openExplorer(path?: string) {
     const startPath = path ?? this.currentNode?.path ?? '';
     this.explorerSelected = null;
-    this.explorerSelectedDir = null;
     this.explorerAi = { loading: false, text: '', error: '' };
-    this.explorerLeftLoading = true;
-    this.explorerLeft = [];
+    this.explorerRightLoading = true;
+    this.explorerRight = [];
     let resolved = startPath;
+    let entries: DirEntry[] = [];
     try {
       const listing = await listDirEntries(startPath);
       resolved = listing.path || startPath;
-      this.explorerLeft = listing.entries.filter((entry) => entry.isDir);
+      entries = listing.entries;
     } catch {
-      this.explorerLeft = [];
+      entries = [];
     }
     this.explorerPath = resolved;
-    this.explorerLeftLoading = false;
-    this.fillExplorerSizes(this.explorerLeft, () => {
-      if (this.explorerPath === resolved) this.explorerLeft = [...this.explorerLeft];
+    this.explorerRightPath = resolved;
+    this.explorerRight = entries;
+    this.explorerRightLoading = false;
+    this.fillExplorerSizes(entries, () => {
+      if (this.explorerRightPath === resolved) this.explorerRight = [...this.explorerRight];
     });
-    await this.loadExplorerRight(resolved);
+    await this.loadExplorerLeft(resolved);
+  }
+
+  /** Left pane: folders of the parent of the directory shown on the right. */
+  private async loadExplorerLeft(rightPath: string) {
+    const parent = rightPath.replace(/\/[^/]+\/?$/, '') || '/';
+    this.explorerLeftLoading = true;
+    this.explorerLeft = [];
+    let entries: DirEntry[] = [];
+    try {
+      entries = (await listDirEntries(parent)).entries.filter((entry) => entry.isDir);
+    } catch {
+      entries = [];
+    }
+    if (this.explorerPath !== rightPath) return;
+    this.explorerLeft = entries;
+    this.explorerLeftLoading = false;
+    this.fillExplorerSizes(entries, () => {
+      if (this.explorerPath === rightPath) this.explorerLeft = [...this.explorerLeft];
+    });
   }
 
   /** Right pane: children (directories + files) of `path`. */
@@ -768,7 +789,7 @@ class AppStore {
     });
   }
 
-  /** Lazy child-folder totals for a pane (best-effort, applied in place). */
+  /** Lazy child-folder totals for both panes (best-effort, in place). */
   private async fillExplorerSizes(entries: DirEntry[], apply: () => void) {
     const dirs = entries.filter((entry) => entry.isDir).map((entry) => entry.path);
     if (dirs.length === 0) return;
@@ -787,15 +808,12 @@ class AppStore {
     }
   }
 
-  /** Left click: the right pane follows the selected folder. */
+  /** Left click: open that sibling, keeping the parent list in place. */
   async selectExplorerDir(entry: DirEntry) {
-    this.explorerSelected = null;
-    this.explorerSelectedDir = entry;
-    this.explorerAi = { loading: false, text: '', error: '' };
-    await this.loadExplorerRight(entry.path);
+    await this.openExplorer(entry.path);
   }
 
-  /** Right click on a folder / double click: make it the current directory. */
+  /** Folder row on the right (single or double click): make it current. */
   async enterExplorerFolder(entry: DirEntry) {
     if (!entry.isDir) {
       this.explorerSelected = entry;
@@ -814,10 +832,9 @@ class AppStore {
     void this.openExplorer(parent);
   }
 
-  /** Explain the folder currently shown on the right. */
+  /** Explain the directory currently shown on the right. */
   async askExplorerAi() {
-    const folder = this.explorerSelectedDir;
-    const path = folder?.path ?? this.explorerPath;
+    const path = this.explorerPath;
     if (!path) return;
     this.explorerAi = { loading: true, text: '', error: '' };
     const names = this.explorerRight.slice(0, 40).map((entry) => entry.name);
