@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
-   * Two-pane browser: left lists the current directory's entries, right shows
-   * every file under the selected folder, plus an AI explanation of that folder.
+   * Linked two-pane browser: the left lists the current directory's folders,
+   * the right shows the children (folders and files) of the selected folder.
    * Works without a scan.
    */
   import Icon from './Icon.svelte';
@@ -12,13 +12,15 @@
   import { onMount } from 'svelte';
 
   onMount(() => {
-    if (store.explorerColumns.length === 0) void store.openExplorer();
+    if (!store.explorerPath) void store.openExplorer();
   });
 
-  const column = $derived(store.explorerColumns.at(-1));
+  const currentName = $derived(
+    store.explorerPath.split('/').filter(Boolean).pop() ?? '/'
+  );
+  const rightName = $derived(store.explorerSelectedDir?.name ?? currentName);
   const crumbs = $derived.by(() => {
-    const path = column?.path ?? '';
-    const parts = path.split('/').filter(Boolean);
+    const parts = store.explorerPath.split('/').filter(Boolean);
     const out: { label: string; path: string }[] = [];
     let acc = '';
     for (const part of parts) {
@@ -28,12 +30,17 @@
     return out;
   });
   const totalBytes = $derived(
-    store.explorerFiles.reduce((sum, file) => sum + file.size, 0)
+    store.explorerRight.reduce((sum: number, entry) => sum + entry.size, 0)
   );
 
   function openDisk(id: string) {
     const volume = store.volumes.find((item) => item.id === id);
     if (volume) void store.openExplorer(volume.mountPoint);
+  }
+
+  function queued(entry: { path: string }): boolean {
+    const finding = store.findingForPath(entry.path);
+    return finding ? store.isSelected(finding.id) : false;
   }
 </script>
 
@@ -73,23 +80,21 @@
   </div>
 
   <div class="fx-body">
-    <!-- left: current directory entries -->
+    <!-- left: folders of the current directory -->
     <div class="fx-left">
-      <div class="fx-col-head" title={column?.path}>{column?.name ?? ''}</div>
+      <div class="fx-col-head" title={store.explorerPath}>{currentName}</div>
       <div class="fx-list">
-        {#if column?.loading}
+        {#if store.explorerLeftLoading}
           <p class="fx-hint">{t('explorer.loading')}</p>
         {:else}
-          {#each column?.entries ?? [] as entry (entry.path)}
-            {@const finding = store.findingForPath(entry.path)}
-            {@const queued = finding ? store.isSelected(finding.id) : false}
+          {#each store.explorerLeft as entry (entry.path)}
             <div
               class="fx-row"
-              class:fx-row-on={store.explorerFolder?.path === entry.path}
+              class:fx-row-on={store.explorerSelectedDir?.path === entry.path}
               role="button"
               tabindex="0"
               title={entry.path}
-              onclick={() => void store.selectExplorerEntry(0, entry)}
+              onclick={() => void store.selectExplorerDir(entry)}
               ondblclick={() => void store.enterExplorerFolder(entry)}
               onkeydown={(event) => {
                 if (event.key === 'Enter') {
@@ -97,27 +102,25 @@
                   void store.enterExplorerFolder(entry);
                 } else if (event.key === ' ') {
                   event.preventDefault();
-                  void store.selectExplorerEntry(0, entry);
+                  void store.selectExplorerDir(entry);
                 }
               }}
             >
-              <Icon name={entry.isDir ? 'folder' : 'file'} size={14} />
+              <Icon name="folder" size={14} />
               <span class="fx-name">{entry.name}</span>
-              <span class="fx-size">
-                {entry.isDir && !column?.sized ? '…' : formatSize(entry.size)}
-              </span>
+              <span class="fx-size">{entry.size ? formatSize(entry.size) : ''}</span>
               <button
                 type="button"
                 class="fx-act"
-                class:fx-act-on={queued}
-                title={queued ? t('sub.remove') : t('sub.add')}
-                aria-label={`${queued ? t('sub.remove') : t('sub.add')} ${entry.name}`}
+                class:fx-act-on={queued(entry)}
+                title={queued(entry) ? t('sub.remove') : t('sub.add')}
+                aria-label={`${queued(entry) ? t('sub.remove') : t('sub.add')} ${entry.name}`}
                 onclick={(event) => {
                   event.stopPropagation();
                   void store.toggleExplorerCandidate(entry);
                 }}
               >
-                <Icon name={queued ? 'undo' : 'trash'} size={11} />
+                <Icon name={queued(entry) ? 'undo' : 'trash'} size={11} />
               </button>
             </div>
           {:else}
@@ -127,79 +130,85 @@
       </div>
     </div>
 
-    <!-- right: files under the selected folder -->
+    <!-- right: children of the selected folder -->
     <div class="fx-right">
-      {#if store.explorerFolder}
-        <div class="fx-right-head">
-          <div class="fx-right-title">
-            <p class="fx-folder-name">{store.explorerFolder.name}</p>
-            <p class="fx-folder-meta">
-              {t('explorer.filesSummary', [
-                String(store.explorerFiles.length),
-                formatSize(totalBytes)
-              ])}
-            </p>
-          </div>
-          <button
-            type="button"
-            class="fx-ai"
-            disabled={store.explorerAi.loading}
-            onclick={() => void store.askExplorerAi()}
-          >
-            <Icon name="spark" size={12} />
-            {t('explorer.aiButton')}
-          </button>
+      <div class="fx-right-head">
+        <div class="fx-right-title">
+          <p class="fx-folder-name">{rightName}</p>
+          <p class="fx-folder-meta">
+            {t('explorer.filesSummary', [
+              String(store.explorerRight.length),
+              formatSize(totalBytes)
+            ])}
+          </p>
         </div>
+        <button
+          type="button"
+          class="fx-ai"
+          disabled={store.explorerAi.loading}
+          onclick={() => void store.askExplorerAi()}
+        >
+          <Icon name="spark" size={12} />
+          {t('explorer.aiButton')}
+        </button>
+      </div>
 
-        {#if store.explorerAi.loading || store.explorerAi.text || store.explorerAi.error}
-          <div class="fx-ai-card" class:fx-ai-error={Boolean(store.explorerAi.error)}>
-            {#if store.explorerAi.loading}
-              <p class="fx-ai-text">{t('explorer.aiLoading')}</p>
-            {:else if store.explorerAi.error}
-              <p class="fx-ai-text">{store.explorerAi.error}</p>
-            {:else}
-              <p class="fx-ai-text">{store.explorerAi.text}</p>
-            {/if}
-          </div>
-        {/if}
-
-        <div class="fx-files">
-          {#if store.explorerFilesLoading}
-            <p class="fx-hint">{t('explorer.loading')}</p>
-          {:else}
-            {#each store.explorerFiles as file (file.path)}
-              {@const finding = store.findingForPath(file.path)}
-              {@const queued = finding ? store.isSelected(finding.id) : false}
-              <div class="fx-file" title={file.path}>
-                <Icon name="file" size={13} />
-                <span class="fx-file-name">{file.name}</span>
-                <span class="fx-file-dir">{file.relative !== file.name ? file.relative : ''}</span>
-                <span class="fx-size">{formatSize(file.size)}</span>
-                <button
-                  type="button"
-                  class="fx-act"
-                  class:fx-act-on={queued}
-                  title={queued ? t('sub.remove') : t('sub.add')}
-                  aria-label={`${queued ? t('sub.remove') : t('sub.add')} ${file.name}`}
-                  onclick={() =>
-                    void store.toggleExplorerCandidate({
-                      name: file.name,
-                      path: file.path,
-                      isDir: false,
-                      size: file.size
-                    })}
-                >
-                  <Icon name={queued ? 'undo' : 'trash'} size={11} />
-                </button>
-              </div>
-            {:else}
-              <p class="fx-hint">{t('explorer.filesEmpty')}</p>
-            {/each}
-          {/if}
+      {#if store.explorerAi.loading || store.explorerAi.text || store.explorerAi.error}
+        <div class="fx-ai-card" class:fx-ai-error={Boolean(store.explorerAi.error)}>
+          <p class="fx-ai-text">
+            {store.explorerAi.loading
+              ? t('explorer.aiLoading')
+              : store.explorerAi.error || store.explorerAi.text}
+          </p>
         </div>
-      {:else}
-        <p class="fx-hint">{t('explorer.pickFolder')}</p>
       {/if}
+
+      <div class="fx-files">
+        {#if store.explorerRightLoading}
+          <p class="fx-hint">{t('explorer.loading')}</p>
+        {:else}
+          {#each store.explorerRight as entry (entry.path)}
+            <div
+              class="fx-file"
+              class:fx-file-on={store.explorerSelected?.path === entry.path}
+              role="button"
+              tabindex="0"
+              title={entry.path}
+              onclick={() =>
+                entry.isDir
+                  ? void store.enterExplorerFolder(entry)
+                  : (store.explorerSelected = entry)}
+              onkeydown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  if (entry.isDir) void store.enterExplorerFolder(entry);
+                  else store.explorerSelected = entry;
+                }
+              }}
+            >
+              <Icon name={entry.isDir ? 'folder' : 'file'} size={13} />
+              <span class="fx-file-name">{entry.name}</span>
+              <span class="fx-file-dir">{entry.isDir ? t('explorer.folderBadge') : ''}</span>
+              <span class="fx-size">{entry.size ? formatSize(entry.size) : '…'}</span>
+              <button
+                type="button"
+                class="fx-act"
+                class:fx-act-on={queued(entry)}
+                title={queued(entry) ? t('sub.remove') : t('sub.add')}
+                aria-label={`${queued(entry) ? t('sub.remove') : t('sub.add')} ${entry.name}`}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  void store.toggleExplorerCandidate(entry);
+                }}
+              >
+                <Icon name={queued(entry) ? 'undo' : 'trash'} size={11} />
+              </button>
+            </div>
+          {:else}
+            <p class="fx-hint">{t('list.folderEmpty')}</p>
+          {/each}
+        {/if}
+      </div>
     </div>
   </div>
 </div>
@@ -321,7 +330,8 @@
   .fx-file:hover {
     background: color-mix(in oklch, var(--color-surface-2) 70%, transparent);
   }
-  .fx-row-on {
+  .fx-row-on,
+  .fx-file-on {
     background: color-mix(in oklch, var(--color-violet) 22%, transparent);
   }
   .fx-row :global(svg),
@@ -342,7 +352,7 @@
   }
   .fx-file-name {
     flex: none;
-    max-width: 45%;
+    max-width: 55%;
   }
   .fx-file-dir {
     flex: 1;
