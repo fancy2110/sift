@@ -88,6 +88,30 @@ export function scanRunning(): Promise<number | null> {
  * directories from the scan; file entries are fetched on demand when the
  * explorer opens a folder.
  */
+export interface DirEntry {
+  name: string;
+  path: string;
+  isDir: boolean;
+  /** File size for files; 0 for folders until totals load. */
+  size: number;
+}
+
+export interface DirSize {
+  path: string;
+  size: number;
+  partial: boolean;
+}
+
+/** List one directory (works without any scan). */
+export function listDirEntries(path: string): Promise<DirEntry[]> {
+  return call<DirEntry[]>('list_dir_entries', { path });
+}
+
+/** Recursive totals for a batch of directories. */
+export function dirSizes(paths: string[]): Promise<DirSize[]> {
+  return call<DirSize[]>('dir_sizes', { paths });
+}
+
 export function listDirFiles(path: string): Promise<Node[]> {
   return call<Node[]>('list_dir_files', { path });
 }

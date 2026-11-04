@@ -504,4 +504,5 @@ export const id: Record<string, string> = {
   'settings.scheduledAutoDesc': 'Mati (default): hanya analisis dan tunggu konfirmasi di daftar Cerdas. Nyala: jalankan pembersihan yang disetujui pada waktu terjadwal dan catat ke riwayat.',
   'scheduled.pending': 'Analisis terjadwal menemukan {0} item untuk dikonfirmasi',
   'scheduled.later': 'Nanti',
+  'explorer.loading': 'Memuat…',
 };

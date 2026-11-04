@@ -545,6 +545,28 @@ export function createMockBackend(bus: EventBus): MockBackend {
         case 'scan_running':
           resolve((state.scanning ? state.epoch : null) as unknown as T);
           break;
+        case 'list_dir_entries': {
+          const base = String(args.path ?? '') || '/Users/you';
+          const entries = [
+            { name: 'Library', path: `${base}/Library`, isDir: true, size: 0 },
+            { name: 'Documents', path: `${base}/Documents`, isDir: true, size: 0 },
+            { name: 'Downloads', path: `${base}/Downloads`, isDir: true, size: 0 },
+            { name: 'readme.txt', path: `${base}/readme.txt`, isDir: false, size: 1024 }
+          ];
+          resolve(entries as unknown as T);
+          break;
+        }
+        case 'dir_sizes': {
+          const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
+          resolve(
+            paths.map((path) => ({
+              path,
+              size: 1_200_000 + path.length * 1000,
+              partial: false
+            })) as unknown as T
+          );
+          break;
+        }
         case 'list_dir_files': {
           const path = String(args.path ?? '');
           resolve((FILES[path] ?? []).map((file) => fileNode(path, file)) as unknown as T);

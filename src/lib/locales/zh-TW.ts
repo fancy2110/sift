@@ -482,4 +482,5 @@ export const zhTW: Record<string, string> = {
   'settings.scheduledAutoDesc': '關閉時（預設）只做分析並等待你在智慧列表中確認；開啟後到點直接執行已批准的清理，並記錄到歷史。',
   'scheduled.pending': '定時清理發現 {0} 項待確認',
   'scheduled.later': '稍後',
+  'explorer.loading': '載入中…',
 };

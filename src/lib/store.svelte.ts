@@ -23,7 +23,9 @@ import {
   deleteRoutine,
   dismissRoutineSuggestion,
   listHistory,
+  listDirEntries,
   listDirFiles,
+  dirSizes,
   listRoutines,
   listVolumes,
   markPath,
@@ -72,6 +74,15 @@ import type {
 } from './types';
 import { t, tr, renderStoreWarning } from './i18n.svelte';
 import { startupMark } from './startup';
+import type { DirEntry } from './ipc';
+
+export interface ExplorerColumn {
+  path: string;
+  name: string;
+  entries: DirEntry[];
+  loading: boolean;
+  sized: boolean;
+}
 
 export type ToastTone = 'success' | 'error' | 'info';
 
@@ -119,6 +130,10 @@ class AppStore {
   currentFiles: Node[] = [];
   /** Reactive slice: entries of the open folder, folders first then size. */
   listEntries = $state<Node[]>([]);
+
+  // ---- scan-independent explorer (Finder-style columns) ----
+  explorerColumns = $state<ExplorerColumn[]>([]);
+  explorerSelected = $state<DirEntry | null>(null);
 
   scanning = $state(false);
   scannedFiles = $state(0);
@@ -693,6 +708,74 @@ class AppStore {
   }
 
   /** Fetch the current folder's file entries live from the backend. */
+  /**
+   * Open the Explorer at a path (default: the scanned root, else the user's
+   * home). Reading a directory does not require a completed scan.
+   */
+  async openExplorer(path?: string) {
+    const start = path ?? this.currentNode?.path ?? '';
+    this.explorerSelected = null;
+    this.explorerColumns = [];
+    await this.pushExplorerColumn(start);
+  }
+
+  private async pushExplorerColumn(path: string) {
+    const index = this.explorerColumns.length;
+    const name = path.split('/').filter(Boolean).pop() ?? '/';
+    this.explorerColumns = [
+      ...this.explorerColumns,
+      { path, name, entries: [], loading: true, sized: false }
+    ];
+    let entries: DirEntry[] = [];
+    try {
+      entries = await listDirEntries(path);
+    } catch {
+      entries = [];
+    }
+    if (this.explorerColumns[index]?.path !== path) return;
+    this.explorerColumns = this.explorerColumns.map((column, i) =>
+      i === index ? { ...column, entries, loading: false } : column
+    );
+
+    const dirs = entries.filter((entry) => entry.isDir).map((entry) => entry.path);
+    if (dirs.length === 0) return;
+    try {
+      const sizes = await dirSizes(dirs);
+      if (this.explorerColumns[index]?.path !== path) return;
+      const byPath = new Map(sizes.map((size) => [size.path, size.size]));
+      this.explorerColumns = this.explorerColumns.map((column, i) =>
+        i === index
+          ? {
+              ...column,
+              sized: true,
+              entries: column.entries.map((entry) => ({
+                ...entry,
+                size: entry.isDir ? (byPath.get(entry.path) ?? entry.size) : entry.size
+              }))
+            }
+          : column
+      );
+    } catch {
+      // Sizes are best-effort; names stay browsable without them.
+    }
+  }
+
+  /** Click a row: drill into a folder (new column) or select a file. */
+  async selectExplorerEntry(columnIndex: number, entry: DirEntry) {
+    if (!entry.isDir) {
+      this.explorerSelected = entry;
+      return;
+    }
+    this.explorerSelected = null;
+    this.explorerColumns = this.explorerColumns.slice(0, columnIndex + 1);
+    await this.pushExplorerColumn(entry.path);
+  }
+
+  explorerUp() {
+    if (this.explorerColumns.length <= 1) return;
+    this.explorerColumns = this.explorerColumns.slice(0, -1);
+  }
+
   private async refreshCurrentFiles() {
     const node = this.currentNode;
     if (!node) return;
