@@ -520,6 +520,7 @@ const zh: Record<string, string> = {
   'explorer.filesEmpty': '这个目录下没有文件',
   'explorer.pickFolder': '在左侧选择文件夹查看文件',
   'explorer.folderBadge': '目录',
+  'explorer.aiReading': '正在解读…',
 };
 
 const en: Record<string, string> = {
@@ -1001,6 +1002,7 @@ const en: Record<string, string> = {
   'explorer.filesEmpty': 'No files under this folder',
   'explorer.pickFolder': 'Pick a folder on the left to see its files',
   'explorer.folderBadge': 'Folder',
+  'explorer.aiReading': 'Reading…',
 };
 
 type ParamValue = string | number;

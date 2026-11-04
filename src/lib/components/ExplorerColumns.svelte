@@ -148,18 +148,16 @@
           disabled={store.explorerAi.loading}
           onclick={() => void store.askExplorerAi()}
         >
-          <Icon name="spark" size={12} />
-          {t('explorer.aiButton')}
+          <span class="fx-spin-wrap" class:fx-spin={store.explorerAi.loading}>
+            <Icon name={store.explorerAi.loading ? 'refresh' : 'spark'} size={12} />
+          </span>
+          {store.explorerAi.loading ? t('explorer.aiReading') : t('explorer.aiButton')}
         </button>
       </div>
 
-      {#if store.explorerAi.loading || store.explorerAi.text || store.explorerAi.error}
+      {#if store.explorerAi.text || store.explorerAi.error}
         <div class="fx-ai-card" class:fx-ai-error={Boolean(store.explorerAi.error)}>
-          <p class="fx-ai-text">
-            {store.explorerAi.loading
-              ? t('explorer.aiLoading')
-              : store.explorerAi.error || store.explorerAi.text}
-          </p>
+          <p class="fx-ai-text">{store.explorerAi.error || store.explorerAi.text}</p>
         </div>
       {/if}
 
@@ -465,6 +463,17 @@
   .fx-ai-error {
     border-color: color-mix(in oklch, var(--color-warn) 45%, transparent);
     background: color-mix(in oklch, var(--color-warn) 8%, transparent);
+  }
+  .fx-spin-wrap {
+    display: inline-flex;
+  }
+  .fx-spin {
+    animation: fx-spin 0.9s linear infinite;
+  }
+  @keyframes fx-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .fx-ai-text {
     margin: 0;

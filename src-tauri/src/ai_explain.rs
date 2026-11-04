@@ -16,9 +16,23 @@ const SYSTEM: &str = r#"You explain what a directory on the user's computer is u
 
 Base your answer only on the directory path and the file names provided. Never invent file contents. If the directory is unfamiliar, say what can be inferred and mark the rest as uncertain.
 
-Answer in the same language as the user's request, in at most 120 words, as two short paragraphs:
+Answer in at most 120 words, as two short paragraphs:
 1. what the directory is for;
 2. whether its contents are usually safe to clean, and why."#;
+
+/// Human-readable name for a UI language tag, so the model answers in it.
+fn language_name(tag: &str) -> &'static str {
+    match tag {
+        "zh" => "Simplified Chinese",
+        "zh-TW" => "Traditional Chinese",
+        "ja" => "Japanese",
+        "ko" => "Korean",
+        "hi" => "Hindi",
+        "id" => "Indonesian",
+        "ru" => "Russian",
+        _ => "English",
+    }
+}
 
 fn map_error(error: &str, endpoint: &str) -> String {
     if error.contains("[timeout]") || error.contains("timed out") {
@@ -37,14 +51,21 @@ pub async fn ai_explain_dir(
     services: State<'_, AppServices>,
     path: String,
     names: Vec<String>,
+    language: Option<String>,
 ) -> Result<String, String> {
     let store = Arc::clone(&services.store);
-    tauri::async_runtime::spawn_blocking(move || explain(&store, path, names))
+    let language = language.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || explain(&store, path, names, &language))
         .await
         .map_err(|error| format!("err.aiRequest|{error}"))?
 }
 
-fn explain(store: &sift_store::Store, path: String, names: Vec<String>) -> Result<String, String> {
+fn explain(
+    store: &sift_store::Store,
+    path: String,
+    names: Vec<String>,
+    language: &str,
+) -> Result<String, String> {
     let ai = store.settings().ai;
     if !ai.is_usable() {
         return Err("err.aiNotConfigured".into());
@@ -91,8 +112,9 @@ fn explain(store: &sift_store::Store, path: String, names: Vec<String>) -> Resul
             .map(|name| name.to_string())
             .collect();
         let user = format!(
-            "Directory: {path}\nSample files (names only, not contents):\n{}\n\nWhat is this directory for?",
-            sample.join("\n")
+            "Directory: {path}\nSample files (names only, not contents):\n{}\n\nWhat is this directory for? Write the answer in {}.",
+            sample.join("\n"),
+            language_name(language)
         );
         client
             .complete(SYSTEM, &user)

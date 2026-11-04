@@ -116,8 +116,12 @@ export function listFilesUnder(path: string, limit?: number): Promise<FileEntry[
 }
 
 /** Ask the model what a directory is for (names only, never contents). */
-export function aiExplainDir(path: string, names: string[]): Promise<string> {
-  return call<string>('ai_explain_dir', { path, names });
+export function aiExplainDir(
+  path: string,
+  names: string[],
+  language?: string
+): Promise<string> {
+  return call<string>('ai_explain_dir', { path, names, language: language ?? null });
 }
 
 /** One directory listing plus the resolved absolute path. */

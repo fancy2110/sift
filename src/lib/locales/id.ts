@@ -511,4 +511,5 @@ export const id: Record<string, string> = {
   'explorer.filesEmpty': 'Tidak ada berkas di folder ini',
   'explorer.pickFolder': 'Pilih folder di kiri untuk melihat berkas',
   'explorer.folderBadge': 'Folder',
+  'explorer.aiReading': 'Membaca…',
 };

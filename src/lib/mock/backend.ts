@@ -568,8 +568,13 @@ export function createMockBackend(bus: EventBus): MockBackend {
           break;
         }
         case 'ai_explain_dir':
-          resolve(
-            '（模拟）这是一个应用缓存目录，存放浏览器与应用生成的临时数据。\n\n其中的文件通常可以安全清理，应用会在需要时重新生成。' as unknown as T
+          // Small delay so the button's「正在解读…」state is observable.
+          setTimeout(
+            () =>
+              resolve(
+                '（模拟）这是一个应用缓存目录，存放浏览器与应用生成的临时数据。\n\n其中的文件通常可以安全清理，应用会在需要时重新生成。' as unknown as T
+              ),
+            700
           );
           break;
         case 'dir_sizes': {

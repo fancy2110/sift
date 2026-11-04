@@ -74,7 +74,7 @@ import type {
   RoutineSuggestion,
   VolumeInfo
 } from './types';
-import { t, tr, renderStoreWarning } from './i18n.svelte';
+import { t, tr, renderStoreWarning, i18n } from './i18n.svelte';
 import { startupMark } from './startup';
 import type { DirEntry } from './ipc';
 
@@ -822,7 +822,7 @@ class AppStore {
     this.explorerAi = { loading: true, text: '', error: '' };
     const names = this.explorerRight.slice(0, 40).map((entry) => entry.name);
     try {
-      const text = await aiExplainDir(path, names);
+      const text = await aiExplainDir(path, names, i18n.current);
       this.explorerAi = { loading: false, text, error: '' };
     } catch (error) {
       this.explorerAi = { loading: false, text: '', error: tr(String(error)) };
