@@ -490,4 +490,7 @@ export const zhTW: Record<string, string> = {
   'explorer.pickFolder': '在左側選擇資料夾查看檔案',
   'explorer.folderBadge': '目錄',
   'explorer.aiReading': '正在解讀…',
+  'explorer.verdictSafe': '可刪',
+  'explorer.verdictCaution': '謹慎',
+  'explorer.verdictKeep': '保留',
 };

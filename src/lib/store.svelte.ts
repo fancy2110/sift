@@ -146,7 +146,11 @@ class AppStore {
   explorerRightPath = $state('');
   explorerRightLoading = $state(false);
   explorerSelected = $state<DirEntry | null>(null);
-  explorerAi = $state({ loading: false, text: '', error: '' });
+  explorerAi = $state<{
+    loading: boolean;
+    error: string;
+    items: Record<string, { verdict: string; purpose: string }>;
+  }>({ loading: false, error: '', items: {} });
 
   scanning = $state(false);
   scannedFiles = $state(0);
@@ -729,7 +733,7 @@ class AppStore {
   async openExplorer(path?: string) {
     const startPath = path ?? this.currentNode?.path ?? '';
     this.explorerSelected = null;
-    this.explorerAi = { loading: false, text: '', error: '' };
+    this.explorerAi = { loading: false, error: '', items: {} };
     this.explorerRightLoading = true;
     this.explorerRight = [];
     let resolved = startPath;
@@ -836,13 +840,15 @@ class AppStore {
   async askExplorerAi() {
     const path = this.explorerPath;
     if (!path) return;
-    this.explorerAi = { loading: true, text: '', error: '' };
+    this.explorerAi = { loading: true, error: '', items: {} };
     const names = this.explorerRight.slice(0, 40).map((entry) => entry.name);
     try {
-      const text = await aiExplainDir(path, names, i18n.current);
-      this.explorerAi = { loading: false, text, error: '' };
+      const result = await aiExplainDir(path, names, i18n.current);
+      const items: Record<string, { verdict: string; purpose: string }> = {};
+      for (const item of result.items) items[item.name] = item;
+      this.explorerAi = { loading: false, error: '', items };
     } catch (error) {
-      this.explorerAi = { loading: false, text: '', error: tr(String(error)) };
+      this.explorerAi = { loading: false, error: tr(String(error)), items: {} };
     }
   }
 

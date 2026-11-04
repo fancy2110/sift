@@ -508,4 +508,7 @@ export const ru: Record<string, string> = {
   'explorer.pickFolder': 'Выберите папку слева, чтобы увидеть файлы',
   'explorer.folderBadge': 'Папка',
   'explorer.aiReading': 'Читаю…',
+  'explorer.verdictSafe': 'Можно удалить',
+  'explorer.verdictCaution': 'Осторожно',
+  'explorer.verdictKeep': 'Оставить',
 };

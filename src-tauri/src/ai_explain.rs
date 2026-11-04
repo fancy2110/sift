@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::analyze::AppServices;
@@ -12,13 +13,17 @@ use crate::analyze::AppServices;
 /// How many file names the prompt may include.
 const MAX_NAMES: usize = 40;
 
-const SYSTEM: &str = r#"You explain what a directory on the user's computer is used for.
+const SYSTEM: &str = r#"You classify the children of one directory on the user's computer.
 
-Base your answer only on the directory path and the file names provided. Never invent file contents. If the directory is unfamiliar, say what can be inferred and mark the rest as uncertain.
+For every provided name, decide what it is for and whether it can be deleted. Base the answer only on the directory path and the names — never invent file contents. When unsure, use "caution".
 
-Answer in at most 120 words, as two short paragraphs:
-1. what the directory is for;
-2. whether its contents are usually safe to clean, and why."#;
+Reply with JSON only, no markdown and no prose:
+{"items":[{"name":"<exact name>","verdict":"safe|caution|keep","purpose":"<at most 18 words>"}]}
+
+Verdicts:
+- "safe": caches, build output, logs or temporary data that regenerate;
+- "caution": likely removable but may lose recent state or require a re-download;
+- "keep": user documents, app data that does not regenerate, or system content."#;
 
 /// Human-readable name for a UI language tag, so the model answers in it.
 fn language_name(tag: &str) -> &'static str {
@@ -46,13 +51,28 @@ fn map_error(error: &str, endpoint: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DirVerdictDto {
+    pub name: String,
+    /// `safe` | `caution` | `keep`.
+    pub verdict: String,
+    pub purpose: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DirVerdictsDto {
+    pub items: Vec<DirVerdictDto>,
+}
+
 #[tauri::command]
 pub async fn ai_explain_dir(
     services: State<'_, AppServices>,
     path: String,
     names: Vec<String>,
     language: Option<String>,
-) -> Result<String, String> {
+) -> Result<DirVerdictsDto, String> {
     let store = Arc::clone(&services.store);
     let language = language.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || explain(&store, path, names, &language))
@@ -65,7 +85,7 @@ fn explain(
     path: String,
     names: Vec<String>,
     language: &str,
-) -> Result<String, String> {
+) -> Result<DirVerdictsDto, String> {
     let ai = store.settings().ai;
     if !ai.is_usable() {
         return Err("err.aiNotConfigured".into());
@@ -112,17 +132,64 @@ fn explain(
             .map(|name| name.to_string())
             .collect();
         let user = format!(
-            "Directory: {path}\nSample files (names only, not contents):\n{}\n\nWhat is this directory for? Write the answer in {}.",
+            "Directory: {path}\nChildren (names only, not contents):\n{}\n\nClassify every child. Write each purpose in {}.",
             sample.join("\n"),
             language_name(language)
         );
-        client
+        let reply = client
             .complete(SYSTEM, &user)
-            .map_err(|error| map_error(&error.to_string(), &endpoint))
+            .map_err(|error| map_error(&error.to_string(), &endpoint))?;
+        parse_verdicts(&reply)
     }
     #[cfg(not(feature = "remote-ai"))]
     {
         let _ = (&profile, &endpoint);
         Err("err.aiNotConfigured".into())
+    }
+}
+
+/// Parse the model's JSON, tolerating a bare array or stray prose.
+fn parse_verdicts(reply: &str) -> Result<DirVerdictsDto, String> {
+    let start = reply.find('{').ok_or_else(|| "err.aiRoutineParse".to_string())?;
+    let end = reply.rfind('}').ok_or_else(|| "err.aiRoutineParse".to_string())?;
+    let parsed: DirVerdictsDto = serde_json::from_str(&reply[start..=end])
+        .map_err(|_| "err.aiRoutineParse".to_string())?;
+    let items = parsed
+        .items
+        .into_iter()
+        .filter(|item| !item.name.trim().is_empty())
+        .map(|item| {
+            let verdict = match item.verdict.trim().to_ascii_lowercase().as_str() {
+                "safe" => "safe",
+                "keep" => "keep",
+                _ => "caution",
+            };
+            DirVerdictDto {
+                name: item.name.trim().to_string(),
+                verdict: verdict.to_string(),
+                purpose: item.purpose.trim().chars().take(160).collect(),
+            }
+        })
+        .collect();
+    Ok(DirVerdictsDto { items })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_verdicts_and_normalizes_unknown_values() {
+        let reply = r#"Here: {"items":[{"name":"Library","verdict":"safe","purpose":"Caches"},{"name":"Photos","verdict":"KEEP","purpose":"Your library"},{"name":"x","verdict":"maybe","purpose":"?"}]}"#;
+        let parsed = parse_verdicts(reply).unwrap();
+        assert_eq!(parsed.items.len(), 3);
+        assert_eq!(parsed.items[0].verdict, "safe");
+        assert_eq!(parsed.items[1].verdict, "keep");
+        assert_eq!(parsed.items[2].verdict, "caution");
+    }
+
+    #[test]
+    fn rejects_a_reply_without_json() {
+        assert!(parse_verdicts("no idea").is_err());
     }
 }
