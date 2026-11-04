@@ -6,6 +6,7 @@
 //! commands and translates event vocabularies.
 
 mod ai_routine;
+mod explorer;
 mod analyze;
 mod cleanup;
 mod cleanup_rules;
@@ -92,6 +93,8 @@ pub fn run() {
             scan_running,
             resolve_permission,
             list_dir_files,
+            explorer::list_dir_entries,
+            explorer::dir_sizes,
             // deletion and filesystem awareness
             watch_fs,
             unwatch_fs,

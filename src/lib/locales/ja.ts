@@ -496,4 +496,5 @@ export const ja: Record<string, string> = {
   'settings.scheduledAutoDesc': 'オフ（既定）は分析のみ行い、スマートリストで確認を待ちます。オンにすると定刻に承認済みのクリーンを実行し、履歴に記録します。',
   'scheduled.pending': '定期クリーンアップで {0} 件が確認待ちです',
   'scheduled.later': '後で',
+  'explorer.loading': '読み込み中…',
 };
