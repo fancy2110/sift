@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
-   * Linked two-pane browser: the left lists the current directory's folders,
-   * the right shows the children (folders and files) of the selected folder.
-   * Works without a scan.
+   * Single-list browser: always shows the current directory. The top bar
+   * carries the volume picker, an up button and a breadcrumb path; the header
+   * above the list explains the directory with the model. Works without a scan.
    */
   import Icon from './Icon.svelte';
   import LocationPicker from './LocationPicker.svelte';
@@ -11,17 +11,21 @@
   import { t } from '../i18n.svelte';
   import { onMount } from 'svelte';
 
+  let pathBar = $state<HTMLElement>();
+
   onMount(() => {
     if (!store.explorerPath) void store.openExplorer();
+  });
+
+  // Keep the current (last) segment visible when the path is long.
+  $effect(() => {
+    const path = store.explorerPath;
+    if (path && pathBar) pathBar.scrollLeft = pathBar.scrollWidth;
   });
 
   const currentName = $derived(
     store.explorerPath.split('/').filter(Boolean).pop() ?? '/'
   );
-  const parentName = $derived.by(() => {
-    const parent = store.explorerPath.replace(/\/[^/]+\/?$/, '') || '/';
-    return parent.split('/').filter(Boolean).pop() ?? '/';
-  });
   const crumbs = $derived.by(() => {
     const parts = store.explorerPath.split('/').filter(Boolean);
     const out: { label: string; path: string }[] = [];
@@ -59,10 +63,10 @@
     >
       <Icon name="chevronUp" size={14} />
     </button>
-    <div class="fx-crumbs">
+    <div class="fx-path" bind:this={pathBar}>
       {#each crumbs as crumb, i (crumb.path)}
         {#if i > 0}
-          <Icon name="chevronRight" size={10} />
+          <span class="fx-sep"><Icon name="chevronRight" size={9} /></span>
         {/if}
         <button
           type="button"
@@ -82,151 +86,98 @@
     {/if}
   </div>
 
-  <div class="fx-body">
-    <!-- left: folders of the current directory -->
-    <div class="fx-left">
-      <div class="fx-col-head" title={store.explorerPath}>{parentName}</div>
-      <div class="fx-list">
-        {#if store.explorerLeftLoading}
-          <p class="fx-hint">{t('explorer.loading')}</p>
-        {:else}
-          {#each store.explorerLeft as entry (entry.path)}
-            <div
-              class="fx-row"
-              class:fx-row-on={entry.path === store.explorerPath}
-              role="button"
-              tabindex="0"
-              title={entry.path}
-              onclick={() => void store.selectExplorerDir(entry)}
-              ondblclick={() => void store.enterExplorerFolder(entry)}
-              onkeydown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  void store.enterExplorerFolder(entry);
-                } else if (event.key === ' ') {
-                  event.preventDefault();
-                  void store.selectExplorerDir(entry);
-                }
-              }}
-            >
-              <Icon name="folder" size={14} />
-              <span class="fx-name">{entry.name}</span>
-              <span class="fx-size">{entry.size ? formatSize(entry.size) : ''}</span>
-              <button
-                type="button"
-                class="fx-act"
-                class:fx-act-on={queued(entry)}
-                title={queued(entry) ? t('sub.remove') : t('sub.add')}
-                aria-label={`${queued(entry) ? t('sub.remove') : t('sub.add')} ${entry.name}`}
-                onclick={(event) => {
-                  event.stopPropagation();
-                  void store.toggleExplorerCandidate(entry);
-                }}
-              >
-                <Icon name={queued(entry) ? 'undo' : 'trash'} size={11} />
-              </button>
-            </div>
-          {:else}
-            <p class="fx-hint">{t('list.folderEmpty')}</p>
-          {/each}
-        {/if}
+  <div class="fx-main">
+    <div class="fx-main-head">
+      <div class="fx-main-title">
+        <p class="fx-folder-name">{currentName}</p>
+        <p class="fx-folder-meta">
+          {t('explorer.filesSummary', [
+            String(store.explorerRight.length),
+            formatSize(totalBytes)
+          ])}
+        </p>
       </div>
+      <button
+        type="button"
+        class="fx-ai"
+        disabled={store.explorerAi.loading}
+        onclick={() => void store.askExplorerAi()}
+      >
+        <span class="fx-spin-wrap" class:fx-spin={store.explorerAi.loading}>
+          <Icon name={store.explorerAi.loading ? 'refresh' : 'spark'} size={12} />
+        </span>
+        {store.explorerAi.loading ? t('explorer.aiReading') : t('explorer.aiButton')}
+      </button>
     </div>
 
-    <!-- right: children of the selected folder -->
-    <div class="fx-right">
-      <div class="fx-right-head">
-        <div class="fx-right-title">
-          <p class="fx-folder-name">{currentName}</p>
-          <p class="fx-folder-meta">
-            {t('explorer.filesSummary', [
-              String(store.explorerRight.length),
-              formatSize(totalBytes)
-            ])}
-          </p>
-        </div>
-        <button
-          type="button"
-          class="fx-ai"
-          disabled={store.explorerAi.loading}
-          onclick={() => void store.askExplorerAi()}
-        >
-          <span class="fx-spin-wrap" class:fx-spin={store.explorerAi.loading}>
-            <Icon name={store.explorerAi.loading ? 'refresh' : 'spark'} size={12} />
-          </span>
-          {store.explorerAi.loading ? t('explorer.aiReading') : t('explorer.aiButton')}
-        </button>
+    {#if store.explorerAi.error}
+      <div class="fx-ai-card fx-ai-error">
+        <p class="fx-ai-text">{store.explorerAi.error}</p>
       </div>
+    {/if}
 
-      {#if store.explorerAi.error}
-        <div class="fx-ai-card fx-ai-error">
-          <p class="fx-ai-text">{store.explorerAi.error}</p>
-        </div>
-      {/if}
-
-      <div class="fx-files">
-        {#if store.explorerRightLoading}
-          <p class="fx-hint">{t('explorer.loading')}</p>
-        {:else}
-          {#each store.explorerRight as entry (entry.path)}
-            {@const finding = store.findingForPath(entry.path)}
-            {@const queued = finding ? store.isSelected(finding.id) : false}
-            {@const verdict = store.explorerAi.items[entry.name]}
-            <div
-              class="fx-file"
-              class:fx-file-on={store.explorerSelected?.path === entry.path}
-              role="button"
-              tabindex="0"
-              title={entry.path}
-              onclick={() =>
-                entry.isDir
-                  ? void store.enterExplorerFolder(entry)
-                  : (store.explorerSelected = entry)}
-              onkeydown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  if (entry.isDir) void store.enterExplorerFolder(entry);
-                  else store.explorerSelected = entry;
-                }
+    <div class="fx-files">
+      {#if store.explorerRightLoading}
+        <p class="fx-hint">{t('explorer.loading')}</p>
+      {:else}
+        {#each store.explorerRight as entry (entry.path)}
+          {@const finding = store.findingForPath(entry.path)}
+          {@const isQueued = finding ? store.isSelected(finding.id) : false}
+          {@const verdict = store.explorerAi.items[entry.name]}
+          <div
+            class="fx-file"
+            class:fx-file-on={store.explorerSelected?.path === entry.path}
+            role="button"
+            tabindex="0"
+            title={entry.path}
+            onclick={() =>
+              entry.isDir
+                ? void store.enterExplorerFolder(entry)
+                : (store.explorerSelected = entry)}
+            onkeydown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                if (entry.isDir) void store.enterExplorerFolder(entry);
+                else store.explorerSelected = entry;
+              }
+            }}
+          >
+            <Icon name={entry.isDir ? 'folder' : 'file'} size={14} />
+            <span class="fx-file-name">{entry.name}</span>
+            <span class="fx-file-dir">{entry.isDir ? t('explorer.folderBadge') : ''}</span>
+            {#if verdict}
+              <span
+                class="fx-verdict"
+                class:fx-verdict-safe={verdict.verdict === 'safe'}
+                class:fx-verdict-keep={verdict.verdict === 'keep'}
+                title={verdict.purpose}
+              >
+                {verdict.verdict === 'safe'
+                  ? t('explorer.verdictSafe')
+                  : verdict.verdict === 'keep'
+                    ? t('explorer.verdictKeep')
+                    : t('explorer.verdictCaution')}
+              </span>
+            {/if}
+            <span class="fx-size">{entry.size ? formatSize(entry.size) : '…'}</span>
+            <button
+              type="button"
+              class="fx-act"
+              class:fx-act-on={isQueued}
+              title={isQueued ? t('sub.remove') : t('sub.add')}
+              aria-label={`${isQueued ? t('sub.remove') : t('sub.add')} ${entry.name}`}
+              onclick={(event) => {
+                event.stopPropagation();
+                void store.toggleExplorerCandidate(entry);
               }}
             >
-              <Icon name={entry.isDir ? 'folder' : 'file'} size={13} />
-              <span class="fx-file-name">{entry.name}</span>
-              <span class="fx-file-dir">{entry.isDir ? t('explorer.folderBadge') : ''}</span>
-              <span class="fx-size">{entry.size ? formatSize(entry.size) : '…'}</span>
-              {#if verdict}
-                <span
-                  class="fx-verdict"
-                  class:fx-verdict-safe={verdict.verdict === 'safe'}
-                  class:fx-verdict-keep={verdict.verdict === 'keep'}
-                  title={verdict.purpose}
-                >
-                  {verdict.verdict === 'safe'
-                    ? t('explorer.verdictSafe')
-                    : verdict.verdict === 'keep'
-                      ? t('explorer.verdictKeep')
-                      : t('explorer.verdictCaution')}
-                </span>
-              {/if}
-              <button
-                type="button"
-                class="fx-act"
-                class:fx-act-on={queued}
-                title={queued ? t('sub.remove') : t('sub.add')}
-                aria-label={`${queued ? t('sub.remove') : t('sub.add')} ${entry.name}`}
-                onclick={(event) => {
-                  event.stopPropagation();
-                  void store.toggleExplorerCandidate(entry);
-                }}
-              >
-                <Icon name={queued ? 'undo' : 'trash'} size={11} />
-              </button>
-            </div>
-          {:else}
-            <p class="fx-hint">{t('list.folderEmpty')}</p>
-          {/each}
-        {/if}
-      </div>
+              <Icon name={isQueued ? 'undo' : 'trash'} size={11} />
+            </button>
+          </div>
+        {:else}
+          <p class="fx-hint">{t('list.folderEmpty')}</p>
+        {/each}
+      {/if}
     </div>
   </div>
 </div>
@@ -247,6 +198,7 @@
     border-bottom: 1px solid var(--color-border);
   }
   .fx-back {
+    flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -261,34 +213,51 @@
   .fx-back:hover {
     color: var(--color-fg);
   }
-  .fx-crumbs {
+  /* Breadcrumb: one rounded path bar, segments separated by faint chevrons. */
+  .fx-path {
+    flex: 1;
+    min-width: 0;
     display: flex;
     align-items: center;
-    gap: 2px;
-    min-width: 0;
+    gap: 1px;
+    height: 28px;
+    padding: 0 4px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background: color-mix(in oklch, var(--color-surface-2) 45%, transparent);
     overflow-x: auto;
     scrollbar-width: none;
   }
+  .fx-path::-webkit-scrollbar {
+    display: none;
+  }
+  .fx-sep {
+    flex: none;
+    display: inline-flex;
+    opacity: 0.45;
+    color: var(--color-faint);
+  }
   .fx-crumb {
+    flex: none;
     border: none;
     background: transparent;
-    padding: 3px 7px;
-    border-radius: 6px;
-    font-size: 12.5px;
+    padding: 3px 6px;
+    border-radius: 5px;
+    font-size: 12px;
     color: var(--color-muted);
     white-space: nowrap;
     cursor: pointer;
   }
   .fx-crumb:hover {
-    background: color-mix(in oklch, var(--color-surface-2) 70%, transparent);
+    background: color-mix(in oklch, var(--color-surface-3) 70%, transparent);
     color: var(--color-fg);
   }
   .fx-crumb-on {
     color: var(--color-fg);
-    font-weight: 620;
+    font-weight: 640;
   }
   .fx-selected {
-    margin-left: auto;
+    flex: none;
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -301,164 +270,27 @@
     font-size: 11px;
     color: var(--color-faint);
   }
-  .fx-body {
+  .fx-main {
     flex: 1;
     min-height: 0;
-    display: grid;
-    grid-template-columns: 3fr 7fr;
-  }
-  .fx-left {
-    min-width: 0;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid var(--color-border);
   }
-  .fx-col-head {
-    flex: none;
-    padding: 9px 12px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--color-faint);
-    border-bottom: 1px solid var(--color-border);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .fx-list,
-  .fx-files {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 6px;
-  }
-  .fx-row,
-  .fx-file {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 34px;
-    padding: 0 8px;
-    border-radius: 7px;
-    color: var(--color-fg);
-    cursor: pointer;
-  }
-  .fx-row:hover,
-  .fx-file:hover {
-    background: color-mix(in oklch, var(--color-surface-2) 70%, transparent);
-  }
-  .fx-row-on,
-  .fx-file-on {
-    background: color-mix(in oklch, var(--color-violet) 22%, transparent);
-  }
-  .fx-row :global(svg),
-  .fx-file :global(svg) {
-    flex: none;
-    color: var(--color-faint);
-  }
-  .fx-name,
-  .fx-file-name {
-    font-size: 13.5px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .fx-name {
-    flex: 1;
-    min-width: 0;
-  }
-  .fx-file-name {
-    flex: none;
-    max-width: 55%;
-  }
-  .fx-file-dir {
-    flex: 1;
-    min-width: 0;
-    font-size: 11px;
-    color: var(--color-faint);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .fx-size {
-    flex: none;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    color: var(--color-faint);
-  }
-  .fx-verdict {
-    flex: none;
-    padding: 1px 7px;
-    border-radius: 999px;
-    border: 1px solid color-mix(in oklch, var(--color-warn) 45%, transparent);
-    color: var(--color-warn);
-    font-size: 10px;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-  .fx-verdict-safe {
-    color: var(--color-ok);
-    border-color: color-mix(in oklch, var(--color-ok) 45%, transparent);
-  }
-  .fx-verdict-keep {
-    color: var(--color-faint);
-    border-color: var(--color-border);
-  }
-  .fx-act {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    border: 1px solid var(--color-border);
-    background: transparent;
-    color: var(--color-faint);
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.12s ease;
-  }
-  .fx-row:hover .fx-act,
-  .fx-file:hover .fx-act,
-  .fx-act:focus-visible {
-    opacity: 1;
-  }
-  .fx-act-on {
-    opacity: 1;
-    color: var(--color-violet);
-    border-color: color-mix(in oklch, var(--color-violet) 45%, transparent);
-  }
-  .fx-act:hover {
-    color: var(--color-fg);
-  }
-  .fx-hint {
-    margin: 12px 10px;
-    font-size: 12px;
-    color: var(--color-faint);
-  }
-  .fx-right {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-  .fx-right-head {
+  .fx-main-head {
     flex: none;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 10px 14px;
+    padding: 12px 16px;
     border-bottom: 1px solid var(--color-border);
   }
-  .fx-right-title {
+  .fx-main-title {
     min-width: 0;
   }
   .fx-folder-name {
     margin: 0;
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 650;
     white-space: nowrap;
     overflow: hidden;
@@ -490,18 +322,6 @@
     opacity: 0.55;
     cursor: default;
   }
-  .fx-ai-card {
-    flex: none;
-    margin: 10px 14px 0;
-    padding: 10px 12px;
-    border-radius: 10px;
-    border: 1px solid color-mix(in oklch, var(--color-violet) 30%, var(--color-border));
-    background: color-mix(in oklch, var(--color-violet) 7%, transparent);
-  }
-  .fx-ai-error {
-    border-color: color-mix(in oklch, var(--color-warn) 45%, transparent);
-    background: color-mix(in oklch, var(--color-warn) 8%, transparent);
-  }
   .fx-spin-wrap {
     display: inline-flex;
   }
@@ -513,11 +333,117 @@
       transform: rotate(360deg);
     }
   }
+  .fx-files {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px 8px;
+  }
+  .fx-file {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 36px;
+    padding: 0 9px;
+    border-radius: 8px;
+    color: var(--color-fg);
+    cursor: pointer;
+  }
+  .fx-file:hover {
+    background: color-mix(in oklch, var(--color-surface-2) 70%, transparent);
+  }
+  .fx-file-on {
+    background: color-mix(in oklch, var(--color-violet) 22%, transparent);
+  }
+  .fx-file :global(svg) {
+    flex: none;
+    color: var(--color-faint);
+  }
+  .fx-file-name {
+    flex: none;
+    max-width: 46%;
+    font-size: 13.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .fx-file-dir {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--color-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .fx-verdict {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in oklch, var(--color-warn) 45%, transparent);
+    color: var(--color-warn);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .fx-verdict-safe {
+    color: var(--color-ok);
+    border-color: color-mix(in oklch, var(--color-ok) 45%, transparent);
+  }
+  .fx-verdict-keep {
+    color: var(--color-faint);
+    border-color: var(--color-border);
+  }
+  .fx-size {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--color-faint);
+  }
+  .fx-act {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-faint);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .fx-file:hover .fx-act,
+  .fx-act:focus-visible {
+    opacity: 1;
+  }
+  .fx-act-on {
+    opacity: 1;
+    color: var(--color-violet);
+    border-color: color-mix(in oklch, var(--color-violet) 45%, transparent);
+  }
+  .fx-act:hover {
+    color: var(--color-fg);
+  }
+  .fx-hint {
+    margin: 12px 10px;
+    font-size: 12px;
+    color: var(--color-faint);
+  }
+  .fx-ai-card {
+    flex: none;
+    margin: 10px 14px 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in oklch, var(--color-warn) 45%, transparent);
+    background: color-mix(in oklch, var(--color-warn) 8%, transparent);
+  }
   .fx-ai-text {
     margin: 0;
     font-size: 12px;
     line-height: 1.6;
     white-space: pre-wrap;
-    color: var(--color-fg);
   }
 </style>

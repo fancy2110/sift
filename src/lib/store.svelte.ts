@@ -137,9 +137,6 @@ class AppStore {
   // ---- scan-independent explorer ----
   /** Directory currently opened (breadcrumb + left list). */
   explorerPath = $state('');
-  /** Subdirectories of `explorerPath` shown on the left. */
-  explorerLeft = $state<DirEntry[]>([]);
-  explorerLeftLoading = $state(false);
   /** The folder selected on the left; the right pane shows its children. */
   explorerSelectedDir = $state<DirEntry | null>(null);
   /** Children (directories + files) of the selected folder. */
@@ -753,72 +750,9 @@ class AppStore {
     this.fillExplorerSizes(entries, () => {
       if (this.explorerRightPath === resolved) this.explorerRight = [...this.explorerRight];
     });
-    await this.loadExplorerLeft(resolved);
   }
 
-  /** Left pane: folders of the parent of the directory shown on the right. */
-  private async loadExplorerLeft(rightPath: string) {
-    const parent = rightPath.replace(/\/[^/]+\/?$/, '') || '/';
-    this.explorerLeftLoading = true;
-    this.explorerLeft = [];
-    let entries: DirEntry[] = [];
-    try {
-      entries = (await listDirEntries(parent)).entries.filter((entry) => entry.isDir);
-    } catch {
-      entries = [];
-    }
-    if (this.explorerPath !== rightPath) return;
-    this.explorerLeft = entries;
-    this.explorerLeftLoading = false;
-    this.fillExplorerSizes(entries, () => {
-      if (this.explorerPath === rightPath) this.explorerLeft = [...this.explorerLeft];
-    });
-  }
-
-  /** Right pane: children (directories + files) of `path`. */
-  private async loadExplorerRight(path: string) {
-    this.explorerRightPath = path;
-    this.explorerRightLoading = true;
-    this.explorerRight = [];
-    let entries: DirEntry[] = [];
-    try {
-      entries = (await listDirEntries(path)).entries;
-    } catch {
-      entries = [];
-    }
-    if (this.explorerRightPath !== path) return;
-    this.explorerRight = entries;
-    this.explorerRightLoading = false;
-    this.fillExplorerSizes(entries, () => {
-      if (this.explorerRightPath === path) this.explorerRight = [...this.explorerRight];
-    });
-  }
-
-  /** Lazy child-folder totals for both panes (best-effort, in place). */
-  private async fillExplorerSizes(entries: DirEntry[], apply: () => void) {
-    const dirs = entries.filter((entry) => entry.isDir).map((entry) => entry.path);
-    if (dirs.length === 0) return;
-    try {
-      const sizes = await dirSizes(dirs);
-      const byPath = new Map(sizes.map((size) => [size.path, size.size]));
-      for (const list of [this.explorerLeft, this.explorerRight]) {
-        for (const entry of list) {
-          const size = byPath.get(entry.path);
-          if (size !== undefined) entry.size = size;
-        }
-      }
-      apply();
-    } catch {
-      // Sizes are best-effort.
-    }
-  }
-
-  /** Left click: open that sibling, keeping the parent list in place. */
-  async selectExplorerDir(entry: DirEntry) {
-    await this.openExplorer(entry.path);
-  }
-
-  /** Folder row on the right (single or double click): make it current. */
+  /** Folder row: make it the current directory. */
   async enterExplorerFolder(entry: DirEntry) {
     if (!entry.isDir) {
       this.explorerSelected = entry;
@@ -837,7 +771,7 @@ class AppStore {
     void this.openExplorer(parent);
   }
 
-  /** Explain the directory currently shown on the right. */
+  /** Explain the directory currently shown. */
   async askExplorerAi() {
     const path = this.explorerPath;
     if (!path) return;
@@ -850,6 +784,23 @@ class AppStore {
       this.explorerAi = { loading: false, error: '', items };
     } catch (error) {
       this.explorerAi = { loading: false, error: tr(String(error)), items: {} };
+    }
+  }
+
+  /** Lazy child-folder totals for both panes (best-effort, in place). */
+  private async fillExplorerSizes(entries: DirEntry[], apply: () => void) {
+    const dirs = entries.filter((entry) => entry.isDir).map((entry) => entry.path);
+    if (dirs.length === 0) return;
+    try {
+      const sizes = await dirSizes(dirs);
+      const byPath = new Map(sizes.map((size) => [size.path, size.size]));
+      for (const entry of this.explorerRight) {
+        const size = byPath.get(entry.path);
+        if (size !== undefined) entry.size = size;
+      }
+      apply();
+    } catch {
+      // Sizes are best-effort.
     }
   }
 
