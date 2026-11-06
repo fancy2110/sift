@@ -435,11 +435,8 @@
         </button>
       </div>
 
-      </div>
-
-      <p class="set-section-label" style="margin-top: 22px">{t('settings.aiPromptSection')}</p>
-
       <div class="set-card ai-prompt-card">
+        <p class="set-card-title">{t('settings.aiPromptTitle')}</p>
         <p class="ai-consent">{t('settings.aiPromptDesc')}</p>
         <textarea
           class="ai-input ai-prompt"
@@ -453,6 +450,7 @@
             {t('settings.aiPromptSave')}
           </button>
         </div>
+      </div>
       </div>
 
       <p class="set-section-label" style="margin-top: 22px">{t('settings.automation')}</p>
