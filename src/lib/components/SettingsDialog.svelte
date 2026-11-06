@@ -433,7 +433,13 @@
           </div>
         {/if}
 
-        <p class="ai-label">{t('settings.aiPromptTitle')}</p>
+        <p class="ai-consent">{t('settings.aiConsent')}</p>
+        </div>
+      </div>
+
+      <p class="set-section-label" style="margin-top: 22px">{t('settings.aiPromptSection')}</p>
+
+      <div class="set-card ai-prompt-card">
         <p class="ai-consent">{t('settings.aiPromptDesc')}</p>
         <textarea
           class="ai-input ai-prompt"
@@ -446,9 +452,6 @@
           <button type="button" class="btn btn-sm" disabled={saving} onclick={savePrompt}>
             {t('settings.aiPromptSave')}
           </button>
-        </div>
-
-        <p class="ai-consent">{t('settings.aiConsent')}</p>
         </div>
       </div>
 
@@ -913,6 +916,11 @@
     border-radius: 12px;
     border: 1px solid var(--color-border);
     background: color-mix(in oklch, var(--color-surface-2) 60%, transparent);
+  }
+  .ai-prompt-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
   }
   .ai-prompt {
     height: auto;

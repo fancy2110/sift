@@ -506,4 +506,5 @@ export const hi: Record<string, string> = {
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
   'settings.aiPresetCustom': 'कस्टम',
+  'settings.aiPromptSection': 'विश्लेषण प्रॉम्प्ट',
 };
