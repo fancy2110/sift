@@ -422,6 +422,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn system_locations_are_refused() {
         for path in [
