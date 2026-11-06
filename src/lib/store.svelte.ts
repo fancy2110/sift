@@ -755,6 +755,11 @@ class AppStore {
     });
   }
 
+  /** Re-read the current directory (used when the Explorer tab activates). */
+  async refreshExplorer() {
+    if (this.explorerPath) await this.openExplorer(this.explorerPath);
+  }
+
   /** Folder row: make it the current directory. */
   async enterExplorerFolder(entry: DirEntry) {
     if (!entry.isDir) {

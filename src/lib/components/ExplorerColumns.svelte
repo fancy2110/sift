@@ -17,6 +17,17 @@
     if (!store.explorerPath) void store.openExplorer();
   });
 
+  // Re-read the directory whenever the tab becomes active, so sizes and the
+  // largest-first order are fresh each time.
+  let wasActive = false;
+  $effect(() => {
+    const active = store.subTab === 'explorer';
+    if (active && !wasActive && store.explorerPath) {
+      void store.refreshExplorer();
+    }
+    wasActive = active;
+  });
+
   // Keep the current (last) segment visible when the path is long.
   $effect(() => {
     const path = store.explorerPath;
