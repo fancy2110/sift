@@ -198,7 +198,9 @@ jobs:
           cat "$OUT"
 
       - name: Upload checksums to release
-        if: hashFiles(format('{0}/SHA256SUMS-{1}.txt', runner.temp, matrix.platform)) != ''
+        # The checksum file lives in $RUNNER_TEMP, outside the workspace, so
+        # hashFiles() cannot see it; the step only runs when generation
+        # succeeded, and a failure there already failed the job.
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
