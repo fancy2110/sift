@@ -127,9 +127,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS signing/notarization — tauri-action skips when unset.
+          #
+          # Deliberately no APPLE_SIGNING_IDENTITY: when APPLE_CERTIFICATE is
+          # present Tauri imports the p12, signs with that certificate's own
+          # common name, and only substring-checks APPLE_SIGNING_IDENTITY.
+          # A stale value (e.g. a whole `security find-identity` line) would
+          # fail the build with "does not match provided identity" or
+          # "no identity found". The p12 must contain one Developer ID
+          # Application certificate, which is what we export.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
