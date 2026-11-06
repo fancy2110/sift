@@ -518,4 +518,5 @@ export const ja: Record<string, string> = {
   'settings.aiPromptSection': '分析プロンプト',
   'sub.statusScanning': 'スキャン中 {0}%',
   'sub.statusAnalysed': '{0} 件を分析済み',
+  'explorer.refresh': 'このフォルダを再スキャン',
 };

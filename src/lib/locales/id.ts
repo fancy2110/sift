@@ -526,4 +526,5 @@ export const id: Record<string, string> = {
   'settings.aiPromptSection': 'Prompt analisis',
   'sub.statusScanning': 'Memindai {0}%',
   'sub.statusAnalysed': '{0} item dianalisis',
+  'explorer.refresh': 'Pindai ulang folder ini',
 };

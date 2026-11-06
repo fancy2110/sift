@@ -504,4 +504,5 @@ export const zhTW: Record<string, string> = {
   'settings.aiPromptSection': '分析提示詞',
   'sub.statusScanning': '掃描中 {0}%',
   'sub.statusAnalysed': '已分析 {0} 項',
+  'explorer.refresh': '重新掃描目前目錄',
 };

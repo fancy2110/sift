@@ -116,6 +116,15 @@
       </div>
       <button
         type="button"
+        class="fx-refresh"
+        title={t('explorer.refresh')}
+        aria-label={t('explorer.refresh')}
+        onclick={() => void store.refreshExplorer(true)}
+      >
+        <Icon name="refresh" size={12} />
+      </button>
+      <button
+        type="button"
         class="fx-ai"
         disabled={store.explorerAi.loading}
         onclick={() => void store.askExplorerAi()}
@@ -322,6 +331,22 @@
     margin: 1px 0 0;
     font-size: 11px;
     color: var(--color-faint);
+  }
+  .fx-refresh {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 26px;
+    border-radius: 7px;
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-faint);
+    cursor: pointer;
+  }
+  .fx-refresh:hover {
+    color: var(--color-fg);
   }
   .fx-ai {
     flex: none;
