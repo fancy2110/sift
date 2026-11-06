@@ -987,8 +987,20 @@ mod tests {
         NodeKey::from_bytes(path.as_bytes())
     }
 
+    /// Platform root used by the fixtures: `/` or `C:\`.
+    fn system_root() -> &'static str {
+        #[cfg(windows)]
+        {
+            "C:\\"
+        }
+        #[cfg(not(windows))]
+        {
+            "/"
+        }
+    }
+
     fn tree() -> ScanTree {
-        ScanTree::new(key("/"), Path::new("/"), TreeConfig::default())
+        ScanTree::new(key(system_root()), Path::new(system_root()), TreeConfig::default())
     }
 
     #[test]
@@ -1263,8 +1275,14 @@ mod tests {
         let c = tree
             .open_dir(b, key("/Users/me/Documents"), b"Documents", 0, true, false)
             .unwrap();
-        assert_eq!(tree.path(c), "/Users/me/Documents");
-        assert_eq!(tree.path(root), "/");
+        let expected = Path::new(system_root())
+            .join("Users")
+            .join("me")
+            .join("Documents")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(tree.path(c), expected);
+        assert_eq!(tree.path(root), system_root());
         assert_eq!(tree.breadcrumbs(c), vec![root, a, b, c]);
         assert_eq!(tree.name(c), b"Documents");
     }
@@ -1349,7 +1367,10 @@ mod tests {
         tree.close_dir(a);
         let view = tree.view(a).unwrap();
         assert_eq!(view.name, "a");
-        assert_eq!(view.path, "/a");
+        assert_eq!(
+            view.path,
+            Path::new(system_root()).join("a").to_string_lossy()
+        );
         assert_eq!(view.mtime_ms, 1234);
         assert!(!view.deletable);
         assert!(view.is_symlink);
