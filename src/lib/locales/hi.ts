@@ -507,4 +507,6 @@ export const hi: Record<string, string> = {
   'settings.aiPresetSiliconflow': 'SiliconFlow',
   'settings.aiPresetCustom': 'कस्टम',
   'settings.aiPromptSection': 'विश्लेषण प्रॉम्प्ट',
+  'sub.statusScanning': 'स्कैन हो रहा है {0}%',
+  'sub.statusAnalysed': '{0} आइटम विश्लेषित',
 };

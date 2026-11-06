@@ -512,6 +512,11 @@
   <footer class="sp-status">
     <span class="sp-status-l">
       {t('sub.statusOrder')}<span class="status-dot"></span>{t('sub.statusConfidence')}
+      {#if store.scanning}
+        <span class="status-progress">· {t('sub.statusScanning', [String(store.progress.percent)])}</span>
+      {:else}
+        <span class="status-progress">· {t('sub.statusAnalysed', [String(store.findings.length)])}</span>
+      {/if}
     </span>
     {#if store.subTab === 'smart'}
       <span class="sp-status-r">
@@ -691,6 +696,12 @@
     font-size: 10.5px;
     font-weight: 600;
     cursor: pointer;
+  }
+  .status-progress {
+    margin-left: 2px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--color-muted);
   }
   .sp-status {
     display: flex;

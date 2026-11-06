@@ -533,6 +533,8 @@ const zh: Record<string, string> = {
   'settings.aiPresetSiliconflow': '硅基流动',
   'settings.aiPresetCustom': '自定义',
   'settings.aiPromptSection': '分析提示词',
+  'sub.statusScanning': '扫描中 {0}%',
+  'sub.statusAnalysed': '已分析 {0} 项',
 };
 
 const en: Record<string, string> = {
@@ -1027,6 +1029,8 @@ const en: Record<string, string> = {
   'settings.aiPresetSiliconflow': 'SiliconFlow',
   'settings.aiPresetCustom': 'Custom',
   'settings.aiPromptSection': 'Analysis prompt',
+  'sub.statusScanning': 'Scanning {0}%',
+  'sub.statusAnalysed': '{0} items analysed',
 };
 
 type ParamValue = string | number;
