@@ -360,6 +360,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
     ai: {
       enabled: false,
       language: 'zh' as 'zh' | 'en',
+      analysisPrompt: '',
       activeProfile: '',
       profiles: [] as Array<{
         id: string;
@@ -995,6 +996,10 @@ export function createMockBackend(bus: EventBus): MockBackend {
           resolve(mockAiConfig() as unknown as T);
           break;
         }
+        case 'set_ai_prompt':
+          state.ai.analysisPrompt = String(args.prompt ?? '');
+          resolve(mockAiConfig() as unknown as T);
+          break;
         case 'set_ai_language': {
           state.ai.language = String(args.language) === 'en' ? 'en' : 'zh';
           resolve(mockAiConfig() as unknown as T);
@@ -1015,6 +1020,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
       profiles: state.ai.profiles,
       language: state.ai.language,
       batchSize: 40,
+      analysisPrompt: state.ai.analysisPrompt ?? '',
       hasToken: active?.hasToken ?? false
     };
   }

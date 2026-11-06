@@ -507,4 +507,11 @@ export const ja: Record<string, string> = {
   'explorer.verdictSafe': '削除可',
   'explorer.verdictCaution': '注意',
   'explorer.verdictKeep': '保持',
+  'settings.aiPromptTitle': 'AI 分析プロンプト / スキル',
+  'settings.aiPromptDesc': 'ディレクトリ解説と例行タスク生成のシステムプロンプトに追加されます。リポジトリの種類や残すべきディレクトリを指定できます。',
+  'settings.aiPromptPh': '例：Node.js リポジトリ。node_modules と dist は削除可、.env と uploads は保持。',
+  'settings.aiPromptSave': 'プロンプトを保存',
+  'settings.aiPresetOllama': 'Ollama（ローカル）',
+  'settings.aiPresetOpenrouter': 'OpenRouter',
+  'settings.aiPresetSiliconflow': 'SiliconFlow',
 };

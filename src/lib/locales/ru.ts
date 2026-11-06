@@ -511,4 +511,11 @@ export const ru: Record<string, string> = {
   'explorer.verdictSafe': 'Можно удалить',
   'explorer.verdictCaution': 'Осторожно',
   'explorer.verdictKeep': 'Оставить',
+  'settings.aiPromptTitle': 'Промпт анализа / навык',
+  'settings.aiPromptDesc': 'Добавляется к системному промпту анализа каталогов и черновиков рутин; опишите репозиторий и что нельзя удалять.',
+  'settings.aiPromptPh': 'напр.: это Node.js-репозиторий: node_modules и dist можно удалять, .env и uploads — нет.',
+  'settings.aiPromptSave': 'Сохранить промпт',
+  'settings.aiPresetOllama': 'Ollama (локально)',
+  'settings.aiPresetOpenrouter': 'OpenRouter',
+  'settings.aiPresetSiliconflow': 'SiliconFlow',
 };

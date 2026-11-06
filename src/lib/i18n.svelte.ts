@@ -524,6 +524,13 @@ const zh: Record<string, string> = {
   'explorer.verdictSafe': '可删',
   'explorer.verdictCaution': '谨慎',
   'explorer.verdictKeep': '保留',
+  'settings.aiPromptTitle': 'AI 分析提示词 / Skill',
+  'settings.aiPromptDesc': '附加在 AI 解读目录与生成例行任务的系统提示之后；可说明仓库类型、哪些目录可删或必须保留。',
+  'settings.aiPromptPh': '例如：这是 Node.js 项目，node_modules 与 dist 可删；保留 .env 与 uploads。',
+  'settings.aiPromptSave': '保存提示词',
+  'settings.aiPresetOllama': 'Ollama（本地）',
+  'settings.aiPresetOpenrouter': 'OpenRouter',
+  'settings.aiPresetSiliconflow': '硅基流动',
 };
 
 const en: Record<string, string> = {
@@ -1009,6 +1016,13 @@ const en: Record<string, string> = {
   'explorer.verdictSafe': 'Deletable',
   'explorer.verdictCaution': 'Careful',
   'explorer.verdictKeep': 'Keep',
+  'settings.aiPromptTitle': 'AI analysis prompt / skill',
+  'settings.aiPromptDesc': 'Appended to the system prompt for directory analysis and routine drafts; describe the repository and what must be kept.',
+  'settings.aiPromptPh': 'e.g. This is a Node.js repo: node_modules and dist are safe; keep .env and uploads.',
+  'settings.aiPromptSave': 'Save prompt',
+  'settings.aiPresetOllama': 'Ollama (local)',
+  'settings.aiPresetOpenrouter': 'OpenRouter',
+  'settings.aiPresetSiliconflow': 'SiliconFlow',
 };
 
 type ParamValue = string | number;

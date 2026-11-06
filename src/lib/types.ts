@@ -71,6 +71,8 @@ export interface AiConfig {
   profiles: AiProfile[];
   language: string;
   batchSize: number;
+  /** Extra instructions used when analysing directories. */
+  analysisPrompt: string;
   /** Whether the active profile has a token. */
   hasToken: boolean;
 }

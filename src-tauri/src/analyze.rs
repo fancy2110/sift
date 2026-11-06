@@ -1135,6 +1135,8 @@ pub struct AiConfigDto {
     pub profiles: Vec<AiProfileDto>,
     pub language: String,
     pub batch_size: usize,
+    /// Extra instructions used when analysing directories.
+    pub analysis_prompt: String,
     /// Whether the active profile has a key (environment or stored).
     pub has_token: bool,
 }
@@ -1216,6 +1218,7 @@ fn ai_config_dto(ai: &sift_store::AiSettings) -> AiConfigDto {
         profiles,
         language: ai.language.clone(),
         batch_size: ai.batch_size,
+        analysis_prompt: ai.analysis_prompt.clone(),
         has_token,
     }
 }
@@ -1384,6 +1387,23 @@ pub fn set_ai_enabled(
         if enabled {
             ai.consent_granted = true;
         }
+    });
+    let _ = services.store.flush_if_dirty();
+    Ok(ai_config_dto(&services.store.settings().ai))
+}
+
+/// Persist the custom analysis instructions ("skill").
+#[tauri::command]
+pub fn set_ai_prompt(
+    services: State<'_, AppServices>,
+    prompt: String,
+) -> Result<AiConfigDto, String> {
+    let prompt = prompt.trim().to_string();
+    if prompt.chars().count() > 4000 {
+        return Err("err.aiPromptTooLong".to_string());
+    }
+    services.store.update_settings(|settings| {
+        settings.ai.analysis_prompt = prompt.clone();
     });
     let _ = services.store.flush_if_dirty();
     Ok(ai_config_dto(&services.store.settings().ai))

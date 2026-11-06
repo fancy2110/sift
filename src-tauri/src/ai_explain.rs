@@ -136,8 +136,16 @@ fn explain(
             sample.join("\n"),
             language_name(language)
         );
+        let skill = ai.analysis_prompt.trim();
+        let system = if skill.is_empty() {
+            SYSTEM.to_string()
+        } else {
+            format!(
+                "{SYSTEM}\n\nUser-provided analysis instructions (follow them unless they contradict the rules above):\n{skill}"
+            )
+        };
         let reply = client
-            .complete(SYSTEM, &user)
+            .complete(&system, &user)
             .map_err(|error| map_error(&error.to_string(), &endpoint))?;
         parse_verdicts(&reply)
     }
