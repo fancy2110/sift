@@ -173,6 +173,18 @@ pub fn mount_point(volume: &Volume) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// The platform's system mount point: `/` or `C:\`.
+    fn system_mount() -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            PathBuf::from("C:\\")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("/")
+        }
+    }
+
     #[test]
     fn finds_at_least_one_volume_on_a_real_machine() {
         let volumes = list_volumes();
@@ -221,14 +233,20 @@ mod tests {
 
     #[test]
     fn same_volume_compares_devices() {
-        let root = Path::new("/");
-        assert!(is_same_volume(root, Path::new("/Users")));
-        assert!(device_id(root).is_some());
+        let root = system_mount();
+        assert!(is_same_volume(&root, &root.join("Users")));
+        #[cfg(unix)]
+        assert!(device_id(&root).is_some());
+        // Windows reports an unknown device id on stable; is_same_volume
+        // deliberately treats that as the same volume.
+        #[cfg(windows)]
+        assert!(device_id(&root).is_none());
     }
 
     #[test]
     fn free_space_reads_a_real_mount_point() {
-        let (total, available) = free_space(Path::new("/")).expect("the root is mounted");
+        let root = system_mount();
+        let (total, available) = free_space(&root).expect("the system volume is mounted");
         assert!(total > 0);
         assert!(available <= total);
     }
@@ -236,9 +254,10 @@ mod tests {
     #[test]
     fn free_space_resolves_any_absolute_path_to_some_volume() {
         // Longest-prefix resolution means every absolute path belongs to a
-        // volume (at minimum `/`), which is what a monitor watching a directory
-        // needs.
-        assert!(free_space(Path::new("/nonexistent/sift-mount")).is_some());
+        // volume (at minimum the system mount), which is what a monitor
+        // watching a directory needs.
+        let missing = system_mount().join("nonexistent").join("sift-mount");
+        assert!(free_space(&missing).is_some());
     }
 
     #[test]
