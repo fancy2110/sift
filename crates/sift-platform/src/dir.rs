@@ -373,14 +373,22 @@ impl RawEntry {
     /// whether the directory is writable for us. Computed from the entry's own
     /// permission bits as returned inside the parent's bulk result, which lets
     /// the walker avoid an `fstat` per directory.
-    #[cfg(unix)]
     pub fn writable_by_us(&self) -> bool {
-        if self.mode == 0 {
-            return false;
+        #[cfg(unix)]
+        {
+            if self.mode == 0 {
+                return false;
+            }
+            // Group membership must cover every supplementary group, not just
+            // the effective gid; the shared probe owns that decision.
+            sift_core::deletable::unix_mode_is_writable_for(self.mode, self.uid, self.gid)
         }
-        // Group membership must cover every supplementary group, not just the
-        // effective gid; the shared probe owns that decision.
-        sift_core::deletable::unix_mode_is_writable_for(self.mode, self.uid, self.gid)
+        #[cfg(not(unix))]
+        {
+            // The portable reader does not model ACLs; let the deletion layer
+            // report a real per-item failure instead of hiding the entry.
+            true
+        }
     }
 }
 
@@ -783,7 +791,6 @@ impl DirReader {
     /// result to inherit mode bits from. Everything below the root gets its
     /// writability from its parent's entries, so a full scan performs this
     /// exactly once.
-    #[cfg(unix)]
     pub fn probe_writable(dir: &Path) -> bool {
         writable_of_path(dir)
     }
