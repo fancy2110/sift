@@ -14,7 +14,9 @@ sysinfo = { workspace = true }
 trash = { workspace = true }
 notify = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
+# dir.rs uses geteuid/getgroups/fstat/close on every Unix target, not just
+# macOS; gating this on macos made the Linux build fail with E0433.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
