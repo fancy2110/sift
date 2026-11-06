@@ -26,10 +26,19 @@
   const currentName = $derived(
     store.explorerPath.split('/').filter(Boolean).pop() ?? '/'
   );
+  const volume = $derived(
+    [...store.volumes]
+      .filter((item) => store.explorerPath.startsWith(item.mountPoint))
+      .sort((a, b) => b.mountPoint.length - a.mountPoint.length)[0] ?? null
+  );
   const crumbs = $derived.by(() => {
-    const parts = store.explorerPath.split('/').filter(Boolean);
+    const mount = volume ? volume.mountPoint.replace(/\/$/, '') : '';
+    const parts = (mount ? store.explorerPath.slice(mount.length) : store.explorerPath)
+      .split('/')
+      .filter(Boolean);
     const out: { label: string; path: string }[] = [];
-    let acc = '';
+    if (volume) out.push({ label: volume.name, path: volume.mountPoint });
+    let acc = mount;
     for (const part of parts) {
       acc += `/${part}`;
       out.push({ label: part, path: acc });
@@ -65,13 +74,12 @@
     </button>
     <div class="fx-path" bind:this={pathBar}>
       {#each crumbs as crumb, i (crumb.path)}
-        {#if i > 0}
-          <span class="fx-sep"><Icon name="chevronRight" size={9} /></span>
-        {/if}
         <button
           type="button"
-          class="fx-crumb"
-          class:fx-crumb-on={i === crumbs.length - 1}
+          class="fx-seg"
+          class:fx-seg-first={i === 0}
+          class:fx-seg-on={i === crumbs.length - 1}
+          title={crumb.path}
           onclick={() => void store.explorerAt(crumb.path)}
         >
           {crumb.label}
@@ -213,46 +221,64 @@
   .fx-back:hover {
     color: var(--color-fg);
   }
-  /* Breadcrumb: one rounded path bar, segments separated by faint chevrons. */
+  /* Finder-style path bar: interlocking chevron segments. */
   .fx-path {
     flex: 1;
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 1px;
-    height: 28px;
-    padding: 0 4px;
+    gap: 2px;
+    height: 30px;
+    padding: 2px;
     border-radius: 8px;
-    border: 1px solid var(--color-border);
-    background: color-mix(in oklch, var(--color-surface-2) 45%, transparent);
+    background: color-mix(in oklch, var(--color-bg) 55%, transparent);
     overflow-x: auto;
     scrollbar-width: none;
   }
   .fx-path::-webkit-scrollbar {
     display: none;
   }
-  .fx-sep {
+  .fx-seg {
     flex: none;
-    display: inline-flex;
-    opacity: 0.45;
-    color: var(--color-faint);
-  }
-  .fx-crumb {
-    flex: none;
+    height: 26px;
+    max-width: 200px;
+    padding: 0 15px 0 19px;
     border: none;
-    background: transparent;
-    padding: 3px 6px;
-    border-radius: 5px;
-    font-size: 12px;
+    background: var(--color-surface-2);
     color: var(--color-muted);
+    font-size: 12px;
+    font-weight: 520;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     cursor: pointer;
+    clip-path: polygon(
+      0 0,
+      calc(100% - 9px) 0,
+      100% 50%,
+      calc(100% - 9px) 100%,
+      0 100%,
+      9px 50%
+    );
   }
-  .fx-crumb:hover {
-    background: color-mix(in oklch, var(--color-surface-3) 70%, transparent);
+  .fx-seg-first {
+    padding-left: 12px;
+    border-top-left-radius: 6px;
+    border-bottom-left-radius: 6px;
+    clip-path: polygon(
+      0 0,
+      calc(100% - 9px) 0,
+      100% 50%,
+      calc(100% - 9px) 100%,
+      0 100%
+    );
+  }
+  .fx-seg:hover {
+    background: var(--color-surface-3);
     color: var(--color-fg);
   }
-  .fx-crumb-on {
+  .fx-seg-on {
+    background: color-mix(in oklch, var(--color-violet) 32%, var(--color-surface-2));
     color: var(--color-fg);
     font-weight: 640;
   }
