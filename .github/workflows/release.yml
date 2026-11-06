@@ -82,7 +82,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 12
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -121,6 +121,24 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
+      - name: Configure Windows signing
+        if: matrix.platform == 'windows'
+        shell: bash
+        env:
+          WIN_CERT: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WIN_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          # Only export the signtool inputs when a certificate is configured;
+          # an empty TAURI_SIGNTOOL_* variable makes Tauri attempt a signature
+          # and fail the build instead of producing an unsigned installer.
+          if [ -n "$WIN_CERT" ]; then
+            echo "TAURI_SIGNTOOL_SIGN_X509_DER=$WIN_CERT" >> "$GITHUB_ENV"
+            echo "TAURI_SIGNTOOL_SIGN_PASSWORD=$WIN_PASSWORD" >> "$GITHUB_ENV"
+            echo "Windows code signing enabled."
+          else
+            echo "No Windows certificate configured; building an unsigned installer."
+          fi
+
       - name: Build and attach release bundle
         uses: tauri-apps/tauri-action@v0
         id: tauri
@@ -140,9 +158,6 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows signtool inputs (only present for the windows job).
-          TAURI_SIGNTOOL_SIGN_X509_DER: ${{ secrets.WINDOWS_CERTIFICATE }}
-          TAURI_SIGNTOOL_SIGN_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         with:
           tagName: ${{ steps.meta.outputs.tag }}
           releaseName: 'Sift ${{ steps.meta.outputs.tag }}'
