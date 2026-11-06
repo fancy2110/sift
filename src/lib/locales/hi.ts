@@ -505,4 +505,5 @@ export const hi: Record<string, string> = {
   'settings.aiPresetOllama': 'Ollama (स्थानीय)',
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
+  'settings.aiPresetCustom': 'कस्टम',
 };

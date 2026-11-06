@@ -531,6 +531,7 @@ const zh: Record<string, string> = {
   'settings.aiPresetOllama': 'Ollama（本地）',
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': '硅基流动',
+  'settings.aiPresetCustom': '自定义',
 };
 
 const en: Record<string, string> = {
@@ -1023,6 +1024,7 @@ const en: Record<string, string> = {
   'settings.aiPresetOllama': 'Ollama (local)',
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
+  'settings.aiPresetCustom': 'Custom',
 };
 
 type ParamValue = string | number;

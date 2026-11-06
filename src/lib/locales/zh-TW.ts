@@ -500,4 +500,5 @@ export const zhTW: Record<string, string> = {
   'settings.aiPresetOllama': 'Ollama（本機）',
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': '硅基流動',
+  'settings.aiPresetCustom': '自訂',
 };

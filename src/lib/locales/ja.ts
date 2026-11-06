@@ -514,4 +514,5 @@ export const ja: Record<string, string> = {
   'settings.aiPresetOllama': 'Ollama（ローカル）',
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
+  'settings.aiPresetCustom': 'カスタム',
 };
