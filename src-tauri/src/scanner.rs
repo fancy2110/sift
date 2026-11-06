@@ -831,11 +831,15 @@ mod tests {
 
     #[test]
     fn joining_paths_handles_both_separator_cases() {
-        assert_eq!(join_path("/Users/me", "Downloads"), "/Users/me/Downloads");
-        assert_eq!(join_path("/", "Users"), "/Users");
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(
+            join_path("/Users/me", "Downloads"),
+            format!("/Users/me{sep}Downloads")
+        );
+        assert_eq!(join_path(&sep.to_string(), "Users"), format!("{sep}Users"));
         // A root that already ends in a separator must not double it.
-        let with_sep = format!("/tmp{}", std::path::MAIN_SEPARATOR);
-        assert_eq!(join_path(&with_sep, "x"), "/tmp/x");
+        let with_sep = format!("/tmp{sep}");
+        assert_eq!(join_path(&with_sep, "x"), format!("/tmp{sep}x"));
     }
 
     #[test]

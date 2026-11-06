@@ -340,10 +340,14 @@ mod tests {
         let home = temp_home("parse");
         let inside = home.join("Library");
         std::fs::create_dir_all(&inside).unwrap();
-        let reply = format!(
-            "{{\"title\":\"清理构建缓存\",\"cadence\":\"monthly\",\"paths\":[\"{}\"],\"reason\":\"r\"}}",
-            inside.display()
-        );
+        // Use serde_json so Windows path separators are escaped correctly.
+        let reply = serde_json::json!({
+            "title": "清理构建缓存",
+            "cadence": "monthly",
+            "paths": [inside.to_string_lossy()],
+            "reason": "r",
+        })
+        .to_string();
         let draft = parse_draft_in(&reply, "prompt", Some(&home)).unwrap();
         assert_eq!(draft.cadence, "routine.cadence.monthly");
         assert_eq!(draft.title, "清理构建缓存");

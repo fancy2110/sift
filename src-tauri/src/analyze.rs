@@ -2204,16 +2204,13 @@ mod tests {
     }
 
     fn meta_mtime_ms(meta: &std::fs::Metadata) -> i64 {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            meta.mtime() * 1000 + meta.mtime_nsec() / 1_000_000
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = meta;
-            0
-        }
+        // `modified()` matches sift_monitor::policy::modified_ms on every
+        // platform, including Windows FILETIME.
+        meta.modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|elapsed| elapsed.as_millis() as i64)
+            .unwrap_or(0)
     }
 
     fn routine_entry(kind: &str, safety: Safety, approved: bool) -> sift_store::CleanableEntry {
