@@ -172,6 +172,13 @@ jobs:
           set -euo pipefail
           OUT="$RUNNER_TEMP/SHA256SUMS-${{ matrix.platform }}.txt"
           : > "$OUT"
+          # macOS ships shasum; Git Bash on Windows and Linux runner provide
+          # sha256sum. Both print "<hash>  <file>".
+          if command -v sha256sum >/dev/null 2>&1; then
+            HASH_CMD=(sha256sum)
+          else
+            HASH_CMD=(shasum -a 256)
+          fi
           # Tauri 3 builds the workspace at ./target, while older layouts (and
           # src-tauri-only checkouts) use src-tauri/target. Scan both; a
           # missing directory must not fail the step.
@@ -179,7 +186,7 @@ jobs:
           for bundle in target/release/bundle src-tauri/target/release/bundle; do
             [ -d "$bundle" ] || continue
             while IFS= read -r -d '' f; do
-              (cd "$(dirname "$f")" && shasum -a 256 "$(basename "$f")") >> "$OUT"
+              (cd "$(dirname "$f")" && "${HASH_CMD[@]}" "$(basename "$f")") >> "$OUT"
               found=$((found + 1))
             done < <(find "$bundle" -type f \
               \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*setup.exe' \
