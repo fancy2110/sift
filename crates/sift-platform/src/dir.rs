@@ -1575,9 +1575,14 @@ mod tests {
         // Directories report a size; files report their exact bytes.
         let a = &fast_map[&b"a.txt".to_vec()];
         assert_eq!(a.logical_size, 1234);
+        // The portable Windows reader does not report allocation size.
+        #[cfg(unix)]
         assert!(a.physical_size > 0, "allocated bytes should be reported");
         let sub = &fast_map[&b"sub".to_vec()];
         assert!(sub.is_dir);
+        // APFS reports 0 for a directory's st_size; ext4 and others report a
+        // block-sized value, so the assertion is only meaningful on macOS.
+        #[cfg(target_os = "macos")]
         assert_eq!(sub.logical_size, 0, "directory st_size is 0 on APFS");
 
         let _ = fs::remove_dir_all(&base);

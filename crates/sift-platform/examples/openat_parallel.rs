@@ -1,4 +1,10 @@
-#![cfg(unix)]
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("the openat examples are Unix-only");
+}
+
+#[cfg(unix)]
+mod imp {
 // POC: parallel openat walk with correct termination and adaptive fan-out.
 //
 // Termination: every open directory fd carries one token (`inflight`).
@@ -161,7 +167,7 @@ fn worker_loop(
     }
 }
 
-fn main() {
+pub(super) fn main() {
     let root: PathBuf = std::env::args()
         .nth(1)
         .map(PathBuf::from)
@@ -219,4 +225,11 @@ fn main() {
         jobs.max_open_dirs.load(Ordering::Relaxed),
         jobs.max_fanout.load(Ordering::Relaxed)
     );
+}
+
+}
+
+#[cfg(unix)]
+fn main() {
+    imp::main();
 }
