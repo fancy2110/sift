@@ -95,12 +95,11 @@ pub fn device_id(path: &Path) -> Option<u64> {
 }
 
 #[cfg(windows)]
-pub fn device_id(path: &Path) -> Option<u64> {
-    use std::fs;
-    use std::os::windows::fs::MetadataExt;
-    fs::metadata(path)
-        .ok()
-        .map(|meta| meta.volume_serial_number().unwrap_or(0) as u64)
+pub fn device_id(_path: &Path) -> Option<u64> {
+    // volume_serial_number() is nightly-only (windows_by_handle). "Unknown"
+    // is the safe answer: is_same_volume() treats an unknown id as the same
+    // volume, so a scan never crosses a boundary by mistake.
+    None
 }
 
 #[cfg(not(any(unix, windows)))]

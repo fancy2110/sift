@@ -1,3 +1,4 @@
+#![cfg(unix)]
 // POC: parallel openat walk with correct termination and adaptive fan-out.
 //
 // Termination: every open directory fd carries one token (`inflight`).

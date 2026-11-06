@@ -485,7 +485,7 @@ impl ChildFdMap {
                 close_queued_fd(fd);
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(unix, not(target_os = "macos")))]
         {
             if let Some(map) = self.built.as_mut() {
                 for (_, fd) in map.drain() {
@@ -496,6 +496,15 @@ impl ChildFdMap {
             for (_, fd) in self.pairs.drain(..) {
                 close_raw_fd(fd);
             }
+        }
+        #[cfg(not(unix))]
+        {
+            // No descriptor support on this platform; the maps are always empty,
+            // but clear them so a future from_pairs caller cannot leak values.
+            if let Some(map) = self.built.as_mut() {
+                map.clear();
+            }
+            self.pairs.clear();
         }
     }
 
@@ -785,6 +794,7 @@ impl DirReader {
     /// avoid re-resolving deep paths. The descriptor is not consumed: the caller
     /// closes it. Returns the portable metadata kind so callers cannot tell how
     /// the read was produced beyond [`DirReader::kind`].
+    #[cfg(unix)]
     pub fn read_fd(fd: std::os::unix::io::RawFd, want_physical: bool) -> io::Result<Self> {
         #[cfg(target_os = "macos")]
         {
@@ -816,6 +826,7 @@ impl DirReader {
     /// Returns the entries directly so a worker holding a parent descriptor
     /// can enumerate it without any path lookup, then open the children with
     /// `openat` relative to this same descriptor.
+    #[cfg(unix)]
     pub fn read_fd_reusing(
         fd: std::os::unix::io::RawFd,
         want_physical: bool,
@@ -930,6 +941,15 @@ fn writable_of_path(path: &Path) -> bool {
     sift_core::deletable::unix_mode_is_writable_for(meta.mode(), meta.uid(), meta.gid())
 }
 
+/// Non-Unix fallback: use the read-only attribute. Windows ACLs are not
+/// modelled here; the deletion layer still reports per-item failures.
+#[cfg(not(unix))]
+fn writable_of_path(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|meta| !meta.permissions().readonly())
+        .unwrap_or(false)
+}
+
 /// Same test as [`writable_of_fd`] for a raw descriptor that is already open
 /// (as in the macOS bulk path, which opens the directory itself).
 #[cfg(unix)]
@@ -972,9 +992,9 @@ pub(crate) fn modified_ms(meta: &fs::Metadata) -> i64 {
 #[cfg(windows)]
 pub(crate) fn modified_ms(meta: &fs::Metadata) -> i64 {
     use std::os::windows::fs::MetadataExt;
-    meta.last_write_time()
-        .map(|ft| ((ft as i128 - 116_444_736_000_000_000) / 10_000) as i64)
-        .unwrap_or(0)
+    // Stable API: returns the FILETIME as u64 (100 ns since 1601).
+    let ft = meta.last_write_time();
+    ((ft as i128 - 116_444_736_000_000_000) / 10_000) as i64
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -989,9 +1009,10 @@ pub(crate) fn device_of(meta: &fs::Metadata) -> u64 {
 }
 
 #[cfg(windows)]
-pub(crate) fn device_of(meta: &fs::Metadata) -> u64 {
-    use std::os::windows::fs::MetadataExt;
-    meta.volume_serial_number().unwrap_or(0) as u64
+pub(crate) fn device_of(_meta: &fs::Metadata) -> u64 {
+    // volume_serial_number() is still nightly-only (windows_by_handle), so the
+    // portable path reports "unknown"; the scan then treats the volume as one.
+    0
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -1013,9 +1034,10 @@ pub(crate) fn links_of(meta: &fs::Metadata) -> u32 {
 }
 
 #[cfg(windows)]
-pub(crate) fn links_of(meta: &fs::Metadata) -> u32 {
-    use std::os::windows::fs::MetadataExt;
-    meta.number_of_links().unwrap_or(0)
+pub(crate) fn links_of(_meta: &fs::Metadata) -> u32 {
+    // number_of_links() is still nightly-only (windows_by_handle); report 0,
+    // which makes the walker skip hardlink dedup rather than miscount.
+    0
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -1024,9 +1046,10 @@ pub(crate) fn links_of(_meta: &fs::Metadata) -> u32 {
 }
 
 #[cfg(windows)]
-pub(crate) fn inode_of(meta: &fs::Metadata) -> u64 {
-    use std::os::windows::fs::MetadataExt;
-    meta.file_index().unwrap_or(0)
+pub(crate) fn inode_of(_meta: &fs::Metadata) -> u64 {
+    // file_index() is still nightly-only (windows_by_handle); a zero inode
+    // disables per-inode dedup on this portable path.
+    0
 }
 
 #[cfg(not(any(unix, windows)))]

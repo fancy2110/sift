@@ -1,3 +1,4 @@
+#![cfg(unix)]
 // Single-thread A/B: open(full path) walk vs openat(parent_fd) walk.
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
