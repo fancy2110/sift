@@ -559,9 +559,11 @@ mod tests {
         assert_eq!(hit.kind, CandidateKind::Trash);
     }
 
+    #[cfg(unix)]
     #[test]
     fn trash_known_locations_match() {
-        // Volume-root trash (macOS/XDG).
+        // Volume-root trash (macOS/XDG) and XDG data-home trash are Unix
+        // locations; the Windows recycle bin is not a filesystem directory.
         assert!(for_dir(".Trash", Path::new("/.Trash")).is_some());
         assert!(for_dir(".Trash-1000", Path::new("/.Trash-1000")).is_some());
         // XDG user trash at the real data home.
