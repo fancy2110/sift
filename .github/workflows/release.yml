@@ -32,7 +32,7 @@ jobs:
       matrix:
         include:
           - platform: macos
-            runner: macos-14 # Apple Silicon; produces aarch64
+            runner: macos-15 # Apple Silicon (arm64); macos-14 was retired 2026-11-02
             rust_target: aarch64-apple-darwin
             bundles: ''
           - platform: windows
