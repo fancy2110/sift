@@ -55,9 +55,10 @@ use sift_core::{
     ScanOutcome, ScanPolicy, ScanRequest, ScanTree, TreeConfig,
 };
 use sift_platform::dir::{
-    close_raw_fd, read_with_children, BulkBuffer, ChildFdMap, DirReader,
-    RawEntry, ReadErrorKind,
+    read_with_children, BulkBuffer, ChildFdMap, DirReader, RawEntry, ReadErrorKind,
 };
+#[cfg(unix)]
+use sift_platform::dir::close_raw_fd;
 
 use crate::priority::{category, JobKind, OrdDir, QueuedDir};
 
@@ -2308,13 +2309,22 @@ fn tree_config_for(policy: &ScanPolicy) -> TreeConfig {
 /// and to detect directories reached through more than one path. `(0, 0)`
 /// when it cannot be read, which disables pruning rather than failing.
 fn root_identity(root: &Path) -> (u64, u64) {
-    sift_platform::volume::device_id(root)
-        .map(|dev| {
-            use std::os::unix::fs::MetadataExt;
-            let ino = std::fs::metadata(root).map(|meta| meta.ino()).unwrap_or(0);
-            (dev, ino)
-        })
-        .unwrap_or((0, 0))
+    let Some(dev) = sift_platform::volume::device_id(root) else {
+        return (0, 0);
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let ino = std::fs::metadata(root).map(|meta| meta.ino()).unwrap_or(0);
+        (dev, ino)
+    }
+    #[cfg(not(unix))]
+    {
+        // Inode identity is not available through stable std on Windows; the
+        // walk still stays on the root device via `dev` when it is known.
+        let _ = root;
+        (dev, 0)
+    }
 }
 
 #[cfg(test)]
@@ -3186,12 +3196,16 @@ mod tests {
 
     #[test]
     fn resume_adopts_closed_subtree_and_rewalks_open_frontier() {
+        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
 
         let base = temp_tree("resume");
         let journal = TestJournal::default();
         let (root_dev, root_ino) = root_identity(&base);
+        #[cfg(unix)]
         let ino_of = |path: &Path| std::fs::metadata(path).unwrap().ino();
+        #[cfg(not(unix))]
+        let ino_of = |_path: &Path| 0u64;
 
         // Simulate the state an interrupted scan persisted:
         //  - root discovered

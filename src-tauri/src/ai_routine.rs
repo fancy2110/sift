@@ -107,21 +107,27 @@ fn normalize_cadence(raw: &str) -> String {
 /// Expand a leading `~` so the model can name the home directory without
 /// knowing the account name.
 fn expand_tilde(raw: &str) -> Option<std::path::PathBuf> {
-    let home = dirs::home_dir()?;
+    expand_tilde_in(raw, dirs::home_dir().as_deref())
+}
+
+fn expand_tilde_in(raw: &str, home: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
     if raw == "~" {
-        return Some(home);
+        return home.map(std::path::Path::to_path_buf);
     }
     match raw.strip_prefix("~/") {
-        Some(rest) => Some(home.join(rest)),
+        Some(rest) => home.map(|home| home.join(rest)),
         None => Some(std::path::PathBuf::from(raw)),
     }
 }
 
 fn validated_paths(paths: &[String]) -> Vec<String> {
-    let home = dirs::home_dir();
+    validated_paths_in(paths, dirs::home_dir().as_deref())
+}
+
+fn validated_paths_in(paths: &[String], home: Option<&std::path::Path>) -> Vec<String> {
     let mut kept: Vec<String> = Vec::new();
     for raw in paths {
-        let Some(candidate) = expand_tilde(raw.trim()) else {
+        let Some(candidate) = expand_tilde_in(raw.trim(), home) else {
             continue;
         };
         if !candidate.is_absolute() {
@@ -133,9 +139,9 @@ fn validated_paths(paths: &[String]) -> Vec<String> {
         if !canonical.is_dir() {
             continue;
         }
-        if let Some(home) = &home {
+        if let Some(home) = home {
             // The home directory itself is not a cleanup target.
-            if canonical == *home || !canonical.starts_with(home) {
+            if canonical == home || !canonical.starts_with(home) {
                 continue;
             }
         }
@@ -151,10 +157,18 @@ fn validated_paths(paths: &[String]) -> Vec<String> {
 }
 
 fn parse_draft(text: &str, prompt: &str) -> Result<AiRoutineDraft, String> {
+    parse_draft_in(text, prompt, dirs::home_dir().as_deref())
+}
+
+fn parse_draft_in(
+    text: &str,
+    prompt: &str,
+    home: Option<&std::path::Path>,
+) -> Result<AiRoutineDraft, String> {
     let json = extract_json(text).ok_or_else(|| "err.aiRoutineParse".to_string())?;
     let reply: ModelReply =
         serde_json::from_str(json).map_err(|_| "err.aiRoutineParse".to_string())?;
-    let paths = validated_paths(&reply.paths);
+    let paths = validated_paths_in(&reply.paths, home);
     if paths.is_empty() {
         return Err("err.aiRoutineNoPaths".to_string());
     }
@@ -302,31 +316,50 @@ pub fn save_routine_draft(
 mod tests {
     use super::*;
 
+    /// A temporary directory that plays the role of the user's home, so path
+    /// validation (which canonicalizes and requires an existing directory) can
+    /// be tested on every OS without touching the real home.
+    fn temp_home(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sift-ai-routine-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // /var is a symlink to /private/var on macOS; canonicalize so the
+        // containment check compares like with like.
+        dir.canonicalize().unwrap()
+    }
+
     #[test]
     fn parses_a_fenced_reply_and_normalizes_the_cadence() {
         let reply = "```json\n{\"title\":\"清理构建缓存\",\"cadence\":\"daily\",\"paths\":[],\"reason\":\"x\"}\n```";
         // No valid paths -> the draft is rejected before it reaches the UI.
         assert!(parse_draft(reply, "prompt").is_err());
 
-        let home = dirs::home_dir().unwrap();
+        let home = temp_home("parse");
         let inside = home.join("Library");
+        std::fs::create_dir_all(&inside).unwrap();
         let reply = format!(
             "{{\"title\":\"清理构建缓存\",\"cadence\":\"monthly\",\"paths\":[\"{}\"],\"reason\":\"r\"}}",
             inside.display()
         );
-        let draft = parse_draft(&reply, "prompt").unwrap();
+        let draft = parse_draft_in(&reply, "prompt", Some(&home)).unwrap();
         assert_eq!(draft.cadence, "routine.cadence.monthly");
         assert_eq!(draft.title, "清理构建缓存");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
     fn tilde_paths_are_expanded_inside_home() {
-        let kept = validated_paths(&["~/Library".to_string()]);
-        let home = dirs::home_dir().unwrap();
+        let home = temp_home("tilde");
+        std::fs::create_dir_all(home.join("Library")).unwrap();
+        let kept = validated_paths_in(&["~/Library".to_string()], Some(&home));
         assert_eq!(kept.len(), 1);
         assert!(std::path::Path::new(&kept[0]).starts_with(&home));
         // A bare "~" is the home directory itself and must not be accepted.
-        assert!(validated_paths(&["~".to_string()]).is_empty());
+        assert!(validated_paths_in(&["~".to_string()], Some(&home)).is_empty());
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// Live check: needs `ARK_KEY` in the environment and network access.
