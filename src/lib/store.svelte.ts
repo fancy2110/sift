@@ -307,9 +307,12 @@ class AppStore {
     return this.findings.filter((f) => f.safety !== 'keep');
   }
 
-  get smartItems(): Finding[] {
-    return this.visible;
-  }
+  /** Smart list, largest first (the footer promises this order). */
+  smartItems = $derived.by(() =>
+    [...this.findings.filter((finding) => finding.safety !== 'keep')].sort(
+      (a, b) => b.size - a.size
+    )
+  );
 
   get candidates(): Finding[] {
     return this.visible.filter((f) => this.selectedIds.has(f.id));

@@ -47,6 +47,11 @@
     }
     return out;
   });
+  const sortedEntries = $derived(
+    [...store.explorerRight].sort(
+      (a, b) => b.size - a.size || Number(b.isDir) - Number(a.isDir)
+    )
+  );
   const totalBytes = $derived(
     store.explorerRight.reduce((sum: number, entry) => sum + entry.size, 0)
   );
@@ -121,7 +126,7 @@
       {#if store.explorerRightLoading}
         <p class="fx-hint">{t('explorer.loading')}</p>
       {:else}
-        {#each store.explorerRight as entry (entry.path)}
+        {#each sortedEntries as entry (entry.path)}
           {@const finding = store.findingForPath(entry.path)}
           {@const isQueued = finding ? store.isSelected(finding.id) : false}
           {@const verdict = store.explorerAi.items[entry.name]}

@@ -520,4 +520,6 @@ export const ru: Record<string, string> = {
   'settings.aiPresetSiliconflow': 'SiliconFlow',
   'settings.aiPresetCustom': 'Другой',
   'settings.aiPromptSection': 'Промпт анализа',
+  'sub.statusScanning': 'Сканирование {0}%',
+  'sub.statusAnalysed': 'Проанализировано: {0}',
 };

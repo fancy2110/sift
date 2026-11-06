@@ -524,4 +524,6 @@ export const id: Record<string, string> = {
   'settings.aiPresetSiliconflow': 'SiliconFlow',
   'settings.aiPresetCustom': 'Kustom',
   'settings.aiPromptSection': 'Prompt analisis',
+  'sub.statusScanning': 'Memindai {0}%',
+  'sub.statusAnalysed': '{0} item dianalisis',
 };

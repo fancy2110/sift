@@ -502,4 +502,6 @@ export const zhTW: Record<string, string> = {
   'settings.aiPresetSiliconflow': '硅基流動',
   'settings.aiPresetCustom': '自訂',
   'settings.aiPromptSection': '分析提示詞',
+  'sub.statusScanning': '掃描中 {0}%',
+  'sub.statusAnalysed': '已分析 {0} 項',
 };
