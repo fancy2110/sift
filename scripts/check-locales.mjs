@@ -8,8 +8,11 @@
 // empty slot.
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('..', import.meta.url).pathname;
+// `new URL(...).pathname` yields "/D:/a/..." on Windows, and joining that with
+// a drive path produces "D:\D:\a\...". fileURLToPath handles every platform.
+const root = fileURLToPath(new URL('..', import.meta.url));
 const i18n = readFileSync(join(root, 'src/lib/i18n.svelte.ts'), 'utf8');
 
 const ENTRY = /'([^']+)':\s*'((?:[^'\\]|\\.)*)'/g;

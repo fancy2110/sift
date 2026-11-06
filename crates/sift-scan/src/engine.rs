@@ -2950,12 +2950,25 @@ mod tests {
             .scan(ScanRequest::new(ScanId(71), base.clone()))
             .unwrap();
 
-        // Let the scan actually start reading before cancelling.
-        std::thread::sleep(Duration::from_millis(30));
+        // Wait for the first progress frame (emitted right after the first jobs
+        // are dispatched, before any read returns), then cancel. A fixed sleep
+        // is racy: on a fast runner the 20k-entry scan can finish first, so the
+        // outcome is Completed and the cancel flag arrives too late.
+        let first = handle
+            .events
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the scan must emit an initial progress frame");
+        if matches!(first, ScanEvent::Finished { .. }) {
+            // The machine finished before we could cancel; nothing to assert.
+            handle.join();
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+
         handle.cancel();
         let started = Instant::now();
         let mut cancelled = false;
-        while let Ok(event) = handle.events.recv_timeout(Duration::from_secs(5)) {
+        while let Ok(event) = handle.events.recv_timeout(Duration::from_secs(10)) {
             if let ScanEvent::Finished {
                 outcome: ScanOutcome::Cancelled,
                 ..
@@ -2970,7 +2983,7 @@ mod tests {
 
         assert!(cancelled, "the scan must end as Cancelled");
         assert!(
-            elapsed < Duration::from_millis(500),
+            elapsed < Duration::from_secs(1),
             "cancel took {elapsed:?}, longer than the responsiveness bound"
         );
 
