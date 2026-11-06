@@ -750,10 +750,13 @@ impl ScanTree {
             cursor = node.parent;
         }
 
+        // Native separator: callers and the front end compare these strings
+        // with `PathBuf::to_string_lossy()`, which is "\\" on Windows.
+        let sep = std::path::MAIN_SEPARATOR;
         let mut out = self.root_path.to_string_lossy().into_owned();
         for &name in self.scratch.iter().rev() {
-            if !out.ends_with('/') && !out.is_empty() {
-                out.push('/');
+            if !out.ends_with(sep) && !out.is_empty() {
+                out.push(sep);
             }
             out.push_str(&String::from_utf8_lossy(self.interner.lookup(name)));
         }
