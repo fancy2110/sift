@@ -144,6 +144,8 @@ class AppStore {
   explorerRightPath = $state('');
   explorerRightLoading = $state(false);
   explorerSelected = $state<DirEntry | null>(null);
+  /** Recursive total of the current directory; null while it is computed. */
+  explorerTotal = $state<number | null>(null);
   explorerAi = $state<{
     loading: boolean;
     error: string;
@@ -750,9 +752,21 @@ class AppStore {
     this.explorerRightPath = resolved;
     this.explorerRight = entries;
     this.explorerRightLoading = false;
+    this.explorerTotal = null;
+    void this.loadExplorerTotal(resolved);
     this.fillExplorerSizes(entries, () => {
       if (this.explorerRightPath === resolved) this.explorerRight = [...this.explorerRight];
     });
+  }
+
+  /** Scan the selected directory itself for its recursive total. */
+  private async loadExplorerTotal(path: string) {
+    try {
+      const sizes = await this.sizesFor([path]);
+      if (this.explorerPath === path) this.explorerTotal = sizes.get(path) ?? 0;
+    } catch {
+      if (this.explorerPath === path) this.explorerTotal = 0;
+    }
   }
 
   /** Cached recursive totals, so switching tabs does not re-walk folders. */
