@@ -253,7 +253,8 @@
 
       <p class="set-section-label" style="margin-top: 22px">{t('settings.ai')}</p>
 
-      <div class="set-card">
+      <div class="ai-panel" class:ai-form-off={!store.aiConfig?.enabled}>
+        <div class="ai-item ai-item-row">
         <div class="set-card-info">
           <p class="set-card-title">{t('settings.aiEnableTitle')}</p>
           <p class="set-card-desc">{t('settings.aiEnableDesc')}</p>
@@ -269,9 +270,9 @@
         >
           <span class="switch-knob"></span>
         </button>
-      </div>
+        </div>
 
-      <div class="ai-form" class:ai-form-off={!store.aiConfig?.enabled}>
+        <div class="ai-item">
         <p class="ai-label">{t('settings.aiProfiles')}</p>
         <div class="ai-profiles">
           {#each store.aiConfig?.profiles ?? [] as profile (profile.id)}
@@ -409,6 +410,9 @@
           </div>
         {/if}
 
+        </div>
+
+        <div class="ai-item">
         <p class="ai-label">{t('settings.aiPromptTitle')}</p>
         <p class="ai-consent">{t('settings.aiPromptDesc')}</p>
         <textarea
@@ -424,9 +428,14 @@
           </button>
         </div>
 
-        <p class="ai-consent">{t('settings.aiConsent')}</p>
+        </div>
+
+        <p class="ai-consent ai-consent-foot">{t('settings.aiConsent')}</p>
       </div>
 
+      <p class="set-section-label" style="margin-top: 22px">{t('settings.automation')}</p>
+
+      <div class="set-group">
       <div class="set-card">
         <div class="set-card-info">
           <p class="set-card-title">{t('settings.scheduledAutoTitle')}</p>
@@ -450,9 +459,6 @@
         </button>
       </div>
 
-      <p class="set-section-label" style="margin-top: 22px">{t('settings.automation')}</p>
-
-      <div class="set-group">
         <div class="set-card">
           <div class="set-card-info">
             <p class="set-card-title">{t('settings.dailyTitle')}</p>
@@ -698,13 +704,32 @@
     box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-violet) 16%, transparent);
   }
 
-  .ai-form {
+  .ai-panel {
     margin-top: 12px;
-    padding: 12px 14px 2px;
+    display: flex;
+    flex-direction: column;
     border-radius: 14px;
     border: 1px solid var(--color-border);
     background: color-mix(in oklch, var(--color-surface-2) 40%, transparent);
+    overflow: hidden;
     transition: opacity 0.2s ease;
+  }
+  .ai-item {
+    padding: 14px 17px;
+  }
+  .ai-item + .ai-item {
+    border-top: 1px solid var(--color-border);
+  }
+  .ai-item-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .ai-item-row .set-card-info {
+    flex: 1;
+  }
+  .ai-consent-foot {
+    padding: 0 17px 14px;
   }
   .ai-form-off {
     opacity: 0.45;
