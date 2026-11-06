@@ -519,4 +519,5 @@ export const ru: Record<string, string> = {
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
   'settings.aiPresetCustom': 'Другой',
+  'settings.aiPromptSection': 'Промпт анализа',
 };

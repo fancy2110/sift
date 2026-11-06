@@ -532,6 +532,7 @@ const zh: Record<string, string> = {
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': '硅基流动',
   'settings.aiPresetCustom': '自定义',
+  'settings.aiPromptSection': '分析提示词',
 };
 
 const en: Record<string, string> = {
@@ -1025,6 +1026,7 @@ const en: Record<string, string> = {
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
   'settings.aiPresetCustom': 'Custom',
+  'settings.aiPromptSection': 'Analysis prompt',
 };
 
 type ParamValue = string | number;

@@ -523,4 +523,5 @@ export const id: Record<string, string> = {
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
   'settings.aiPresetCustom': 'Kustom',
+  'settings.aiPromptSection': 'Prompt analisis',
 };

@@ -515,4 +515,5 @@ export const ja: Record<string, string> = {
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
   'settings.aiPresetCustom': 'カスタム',
+  'settings.aiPromptSection': '分析プロンプト',
 };

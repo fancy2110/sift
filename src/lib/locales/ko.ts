@@ -492,4 +492,5 @@ export const ko: Record<string, string> = {
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
   'settings.aiPresetCustom': '사용자 지정',
+  'settings.aiPromptSection': '분석 프롬프트',
 };
