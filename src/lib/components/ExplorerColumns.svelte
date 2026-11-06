@@ -36,13 +36,15 @@
     const parts = (mount ? store.explorerPath.slice(mount.length) : store.explorerPath)
       .split('/')
       .filter(Boolean);
-    const out: { label: string; path: string }[] = [];
+    // The root is always the first item, so the trail can walk back up.
+    const out: { label: string; path: string }[] = [
+      { label: '/', path: volume?.mountPoint ?? '/' }
+    ];
     let acc = mount;
     for (const part of parts) {
       acc += `/${part}`;
       out.push({ label: part, path: acc });
     }
-    if (out.length === 0) out.push({ label: '/', path: volume?.mountPoint ?? '/' });
     return out;
   });
   const totalBytes = $derived(
@@ -63,15 +65,6 @@
 <div class="fx">
   <div class="fx-bar">
     <LocationPicker onselect={openDisk} />
-    <button
-      type="button"
-      class="fx-back"
-      aria-label={t('sub.goUp')}
-      title={t('sub.goUp')}
-      onclick={() => store.explorerUp()}
-    >
-      <Icon name="chevronUp" size={14} />
-    </button>
     <div class="fx-path" bind:this={pathBar}>
       {#each crumbs as crumb, i (crumb.path)}
         <button
@@ -204,22 +197,6 @@
     flex: none;
     padding: 10px 14px;
     border-bottom: 1px solid var(--color-border);
-  }
-  .fx-back {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 7px;
-    border: 1px solid var(--color-border);
-    background: transparent;
-    color: var(--color-faint);
-    cursor: pointer;
-  }
-  .fx-back:hover {
-    color: var(--color-fg);
   }
   /* Finder-style path bar: interlocking chevron segments. */
   .fx-path {
