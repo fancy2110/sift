@@ -37,12 +37,12 @@
       .split('/')
       .filter(Boolean);
     const out: { label: string; path: string }[] = [];
-    if (volume) out.push({ label: volume.name, path: volume.mountPoint });
     let acc = mount;
     for (const part of parts) {
       acc += `/${part}`;
       out.push({ label: part, path: acc });
     }
+    if (out.length === 0) out.push({ label: '/', path: volume?.mountPoint ?? '/' });
     return out;
   });
   const totalBytes = $derived(
@@ -227,7 +227,7 @@
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 0;
     height: 30px;
     padding: 2px;
     border-radius: 8px;
@@ -242,7 +242,7 @@
     flex: none;
     height: 26px;
     max-width: 200px;
-    padding: 0 15px 0 19px;
+    padding: 0 11px 0 14px;
     border: none;
     background: var(--color-surface-2);
     color: var(--color-muted);
@@ -254,22 +254,25 @@
     cursor: pointer;
     clip-path: polygon(
       0 0,
-      calc(100% - 9px) 0,
+      calc(100% - 7px) 0,
       100% 50%,
-      calc(100% - 9px) 100%,
+      calc(100% - 7px) 100%,
       0 100%,
-      9px 50%
+      7px 50%
     );
   }
+  .fx-seg + .fx-seg {
+    margin-left: -5px;
+  }
   .fx-seg-first {
-    padding-left: 12px;
+    padding-left: 10px;
     border-top-left-radius: 6px;
     border-bottom-left-radius: 6px;
     clip-path: polygon(
       0 0,
-      calc(100% - 9px) 0,
+      calc(100% - 7px) 0,
       100% 50%,
-      calc(100% - 9px) 100%,
+      calc(100% - 7px) 100%,
       0 100%
     );
   }
