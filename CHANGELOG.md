@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-06
+
+### Added
+
+- Finder-style column browser in Explorer, with a linked two-pane layout and a chevron path bar.
+- Per-child AI verdicts inline on every Explorer row, plus an AI explanation for the selected folder.
+- Folder-total cache with an explicit rescan, and auto-scanning of the selected folder's total.
+- Size sorting and visible analysis progress in list views.
+- Custom AI analysis prompt, a provider dropdown and more provider presets.
+- Scheduled tasks can run analyse-only or auto-execute, and scheduled findings stay pending until you act.
+
+### Changed
+
+- Explorer keeps the disk selection and breadcrumb trail; the left pane shows the parent of the right directory.
+- Settings: AI options are consolidated, and auto-clean moved to the bottom of the group.
+- Explorer refreshes whenever its tab becomes active.
+- Release builds now use the macOS 15 runner (macOS 14 images were retired on 2026-11-02).
+
+### Fixed
+
+- Tray menu-bar glyph now fills its canvas and is easier to see.
+- Root is the first breadcrumb; the duplicated volume label is gone.
+- AI progress is shown on the button, and answers follow the UI language.
+- Explorer rows stay consistent when the left pane or breadcrumb changes.
+
+### Known limitations
+
+- macOS is the primary tested platform; Windows and Linux builds are available but still being validated.
+
 ## [0.1.0] - 2026-10-26
 
 ### Added
@@ -41,5 +70,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - macOS only; Windows and Linux are still in progress.
 - AI features require your own API key and are billed by the provider.
 
-[Unreleased]: https://github.com/fancy2110/sift/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/fancy2110/sift/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/fancy2110/sift/releases/tag/v0.2.0
 [0.1.0]: https://github.com/fancy2110/sift/releases/tag/v0.1.0
