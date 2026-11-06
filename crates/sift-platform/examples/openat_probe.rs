@@ -1,4 +1,10 @@
-#![cfg(unix)]
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("the openat examples are Unix-only");
+}
+
+#[cfg(unix)]
+mod imp {
 // Single-thread A/B: open(full path) walk vs openat(parent_fd) walk.
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
@@ -65,7 +71,7 @@ fn by_fd(fd: i32) -> (u64, u64) {
     (files, dirs)
 }
 
-fn main() {
+pub(super) fn main() {
     let root: PathBuf = std::env::args().nth(1).map(PathBuf::from).unwrap_or("/Users".into());
 
     let root_c = cstr(root.as_os_str().as_bytes());
@@ -89,4 +95,11 @@ fn main() {
         println!("round{round} by_path={:.2}s({f1})  openat={:.2}s({f2})",
             e1.as_secs_f64(), e2.as_secs_f64());
     }
+}
+
+}
+
+#[cfg(unix)]
+fn main() {
+    imp::main();
 }
