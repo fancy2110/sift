@@ -525,11 +525,24 @@ impl DirectorySummary {
 mod tests {
     use super::*;
 
+    /// The platform's system mount point: `/` or `C:\`.
+    fn system_mount() -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            PathBuf::from("C:\\")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("/")
+        }
+    }
+
     fn volume(total: u64, available: u64) -> Volume {
+        let mount = system_mount();
         Volume {
-            id: VolumeId::from_mount_point(Path::new("/")),
-            name: "Macintosh HD".into(),
-            mount_point: PathBuf::from("/"),
+            id: VolumeId::from_mount_point(&mount),
+            name: "System".into(),
+            mount_point: mount,
             total_bytes: total,
             available_bytes: available,
             is_removable: false,
