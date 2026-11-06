@@ -1374,7 +1374,7 @@ mod tests {
         assert_eq!(view.mtime_ms, 1234);
         assert!(!view.deletable);
         assert!(view.is_symlink);
-        assert_eq!(view.parent, Some(key("/")));
+        assert_eq!(view.parent, Some(key(system_root())));
         assert_eq!(view.file_count, 1);
     }
 
