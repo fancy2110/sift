@@ -716,6 +716,15 @@ fn run_coordinator(inputs: CoordinatorInputs) {
     // reached directories enlarge it as normal.
     let seed_discovered = 1 + adopted_nodes.len() as u64;
 
+    // Queue priorities compare paths lexically. The walker spells paths from
+    // the real root, so a focus given through a symlink alias would never
+    // match; canonicalize it once for priority comparisons. `initial_focus`
+    // keeps the user's spelling for the focus-relation check.
+    let initial_focus_real = std::fs::canonicalize(&focus_path).ok();
+    let priority_focus = initial_focus_real
+        .clone()
+        .unwrap_or_else(|| focus_path.clone());
+
     let mut state = CoordinatorState {
         queue: BinaryHeap::new(),
         pending_children: HashMap::new(),
@@ -739,10 +748,10 @@ fn run_coordinator(inputs: CoordinatorInputs) {
         in_flight: 0,
         started: Instant::now(),
         last_flush: Instant::now(),
-        focus: focus_path.clone(),
+        focus: priority_focus,
         focus_seen_generation: 0,
         initial_focus: focus_path.clone(),
-        initial_focus_real: std::fs::canonicalize(&focus_path).ok(),
+        initial_focus_real,
         focus_processed: focus_path == root_path,
         cancelled: false,
         paused: false,
@@ -2488,14 +2497,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[cfg(unix)]
     extern "C" {
         fn geteuid() -> u32;
     }
 
     /// chmod-based permission tests are meaningless for root, which bypasses
-    /// mode bits.
+    /// mode bits. Non-Unix platforms never run those tests.
     fn running_as_root() -> bool {
-        unsafe { geteuid() == 0 }
+        #[cfg(unix)]
+        {
+            unsafe { geteuid() == 0 }
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
     }
 
     /// Pull events until a `PermissionRequested` arrives (or the scan ends /
@@ -3233,15 +3250,20 @@ mod tests {
         journal.begin(&root_dir);
 
         let mk = |path: &Path, key: String, name: &str, depth: u16| {
+            // `modified()` is portable; `.mtime()` only exists on Unix.
+            let mtime_ms = std::fs::metadata(path)
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|elapsed| elapsed.as_millis() as i64)
+                .unwrap_or(0);
             DiscoveredDir::new(
                 key,
                 root_key_text.clone(),
                 name.as_bytes().to_vec(),
                 path.to_string_lossy().to_string(),
                 depth,
-                std::fs::metadata(path).unwrap()
-                    .mtime()
-                    .saturating_mul(1000),
+                mtime_ms,
                 root_dev,
                 ino_of(path),
                 false,
