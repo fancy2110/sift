@@ -491,4 +491,5 @@ export const ko: Record<string, string> = {
   'settings.aiPresetOllama': 'Ollama(로컬)',
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
+  'settings.aiPresetCustom': '사용자 지정',
 };

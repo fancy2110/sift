@@ -518,4 +518,5 @@ export const ru: Record<string, string> = {
   'settings.aiPresetOllama': 'Ollama (локально)',
   'settings.aiPresetOpenrouter': 'OpenRouter',
   'settings.aiPresetSiliconflow': 'SiliconFlow',
+  'settings.aiPresetCustom': 'Другой',
 };

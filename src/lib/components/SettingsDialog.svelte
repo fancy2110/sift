@@ -39,6 +39,7 @@
   let clearToken = $state(false);
   let saving = $state(false);
   let promptDraft = $state('');
+  let presetLabel = $state('');
   let promptSynced = false;
   $effect(() => {
     if (store.settingsOpen && !promptSynced) {
@@ -116,6 +117,7 @@
   ];
 
   function startProfile() {
+    presetLabel = 'settings.aiPresetDeepseek';
     editor = {
       id: '',
       name: '',
@@ -130,6 +132,10 @@
   }
 
   function editProfile(profile: AiProfileView) {
+    const match = presets.find(
+      (item) => item.provider === profile.provider && item.endpoint === profile.endpoint
+    );
+    presetLabel = match?.label ?? '';
     editor = {
       id: profile.id,
       name: profile.name,
@@ -144,6 +150,7 @@
   }
 
   function applyPreset(preset: (typeof presets)[number]) {
+    presetLabel = preset.label;
     editor.provider = preset.provider;
     editor.endpoint = preset.endpoint;
     // Presets that do not name a model clear the field instead of leaving a
@@ -323,19 +330,21 @@
         {#if editorOpen}
           <div class="ai-editor">
             <p class="ai-label">{t('settings.aiProvider')}</p>
-            <div class="ai-presets">
-              {#each presets as preset (preset.endpoint)}
-                <button
-                  type="button"
-                  class="ai-preset"
-                  class:preset-on={editor.provider === preset.provider}
-                  aria-pressed={editor.provider === preset.provider}
-                  onclick={() => applyPreset(preset)}
-                >
-                  {t(preset.label)}
-                </button>
+            <select
+              class="ai-input"
+              aria-label={t('settings.aiProvider')}
+              value={presetLabel}
+              onchange={(event) => {
+                presetLabel = event.currentTarget.value;
+                const preset = presets.find((item) => item.label === presetLabel);
+                if (preset) applyPreset(preset);
+              }}
+            >
+              <option value="">{t('settings.aiPresetCustom')}</option>
+              {#each presets as preset (preset.label)}
+                <option value={preset.label}>{t(preset.label)}</option>
               {/each}
-            </div>
+            </select>
 
             <p class="ai-label">{t('settings.aiName')}</p>
             <input
@@ -708,30 +717,6 @@
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-  .ai-presets {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 11px;
-  }
-  .ai-preset {
-    padding: 6px 12px;
-    border-radius: 9px;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-muted);
-    font-size: 11.5px;
-    font-weight: 600;
-    cursor: default;
-  }
-  .ai-preset:hover {
-    color: var(--color-fg);
-    border-color: var(--color-border-strong);
-  }
-  .ai-preset.preset-on {
-    color: var(--color-violet);
-    border-color: color-mix(in oklch, var(--color-violet) 55%, transparent);
-    background: color-mix(in oklch, var(--color-violet) 12%, var(--color-surface));
   }
   .ai-input {
     width: 100%;
