@@ -143,6 +143,7 @@ pub fn run() {
             analyze::delete_ai_profile,
             analyze::set_ai_enabled,
             analyze::set_ai_language,
+            analyze::set_ai_prompt,
         ])
         .setup(|app| {
             startup_trace::mark("setup:enter");

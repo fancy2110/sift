@@ -20,6 +20,7 @@ import {
   deleteAiProfile,
   setAiEnabled,
   setAiLanguage,
+  setAiPrompt,
   deleteRoutine,
   dismissRoutineSuggestion,
   listHistory,
@@ -1122,6 +1123,15 @@ class AppStore {
   async setAiEnabled(enabled: boolean) {
     try {
       this.aiConfig = await setAiEnabled(enabled);
+    } catch (error) {
+      this.toastError(tr(String(error)));
+    }
+  }
+
+  async saveAiPrompt(prompt: string) {
+    try {
+      this.aiConfig = await setAiPrompt(prompt);
+      this.toast(t('settings.aiSaved'));
     } catch (error) {
       this.toastError(tr(String(error)));
     }

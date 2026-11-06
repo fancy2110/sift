@@ -484,4 +484,11 @@ export const ko: Record<string, string> = {
   'explorer.verdictSafe': '삭제 가능',
   'explorer.verdictCaution': '주의',
   'explorer.verdictKeep': '유지',
+  'settings.aiPromptTitle': 'AI 분석 프롬프트 / 스킬',
+  'settings.aiPromptDesc': '디렉터리 해석과 정기 작업 생성의 시스템 프롬프트 뒤에 추가됩니다. 저장소 유형과 보존할 디렉터리를 설명하세요.',
+  'settings.aiPromptPh': '예: Node.js 저장소입니다. node_modules와 dist는 삭제 가능, .env와 uploads는 유지.',
+  'settings.aiPromptSave': '프롬프트 저장',
+  'settings.aiPresetOllama': 'Ollama(로컬)',
+  'settings.aiPresetOpenrouter': 'OpenRouter',
+  'settings.aiPresetSiliconflow': 'SiliconFlow',
 };

@@ -498,4 +498,11 @@ export const hi: Record<string, string> = {
   'explorer.verdictSafe': 'हटा सकते हैं',
   'explorer.verdictCaution': 'सावधान',
   'explorer.verdictKeep': 'रखें',
+  'settings.aiPromptTitle': 'AI विश्लेषण प्रॉम्प्ट / स्किल',
+  'settings.aiPromptDesc': 'निर्देशिका विश्लेषण और नियमित कार्य मसौदे के सिस्टम प्रॉम्प्ट में जोड़ा जाता है; रिपॉज़िटरी और क्या रखना है बताएँ।',
+  'settings.aiPromptPh': 'उदा.: यह Node.js रिपॉज़िटरी है; node_modules और dist हटा सकते हैं, .env और uploads रखें।',
+  'settings.aiPromptSave': 'प्रॉम्प्ट सहेजें',
+  'settings.aiPresetOllama': 'Ollama (स्थानीय)',
+  'settings.aiPresetOpenrouter': 'OpenRouter',
+  'settings.aiPresetSiliconflow': 'SiliconFlow',
 };

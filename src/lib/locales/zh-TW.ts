@@ -493,4 +493,11 @@ export const zhTW: Record<string, string> = {
   'explorer.verdictSafe': '可刪',
   'explorer.verdictCaution': '謹慎',
   'explorer.verdictKeep': '保留',
+  'settings.aiPromptTitle': 'AI 分析提示詞 / Skill',
+  'settings.aiPromptDesc': '附加在 AI 解讀目錄與建立例行任務的系統提示之後；可說明倉庫類型、哪些目錄可刪或必須保留。',
+  'settings.aiPromptPh': '例如：這是 Node.js 專案，node_modules 與 dist 可刪；保留 .env 與 uploads。',
+  'settings.aiPromptSave': '儲存提示詞',
+  'settings.aiPresetOllama': 'Ollama（本機）',
+  'settings.aiPresetOpenrouter': 'OpenRouter',
+  'settings.aiPresetSiliconflow': '硅基流動',
 };

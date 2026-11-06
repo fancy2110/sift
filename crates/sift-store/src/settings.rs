@@ -335,6 +335,9 @@ pub struct AiSettings {
     /// Name of the environment variable holding the API key. The key itself is
     /// never written to disk by this crate.
     pub api_key_env: String,
+    /// Extra instructions ("skill") appended when analysing directories.
+    #[serde(default)]
+    pub analysis_prompt: String,
     /// Language model reasons should be written in.
     pub language: String,
     /// Candidates per request.
@@ -356,6 +359,7 @@ impl Default for AiSettings {
             endpoint: String::new(),
             model: String::new(),
             api_key_env: "SIFT_AI_API_KEY".to_string(),
+            analysis_prompt: String::new(),
             language: "zh".to_string(),
             batch_size: 30,
             redact_paths: true,
@@ -441,6 +445,7 @@ impl AiSettings {
         if self.language.trim().is_empty() {
             self.language = "zh".to_string();
         }
+        self.analysis_prompt = self.analysis_prompt.trim().chars().take(4000).collect();
         self
     }
 }

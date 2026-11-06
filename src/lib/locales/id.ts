@@ -515,4 +515,11 @@ export const id: Record<string, string> = {
   'explorer.verdictSafe': 'Bisa dihapus',
   'explorer.verdictCaution': 'Hati-hati',
   'explorer.verdictKeep': 'Simpan',
+  'settings.aiPromptTitle': 'Prompt / skill analisis AI',
+  'settings.aiPromptDesc': 'Ditambahkan ke prompt sistem untuk analisis direktori dan draf tugas rutin; jelaskan repositori dan apa yang harus disimpan.',
+  'settings.aiPromptPh': 'mis. Ini repositori Node.js: node_modules dan dist aman; simpan .env dan uploads.',
+  'settings.aiPromptSave': 'Simpan prompt',
+  'settings.aiPresetOllama': 'Ollama (lokal)',
+  'settings.aiPresetOpenrouter': 'OpenRouter',
+  'settings.aiPresetSiliconflow': 'SiliconFlow',
 };

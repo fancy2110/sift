@@ -433,6 +433,10 @@ export function setAiEnabled(enabled: boolean): Promise<AiConfig> {
   return call<AiConfig>('set_ai_enabled', { enabled });
 }
 
+export function setAiPrompt(prompt: string): Promise<AiConfig> {
+  return call<AiConfig>('set_ai_prompt', { prompt });
+}
+
 export function setAiLanguage(language: string): Promise<AiConfig> {
   return call<AiConfig>('set_ai_language', { language });
 }

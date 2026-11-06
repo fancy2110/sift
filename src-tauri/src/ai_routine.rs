@@ -246,7 +246,13 @@ fn ai_routine_blocking(
         let client = sift_analyze::OpenAiCompatibleAdjudicator::new(config)
             .map_err(|error| format!("err.aiRequest|{error}"))?;
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("~"));
-        let system = system_prompt(&home);
+        let mut system = system_prompt(&home);
+        let skill = ai.analysis_prompt.trim();
+        if !skill.is_empty() {
+            system.push_str(&format!(
+                "\n\nUser-provided analysis instructions (follow them unless they contradict the rules above):\n{skill}"
+            ));
+        }
         let reply = client
             .complete(&system, &prompt)
             .map_err(|error| map_client_error(&error.to_string(), &endpoint))?;

@@ -38,6 +38,19 @@
   });
   let clearToken = $state(false);
   let saving = $state(false);
+  let promptDraft = $state('');
+  let promptSynced = false;
+  $effect(() => {
+    if (store.settingsOpen && !promptSynced) {
+      promptDraft = store.aiConfig?.analysisPrompt ?? '';
+      promptSynced = true;
+    }
+    if (!store.settingsOpen) promptSynced = false;
+  });
+
+  async function savePrompt() {
+    await store.saveAiPrompt(promptDraft);
+  }
 
   // Local mirror of the scheduled hour. `bind:value` on a <select> needs a
   // state variable; binding the store property directly would not select the
@@ -75,6 +88,23 @@
       provider: 'deepseek',
       endpoint: 'https://api.deepseek.com/chat/completions',
       model: 'deepseek-flash',
+    },
+    {
+      label: 'settings.aiPresetOllama',
+      provider: 'ollama',
+      endpoint: 'http://localhost:11434/v1/chat/completions',
+      model: 'llama3.1',
+    },
+    {
+      label: 'settings.aiPresetOpenrouter',
+      provider: 'openrouter',
+      endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+    },
+    {
+      label: 'settings.aiPresetSiliconflow',
+      provider: 'siliconflow',
+      endpoint: 'https://api.siliconflow.cn/v1/chat/completions',
+      model: 'deepseek-ai/DeepSeek-V3',
     },
     {
       // Anthropic uses /v1/messages with x-api-key, not the OpenAI route; the
@@ -369,6 +399,21 @@
             </div>
           </div>
         {/if}
+
+        <p class="ai-label">{t('settings.aiPromptTitle')}</p>
+        <p class="ai-consent">{t('settings.aiPromptDesc')}</p>
+        <textarea
+          class="ai-input ai-prompt"
+          rows="3"
+          bind:value={promptDraft}
+          placeholder={t('settings.aiPromptPh')}
+          spellcheck="false"
+        ></textarea>
+        <div class="ai-editor-actions">
+          <button type="button" class="btn btn-sm" disabled={saving} onclick={savePrompt}>
+            {t('settings.aiPromptSave')}
+          </button>
+        </div>
 
         <p class="ai-consent">{t('settings.aiConsent')}</p>
       </div>
@@ -763,8 +808,16 @@
     background: var(--color-surface);
   }
   .ai-profile-on {
-    border-color: color-mix(in oklch, var(--color-violet) 55%, transparent);
-    background: color-mix(in oklch, var(--color-violet) 10%, var(--color-surface));
+    border-color: color-mix(in oklch, var(--color-violet) 38%, var(--color-border));
+    background: color-mix(in oklch, var(--color-violet) 7%, var(--color-surface));
+  }
+  .ai-profile-main:focus {
+    outline: none;
+  }
+  .ai-profile-main:focus-visible {
+    outline: 2px solid color-mix(in oklch, var(--color-violet) 70%, transparent);
+    outline-offset: 2px;
+    border-radius: 8px;
   }
   .ai-profile-main {
     flex: 1;
@@ -876,6 +929,14 @@
     border-radius: 12px;
     border: 1px solid var(--color-border);
     background: color-mix(in oklch, var(--color-surface-2) 60%, transparent);
+  }
+  .ai-prompt {
+    height: auto;
+    min-height: 64px;
+    padding: 9px 10px;
+    resize: vertical;
+    line-height: 1.5;
+    font-family: inherit;
   }
   .ai-editor-actions {
     display: flex;
