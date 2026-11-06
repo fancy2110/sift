@@ -78,7 +78,7 @@ jobs:
       - name: Rust build cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: 'src-tauri -> target'
+          workspaces: '. -> target'
 
       - uses: pnpm/action-setup@v4
         with:
@@ -172,12 +172,21 @@ jobs:
           set -euo pipefail
           OUT="$RUNNER_TEMP/SHA256SUMS-${{ matrix.platform }}.txt"
           : > "$OUT"
-          find src-tauri/target/release/bundle -type f \
-            \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*setup.exe' \
-               -o -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' \) \
-            -print0 | while IFS= read -r -d '' f; do
-            (cd "$(dirname "$f")" && shasum -a 256 "$(basename "$f")") >> "$OUT"
+          # Tauri 3 builds the workspace at ./target, while older layouts (and
+          # src-tauri-only checkouts) use src-tauri/target. Scan both; a
+          # missing directory must not fail the step.
+          found=0
+          for bundle in target/release/bundle src-tauri/target/release/bundle; do
+            [ -d "$bundle" ] || continue
+            while IFS= read -r -d '' f; do
+              (cd "$(dirname "$f")" && shasum -a 256 "$(basename "$f")") >> "$OUT"
+              found=$((found + 1))
+            done < <(find "$bundle" -type f \
+              \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*setup.exe' \
+                 -o -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' \) \
+              -print0)
           done
+          echo "hashed $found artifact(s)"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
           cat "$OUT"
 

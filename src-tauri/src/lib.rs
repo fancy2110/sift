@@ -171,7 +171,8 @@ pub fn run() {
             match event {
                 // Clicking the Dock icon while the window is hidden (the app lives in
                 // the tray) must bring the window back; otherwise the click appears
-                // to do nothing.
+                // to do nothing. `Reopen` only exists on macOS.
+                #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => tray::show_window(app),
               
                 // The tray icon and menu are not needed to show the window.
