@@ -522,4 +522,5 @@ export const ru: Record<string, string> = {
   'settings.aiPromptSection': 'Промпт анализа',
   'sub.statusScanning': 'Сканирование {0}%',
   'sub.statusAnalysed': 'Проанализировано: {0}',
+  'explorer.refresh': 'Пересканировать папку',
 };

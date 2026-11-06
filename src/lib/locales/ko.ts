@@ -495,4 +495,5 @@ export const ko: Record<string, string> = {
   'settings.aiPromptSection': '분석 프롬프트',
   'sub.statusScanning': '스캔 중 {0}%',
   'sub.statusAnalysed': '{0}개 항목 분석됨',
+  'explorer.refresh': '이 폴더 다시 스캔',
 };

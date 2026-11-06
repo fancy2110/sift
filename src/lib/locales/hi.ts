@@ -509,4 +509,5 @@ export const hi: Record<string, string> = {
   'settings.aiPromptSection': 'विश्लेषण प्रॉम्प्ट',
   'sub.statusScanning': 'स्कैन हो रहा है {0}%',
   'sub.statusAnalysed': '{0} आइटम विश्लेषित',
+  'explorer.refresh': 'यह फ़ोल्डर फिर स्कैन करें',
 };

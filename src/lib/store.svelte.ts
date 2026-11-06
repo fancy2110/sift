@@ -755,9 +755,35 @@ class AppStore {
     });
   }
 
-  /** Re-read the current directory (used when the Explorer tab activates). */
-  async refreshExplorer() {
-    if (this.explorerPath) await this.openExplorer(this.explorerPath);
+  /** Cached recursive totals, so switching tabs does not re-walk folders. */
+  private sizeCache = new Map<string, { size: number; at: number }>();
+  private static readonly SIZE_TTL_MS = 60_000;
+
+  /** Re-read the current directory; `force` also drops cached totals. */
+  async refreshExplorer(force = false) {
+    if (!this.explorerPath) return;
+    if (force) this.sizeCache.clear();
+    await this.openExplorer(this.explorerPath);
+  }
+
+  /** Totals for `paths`, reusing cache entries younger than the TTL. */
+  private async sizesFor(paths: string[], force = false): Promise<Map<string, number>> {
+    const now = Date.now();
+    const out = new Map<string, number>();
+    const misses: string[] = [];
+    for (const path of paths) {
+      const hit = this.sizeCache.get(path);
+      if (!force && hit && now - hit.at < AppStore.SIZE_TTL_MS) out.set(path, hit.size);
+      else misses.push(path);
+    }
+    if (misses.length) {
+      const sizes = await dirSizes(misses);
+      for (const size of sizes) {
+        this.sizeCache.set(size.path, { size: size.size, at: now });
+        out.set(size.path, size.size);
+      }
+    }
+    return out;
   }
 
   /** Folder row: make it the current directory. */
@@ -800,8 +826,7 @@ class AppStore {
     const dirs = entries.filter((entry) => entry.isDir).map((entry) => entry.path);
     if (dirs.length === 0) return;
     try {
-      const sizes = await dirSizes(dirs);
-      const byPath = new Map(sizes.map((size) => [size.path, size.size]));
+      const byPath = await this.sizesFor(dirs);
       for (const entry of this.explorerRight) {
         const size = byPath.get(entry.path);
         if (size !== undefined) entry.size = size;

@@ -535,6 +535,7 @@ const zh: Record<string, string> = {
   'settings.aiPromptSection': '分析提示词',
   'sub.statusScanning': '扫描中 {0}%',
   'sub.statusAnalysed': '已分析 {0} 项',
+  'explorer.refresh': '重新扫描当前目录',
 };
 
 const en: Record<string, string> = {
@@ -1031,6 +1032,7 @@ const en: Record<string, string> = {
   'settings.aiPromptSection': 'Analysis prompt',
   'sub.statusScanning': 'Scanning {0}%',
   'sub.statusAnalysed': '{0} items analysed',
+  'explorer.refresh': 'Rescan this folder',
 };
 
 type ParamValue = string | number;
