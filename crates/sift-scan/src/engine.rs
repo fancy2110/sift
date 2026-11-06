@@ -2253,8 +2253,11 @@ fn normalize(path: &Path) -> PathBuf {
 fn join_bytes(dir: &str, name: &[u8]) -> String {
     let mut out = String::with_capacity(dir.len() + name.len() + 1);
     out.push_str(dir);
-    if !out.ends_with('/') {
-        out.push('/');
+    // Use the platform separator: the front end compares these strings with
+    // `PathBuf::to_string_lossy()`, which is "\\" on Windows and "/" elsewhere.
+    let sep = std::path::MAIN_SEPARATOR;
+    if !out.ends_with(sep) {
+        out.push(sep);
     }
     out.push_str(&String::from_utf8_lossy(name));
     out
