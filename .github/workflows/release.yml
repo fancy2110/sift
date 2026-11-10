@@ -193,6 +193,13 @@ jobs:
                  -o -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' \) \
               -print0)
           done
+          # tauri-action renames the macOS updater archive to
+          # Sift_<arch>.app.tar.gz; align the checksum line with the asset.
+          if [ "${{ matrix.platform }}" = "macos" ]; then
+            arch="${{ matrix.rust_target }}"
+            arch="${arch%%-*}"
+            sed -i '' "s|  Sift.app.tar.gz$|  Sift_${arch}.app.tar.gz|" "$OUT"
+          fi
           echo "hashed $found artifact(s)"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
           cat "$OUT"
