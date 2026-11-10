@@ -772,3 +772,7 @@ sift-apps/
 - **扩展**靠配方 schema 和跨平台 inventory，而不是每个应用写死代码。
 
 按 Phase 1 → Phase 2 的顺序落地，可以先做到“找得全、看得懂、删得可恢复”，再逐步引入被动/主动学习。
+
+## 19. 相关设计
+
+- [包管理器知识沉淀：安装、卸载、清理与优化](package-manager-knowledge.md)——Homebrew、Node、Rust、Python、Go、Ruby、Composer、apt/dnf/pacman、flatpak/snap、winget/scoop/Chocolatey、rustup/nvm/pyenv 的能力目录、项目上下文、命令模板与执行安全。
