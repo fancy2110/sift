@@ -187,3 +187,4 @@ macOS 快路径的解析器严格按 `ATTR_CMN_RETURNED_ATTRS` 的**升序位**�
 
 - [应用卸载与数据沉淀：AppProfile 深度清理方案](app-uninstall.md)——应用身份、残留发现、Homebrew zap 配方、安装/使用观测、卸载隔离与撤销。
 - [包管理器知识沉淀](package-manager-knowledge.md)——包管理器检测、项目 lockfile、安装/卸载/清理/优化命令模板、作用域与安全分级。
+- [扫描时环境上下文与维护知识沉淀](scan-context.md)——每次扫描刷新应用/包管理器/项目上下文、模型增量判定、context_hash 缓存、MaintenanceHint 生命周期。
