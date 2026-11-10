@@ -161,3 +161,76 @@ export type ResetReason =
   | { kind: 'io'; message: string }
   | { kind: 'jsonParse'; message: string }
   | { kind: 'schemaMismatch'; found: number; expected: number };
+
+// ---- environment inventory -------------------------------------------------
+
+export interface AppFact {
+  key: string;
+  name: string;
+  version: string | null;
+  bundleId: string | null;
+  installPath: string;
+  lastUsedDays: number | null;
+  artifactCount: number;
+}
+
+export interface PmFact {
+  id: string;
+  version: string | null;
+  detected: boolean;
+  roots: string[];
+  projects: string[];
+  capabilities: string[];
+}
+
+export interface ProjectFact {
+  root: string;
+  pm: string;
+  manifest: string;
+  lockfile: string | null;
+  pmVersion: string | null;
+  dirty: boolean;
+}
+
+export interface MaintenanceHint {
+  id: string;
+  subject: string;
+  action: string;
+  status: 'proposed' | 'validated' | 'rejected' | 'stale';
+  source: 'catalog' | 'rule' | 'model' | 'user';
+  confidence: number;
+  reasonKey: string;
+  impactKey: string;
+  modelReason?: string;
+  requiresAdmin: boolean;
+  pmVersion: string | null;
+  createdAtMs: number;
+  lastSeenMs: number;
+}
+
+export interface EnvironmentSummary {
+  updatedAtMs: number;
+  apps: AppFact[];
+  packageManagers: PmFact[];
+  projects: ProjectFact[];
+  hints: MaintenanceHint[];
+}
+
+export interface UninstallArtifact {
+  path: string;
+  kind: 'bundle' | 'support' | 'cache' | 'preferences' | 'container' | 'savedState' | 'log' | 'launchAgent' | 'other';
+  scope: 'user' | 'system' | 'shared' | 'unknown';
+  disposition: 'autoSafe' | 'review' | 'keep' | 'forbidden';
+  exists: boolean;
+  sizeBytes: number | null;
+  requiresAdmin: boolean;
+  source: string;
+}
+
+export interface AppUninstallPlan {
+  appKey: string;
+  appName: string;
+  artifacts: UninstallArtifact[];
+  totalBytes: number;
+  warnings: string[];
+}

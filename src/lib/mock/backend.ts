@@ -633,6 +633,128 @@ export function createMockBackend(bus: EventBus): MockBackend {
           resolve(summary as unknown as T);
           break;
         }
+        case 'environment_summary':
+        case 'refresh_environment':
+          resolve({
+            updatedAtMs: NOW,
+            apps: [
+              {
+                key: 'com.example.notes',
+                name: 'Notes',
+                version: '2.4.1',
+                bundleId: 'com.example.notes',
+                installPath: '/Applications/Notes.app',
+                lastUsedDays: 3,
+                artifactCount: 4
+              },
+              {
+                key: 'com.example.player',
+                name: 'Player',
+                version: '1.9.0',
+                bundleId: 'com.example.player',
+                installPath: '/Applications/Player.app',
+                lastUsedDays: 41,
+                artifactCount: 2
+              }
+            ],
+            packageManagers: [
+              {
+                id: 'pnpm',
+                version: '9.12.0',
+                detected: true,
+                roots: ['~/.local/share/pnpm/store'],
+                projects: ['~/projects/web'],
+                capabilities: ['cleanCache', 'pruneStore', 'dedupe']
+              },
+              {
+                id: 'cargo',
+                version: '1.85.0',
+                detected: true,
+                roots: ['~/.cargo'],
+                projects: ['~/projects/api'],
+                capabilities: ['cleanCache', 'removeOldVersion']
+              }
+            ],
+            projects: [
+              {
+                root: '~/projects/web',
+                pm: 'pnpm',
+                manifest: 'package.json',
+                lockfile: 'pnpm-lock.yaml',
+                pmVersion: '9.12.0',
+                dirty: false
+              },
+              {
+                root: '~/projects/api',
+                pm: 'cargo',
+                manifest: 'Cargo.toml',
+                lockfile: 'Cargo.lock',
+                pmVersion: null,
+                dirty: false
+              }
+            ],
+            hints: [
+              {
+                id: 'pm:pnpm:pruneStore',
+                subject: 'pm:pnpm',
+                action: 'pruneStore',
+                status: 'proposed',
+                source: 'catalog',
+                confidence: 0.7,
+                reasonKey: 'maintenance.pm.pruneStore.reason',
+                impactKey: 'maintenance.pm.pruneStore.impact',
+                requiresAdmin: false,
+                pmVersion: '9.12.0',
+                createdAtMs: NOW,
+                lastSeenMs: NOW
+              },
+              {
+                id: 'pm:cargo:cleanCache',
+                subject: 'pm:cargo',
+                action: 'cleanCache',
+                status: 'proposed',
+                source: 'catalog',
+                confidence: 0.6,
+                reasonKey: 'maintenance.pm.cleanCache.reason',
+                impactKey: 'maintenance.pm.cleanCache.impact',
+                requiresAdmin: false,
+                pmVersion: '1.85.0',
+                createdAtMs: NOW,
+                lastSeenMs: NOW
+              }
+            ]
+          } as unknown as T);
+          break;
+        case 'plan_app_uninstall':
+          resolve({
+            appKey: String(args.appKey ?? ''),
+            appName: 'Notes',
+            artifacts: [
+              {
+                path: '/Applications/Notes.app',
+                kind: 'bundle',
+                scope: 'user',
+                disposition: 'review',
+                exists: true,
+                sizeBytes: 46 * MB,
+                requiresAdmin: false,
+                source: 'bundle'
+              },
+              {
+                path: '/Users/demo/Library/Caches/com.example.notes',
+                kind: 'cache',
+                scope: 'user',
+                disposition: 'autoSafe',
+                exists: true,
+                sizeBytes: 1.2 * GB,
+                requiresAdmin: false,
+                source: 'convention'
+              }
+            ],
+            totalBytes: 1.2 * GB + 46 * MB,
+            warnings: ['warn.reviewRemoval']
+          } as unknown as T);
+          break;
         case 'list_cleanable':
           resolve([...state.cleanable.values()] as unknown as T);
           break;

@@ -20,6 +20,7 @@ sift-core = { workspace = true }
 sift-platform = { workspace = true }
 sift-scan = { workspace = true }
 sift-analyze = { workspace = true }
+sift-apps = { workspace = true }
 sift-store = { workspace = true }
 sift-monitor = { workspace = true }
 

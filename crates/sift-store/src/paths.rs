@@ -68,6 +68,11 @@ impl StorePaths {
         self.root.join("routines.json")
     }
 
+    /// The last environment snapshot and maintenance hints.
+    pub fn environment(&self) -> PathBuf {
+        self.root.join("environment.json")
+    }
+
     /// SQLite database holding resumable scan metadata.
     pub fn scan_journal(&self) -> PathBuf {
         self.root.join("scan-journal.sqlite")
@@ -88,6 +93,7 @@ mod tests {
             paths.settings(),
             paths.history(),
             paths.routines(),
+            paths.environment(),
         ];
         for path in &all {
             assert_eq!(path.parent().unwrap(), paths.root());

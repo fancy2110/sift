@@ -18,6 +18,7 @@
 use crate::adjudicate::{AdjudicateError, Adjudicator, Guardrails};
 use crate::candidate::Candidate;
 use crate::reason::Verdict;
+use sift_apps::ScanContext;
 
 /// A remote (off-machine) adjudicator.
 ///
@@ -38,6 +39,19 @@ pub trait RemoteAdjudicator: Send + Sync {
         guardrails: &Guardrails,
         now_ms: i64,
     ) -> Result<Vec<Verdict>, AdjudicateError>;
+
+    /// Judge off-machine with the scan's redacted environment snapshot.
+    /// Implementations that do not use context inherit the plain call.
+    fn adjudicate_remote_with_context(
+        &self,
+        batch: &[Candidate],
+        guardrails: &Guardrails,
+        now_ms: i64,
+        context: Option<&ScanContext>,
+    ) -> Result<Vec<Verdict>, AdjudicateError> {
+        let _ = context;
+        self.adjudicate_remote(batch, guardrails, now_ms)
+    }
 }
 
 /// Splits a batch between the local rules and an optional remote provider.
@@ -106,6 +120,30 @@ where
         batch: &[Candidate],
         now_ms: i64,
     ) -> Result<Vec<Verdict>, AdjudicateError> {
+        self.route(batch, now_ms, None)
+    }
+
+    fn adjudicate_batch_with_context(
+        &self,
+        batch: &[Candidate],
+        now_ms: i64,
+        context: Option<&ScanContext>,
+    ) -> Result<Vec<Verdict>, AdjudicateError> {
+        self.route(batch, now_ms, context)
+    }
+}
+
+impl<L, R> RoutingAdjudicator<L, R>
+where
+    L: Adjudicator,
+    R: RemoteAdjudicator,
+{
+    fn route(
+        &self,
+        batch: &[Candidate],
+        now_ms: i64,
+        context: Option<&ScanContext>,
+    ) -> Result<Vec<Verdict>, AdjudicateError> {
         let Some(remote) = &self.remote else {
             return self.local.adjudicate_batch(batch, now_ms);
         };
@@ -135,7 +173,12 @@ where
         if !remote_indices.is_empty() {
             let remote_batch: Vec<Candidate> =
                 remote_indices.iter().map(|&ix| batch[ix].clone()).collect();
-            match remote.adjudicate_remote(&remote_batch, &self.guardrails, now_ms) {
+            match remote.adjudicate_remote_with_context(
+                &remote_batch,
+                &self.guardrails,
+                now_ms,
+                context,
+            ) {
                 Ok(remote_verdicts) if remote_verdicts.len() == remote_batch.len() => {
                     for (slot, verdict) in remote_indices.iter().zip(remote_verdicts) {
                         verdicts[*slot] = Some(verdict);

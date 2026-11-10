@@ -1,0 +1,14 @@
+[package]
+name = "sift-apps"
+description = "Sift environment inventory: applications, package managers, projects and maintenance hints"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+sift-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = "6"

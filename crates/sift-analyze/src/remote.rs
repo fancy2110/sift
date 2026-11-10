@@ -26,6 +26,7 @@ use crate::candidate::Candidate;
 use crate::prompt;
 use crate::reason::Verdict;
 use crate::route::RemoteAdjudicator;
+use sift_apps::ScanContext;
 
 /// Live flags polled while a rate-limited request is backing off.
 ///
@@ -306,11 +307,12 @@ impl OpenAiCompatibleAdjudicator {
         batch: &[Candidate],
         guardrails: &Guardrails,
         now_ms: i64,
+        context: Option<&ScanContext>,
     ) -> Result<Vec<Verdict>, AdjudicateError> {
         // Rate limits are not a failed analysis: wait and retry.
         let mut attempt = 1usize;
         loop {
-            match self.request_batch_once(batch, guardrails, now_ms) {
+            match self.request_batch_once(batch, guardrails, now_ms, context) {
                 Ok(verdicts) => return Ok(verdicts),
                 Err(Retry::RateLimited(wait_ms)) if attempt < MAX_RETRY_ATTEMPTS => {
                     attempt += 1;
@@ -366,8 +368,10 @@ impl OpenAiCompatibleAdjudicator {
         batch: &[Candidate],
         guardrails: &Guardrails,
         now_ms: i64,
+        context: Option<&ScanContext>,
     ) -> Result<Vec<Verdict>, Retry> {
-        let (system, user) = build_prompt_at(batch, &self.config.language, now_ms);
+        let (system, user) =
+            prompt::build_at_with_context(batch, &self.config.language, now_ms, context);
         let body = match self.config.protocol {
             Protocol::OpenAi => serde_json::json!({
                 "model": self.config.model,
@@ -516,9 +520,19 @@ impl RemoteAdjudicator for OpenAiCompatibleAdjudicator {
         guardrails: &Guardrails,
         now_ms: i64,
     ) -> Result<Vec<Verdict>, AdjudicateError> {
+        self.adjudicate_remote_with_context(batch, guardrails, now_ms, None)
+    }
+
+    fn adjudicate_remote_with_context(
+        &self,
+        batch: &[Candidate],
+        guardrails: &Guardrails,
+        now_ms: i64,
+        context: Option<&ScanContext>,
+    ) -> Result<Vec<Verdict>, AdjudicateError> {
         let mut out = Vec::with_capacity(batch.len());
         for chunk in batch.chunks(self.config.batch_size.max(1)) {
-            out.extend(self.request_batch(chunk, guardrails, now_ms)?);
+            out.extend(self.request_batch(chunk, guardrails, now_ms, context)?);
         }
         Ok(out)
     }

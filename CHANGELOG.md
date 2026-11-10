@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-10
+
+### Added
+
+- New `sift-apps` environment inventory: macOS application identity, detected package managers and their versions, and project manifests/lockfiles.
+- A redacted `ScanContext` is now part of every analysis; the AI prompt receives a bounded environment summary (apps, package managers, projects) without real home paths or file contents.
+- Environment snapshots are cached for five minutes so repeated analyses do not re-probe every app and toolchain.
+- Maintenance hints derived from package-manager capabilities (`cleanCache`, `pruneStore`, `removeOldVersion`, ...), persisted with a `Proposed → Validated → Rejected/Stale` lifecycle.
+- Read-only app uninstall planning: conventional support/cache/preferences/container/log paths classified as auto-safe, review or keep.
+- Reversible uninstall execution: selected artifacts move to a Sift quarantine with a manifest, and can be restored; paths outside the plan are rejected.
+- New Tauri commands: `environment_summary`, `refresh_environment`, `plan_app_uninstall`, `execute_app_uninstall`, `restore_app_uninstall`.
+- Dashboard "Environment" panel showing detected apps, package managers and maintenance hints.
+- Tests for context redaction/fingerprints, project detection, maintenance hint selection, uninstall planning and quarantine round-trips.
+
+### Changed
+
+- AI adjudication can now use the environment context; the set of candidates allowed to leave the machine is unchanged.
+- The local store gains `environment.json` alongside verdicts, cleanables, decisions, settings, history and routines.
+
+### Known limitations
+
+- Application inventory is macOS-only in this release; Windows and Linux return an empty app list while the context shape stays stable.
+- Package-manager capabilities are catalogued and displayed as hints, but no command runner UI ships yet; nothing is executed automatically.
+- Model-produced maintenance hints are not parsed yet; hints in this release come from the local capability catalog.
+- Uninstall execution has backend commands and a quarantine/undo path, but no dedicated UI flow; system-scope and admin-only artifacts are not executed.
+- Environment refresh is time-based (five minutes), not yet event-driven on app install/uninstall.
+
 ## [0.2.0] - 2026-11-06
 
 ### Added

@@ -20,6 +20,7 @@ use sift_core::NodeKey;
 
 use crate::atomic::{read_document, write_document};
 use crate::cleanable::{CleanableEntry, CleanableList, RecordSummary, DEFAULT_CLEANABLE_CAP};
+use crate::environment::EnvironmentDoc;
 use crate::history::{CleanupHistory, HistoryEntry, DEFAULT_HISTORY_CAP};
 use crate::paths::StorePaths;
 use crate::routines::{RoutineEntry, RoutineList, DEFAULT_ROUTINE_CAP};
@@ -37,6 +38,7 @@ struct Inner {
     settings: Settings,
     history: CleanupHistory,
     routines: RoutineList,
+    environment: EnvironmentDoc,
 }
 
 /// One place for every piece of durable local state.
@@ -144,6 +146,16 @@ impl Store {
             }
         };
 
+        let environment = match read_document::<EnvironmentDoc>(&paths.environment()) {
+            crate::atomic::LoadOutcome::Loaded(doc) => doc,
+            other => {
+                if let Some(warning) = other.warning("store.what.environment") {
+                    warnings.push(warning);
+                }
+                EnvironmentDoc::default()
+            }
+        };
+
         (
             Self {
                 paths: Some(paths),
@@ -154,6 +166,7 @@ impl Store {
                     settings,
                     history,
                     routines,
+                    environment,
                 }),
                 dirty: AtomicBool::new(false),
                 decision_cap: DEFAULT_DECISION_CAP,
@@ -174,6 +187,7 @@ impl Store {
                 settings: Settings::default(),
                 history: CleanupHistory::with_cap(DEFAULT_HISTORY_CAP),
                 routines: RoutineList::with_cap(DEFAULT_ROUTINE_CAP),
+                environment: EnvironmentDoc::default(),
             }),
             dirty: AtomicBool::new(false),
             decision_cap: DEFAULT_DECISION_CAP,
@@ -339,6 +353,27 @@ impl Store {
         pruned
     }
 
+    // ---- environment -------------------------------------------------------
+
+    /// The last environment snapshot and its maintenance hints.
+    pub fn environment(&self) -> EnvironmentDoc {
+        self.inner.lock().unwrap().environment.clone()
+    }
+
+    /// Replace the snapshot and merge hints, marking vanished proposals stale.
+    pub fn record_environment(
+        &self,
+        context: sift_apps::ScanContext,
+        hints: Vec<sift_apps::MaintenanceHint>,
+        now_ms: i64,
+    ) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.environment.record(context, hints, now_ms);
+        }
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
     // ---- decisions ---------------------------------------------------------
 
     /// Record the user's decision. This is the raw material for habit mining.
@@ -498,9 +533,13 @@ impl Store {
                 inner.settings.clone(),
             )
         };
-        let (history, routines) = {
+        let (history, routines, environment) = {
             let inner = self.inner.lock().unwrap();
-            (inner.history.entries().to_vec(), inner.routines.to_doc())
+            (
+                inner.history.entries().to_vec(),
+                inner.routines.to_doc(),
+                inner.environment.clone(),
+            )
         };
 
         write_document(&paths.verdicts(), &verdicts)?;
@@ -509,6 +548,7 @@ impl Store {
         write_document(&paths.settings(), &settings)?;
         write_document(&paths.history(), &history)?;
         write_document(&paths.routines(), &routines)?;
+        write_document(&paths.environment(), &environment)?;
 
         self.dirty.store(false, Ordering::Relaxed);
         Ok(())

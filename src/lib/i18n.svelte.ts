@@ -229,6 +229,7 @@ const zh: Record<string, string> = {
   'store.what.cleanable': '可清理清单',
   'store.what.decisions': '决策记录',
   'store.what.settings': '设置',
+  'store.what.environment': '环境数据',
   'store.reason.io': '{0}',
   'store.reason.jsonParse': 'JSON 解析失败：{0}',
   'store.reason.schemaMismatch': 'schema 版本 {0} 与当前 {1} 不一致',
@@ -536,6 +537,18 @@ const zh: Record<string, string> = {
   'sub.statusScanning': '扫描中 {0}%',
   'sub.statusAnalysed': '已分析 {0} 项',
   'explorer.refresh': '重新扫描当前目录',
+  'env.title': '环境',
+  'env.refresh': '刷新',
+  'env.loading': '扫描中…',
+  'env.empty': '暂无环境数据',
+  'env.apps': '应用',
+  'env.packageManagers': '包管理器',
+  'env.hints': '维护建议',
+  'env.counts': '{0} 个应用 · {1} 个包管理器 · {2} 个项目',
+  'env.status.proposed': '待确认',
+  'env.status.validated': '已验证',
+  'env.status.rejected': '已拒绝',
+  'env.status.stale': '已过期',
 };
 
 const en: Record<string, string> = {
@@ -726,6 +739,7 @@ const en: Record<string, string> = {
   'store.what.cleanable': 'Cleanable list',
   'store.what.decisions': 'Decision log',
   'store.what.settings': 'Settings',
+  'store.what.environment': 'Environment',
   'store.reason.io': '{0}',
   'store.reason.jsonParse': 'JSON parse failed: {0}',
   'store.reason.schemaMismatch': 'Schema version {0} differs from the current {1}',
@@ -1033,6 +1047,18 @@ const en: Record<string, string> = {
   'sub.statusScanning': 'Scanning {0}%',
   'sub.statusAnalysed': '{0} items analysed',
   'explorer.refresh': 'Rescan this folder',
+  'env.title': 'Environment',
+  'env.refresh': 'Refresh',
+  'env.loading': 'Scanning…',
+  'env.empty': 'No environment data yet',
+  'env.apps': 'Applications',
+  'env.packageManagers': 'Package managers',
+  'env.hints': 'Maintenance',
+  'env.counts': '{0} apps · {1} managers · {2} projects',
+  'env.status.proposed': 'Proposed',
+  'env.status.validated': 'Validated',
+  'env.status.rejected': 'Rejected',
+  'env.status.stale': 'Stale',
 };
 
 type ParamValue = string | number;
