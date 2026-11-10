@@ -776,3 +776,5 @@ sift-apps/
 ## 19. 相关设计
 
 - [包管理器知识沉淀：安装、卸载、清理与优化](package-manager-knowledge.md)——Homebrew、Node、Rust、Python、Go、Ruby、Composer、apt/dnf/pacman、flatpak/snap、winget/scoop/Chocolatey、rustup/nvm/pyenv 的能力目录、项目上下文、命令模板与执行安全。
+
+- [扫描时环境上下文](scan-context.md)——每次扫描如何把应用清单、包管理器、项目上下文送入分析并沉淀维护知识。

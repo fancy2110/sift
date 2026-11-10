@@ -554,3 +554,7 @@ record_pm_feedback(pm_id, action, verdict) -> ()
 - **复用**：项目级优先于全局，lockfile 优先于默认。
 
 这样 Sift 对“包管理器”的认识会随使用越来越准，而不是停留在 `match tool { "cargo" => ... }` 的静态表。
+
+## 15. 相关设计
+
+- [扫描时环境上下文](scan-context.md)——每次扫描如何刷新 PM/项目上下文、做增量模型判定并沉淀维护建议。
