@@ -218,12 +218,13 @@ export interface EnvironmentSummary {
 
 export interface UninstallArtifact {
   path: string;
-  kind: 'bundle' | 'support' | 'cache' | 'preferences' | 'container' | 'savedState' | 'log' | 'launchAgent' | 'other';
+  kind: 'bundle' | 'support' | 'cache' | 'preferences' | 'container' | 'groupContainer' | 'savedState' | 'log' | 'launchAgent' | 'other';
   scope: 'user' | 'system' | 'shared' | 'unknown';
   disposition: 'autoSafe' | 'review' | 'keep' | 'forbidden';
   exists: boolean;
   sizeBytes: number | null;
   requiresAdmin: boolean;
+  sharedWith?: string[];
   source: string;
 }
 
@@ -233,4 +234,49 @@ export interface AppUninstallPlan {
   artifacts: UninstallArtifact[];
   totalBytes: number;
   warnings: string[];
+}
+
+export interface UninstallManifestEntry {
+  original: string;
+  stored: string;
+  isDir: boolean;
+}
+
+export interface UninstallManifest {
+  schemaVersion: number;
+  id: string;
+  appKey: string;
+  appName: string;
+  createdAtMs: number;
+  quarantineRoot: string;
+  entries: UninstallManifestEntry[];
+}
+
+export interface RestoreReport {
+  restored: string[];
+  skipped: string[];
+}
+
+export type PmDestructiveness = 'safe' | 'review' | 'danger';
+
+export interface PmActionPlan {
+  pmId: string;
+  action: string;
+  program: string;
+  args: string[];
+  scope: string;
+  requiresAdmin: boolean;
+  destructiveness: PmDestructiveness;
+  reasonKey: string;
+  impactKey: string;
+}
+
+export interface PmRunReport {
+  pmId: string;
+  action: string;
+  success: boolean;
+  exitCode: number | null;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
 }

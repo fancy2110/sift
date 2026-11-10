@@ -15,6 +15,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,9 @@ pub struct AppServices {
     pub monitor: Mutex<Option<sift_monitor::MonitorControl>>,
     /// Warnings collected while loading the store, drained by the front end.
     pub warnings: Mutex<Vec<StoreWarning>>,
+    /// Set by the install-directory watcher; forces the next analysis to
+    /// re-inventory instead of reusing the five-minute cache.
+    pub environment_dirty: Arc<AtomicBool>,
     /// Items from the most recent analysis keyed by real path, so a cleanup can
     /// tell an explicitly confirmed review item from an unknown path.
     last_report: Mutex<HashMap<PathBuf, ReportItem>>,
@@ -76,6 +80,7 @@ impl AppServices {
             store: Arc::new(store),
             monitor: Mutex::new(None),
             warnings: Mutex::new(warnings),
+            environment_dirty: Arc::new(AtomicBool::new(false)),
             last_report: Mutex::new(HashMap::new()),
             cleanup_cancel: Mutex::new(None),
         }
@@ -212,7 +217,9 @@ pub(crate) fn analyze_current_with(
         .map(|root| sift_apps::redact_path(root, home.as_deref()))
         .collect();
     let now = now_ms();
-    let use_cached = cached.updated_at_ms > 0
+    let environment_changed = services.environment_dirty.swap(false, Ordering::Relaxed);
+    let use_cached = !environment_changed
+        && cached.updated_at_ms > 0
         && now.saturating_sub(cached.updated_at_ms) < 5 * 60 * 1000
         && cached.context.roots == roots_redacted
         && !cached.context.is_empty();
@@ -248,6 +255,19 @@ pub(crate) fn analyze_current_with(
 
     // Requirement 2: persist what is definitively cleanable plus the verdicts.
     services.store.record_analysis(&report, now_ms());
+
+    // Merge model-proposed maintenance into the catalog hints. The model can
+    // refine the explanation of an existing action, but cannot invent a new
+    // command or change the catalog's disposition.
+    let mut hints = hints;
+    for model_hint in std::mem::take(&mut report.maintenance) {
+        if let Some(existing) = hints.iter_mut().find(|hint| hint.id == model_hint.id) {
+            existing.model_reason = model_hint.model_reason;
+            existing.model_impact = model_hint.model_impact;
+        } else {
+            hints.push(model_hint);
+        }
+    }
     services.store.record_environment(context, hints, now_ms());
     let _ = services.store.flush_if_dirty();
 
@@ -1968,6 +1988,7 @@ mod tests {
             store: Arc::new(Store::in_memory()),
             monitor: Mutex::new(None),
             warnings: Mutex::new(Vec::new()),
+            environment_dirty: Arc::new(AtomicBool::new(false)),
             last_report: Mutex::new(HashMap::new()),
             cleanup_cancel: Mutex::new(None),
         }

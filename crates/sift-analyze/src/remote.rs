@@ -18,10 +18,12 @@
 //! only ever produce `Review`.
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::adjudicate::{apply_remote_verdicts, parse_raw_verdicts, AdjudicateError, Guardrails};
+use crate::adjudicate::{
+    apply_remote_verdicts, parse_raw_response, sanitize_maintenance, AdjudicateError, Guardrails,
+};
 use crate::candidate::Candidate;
 use crate::prompt;
 use crate::reason::Verdict;
@@ -203,6 +205,9 @@ pub struct OpenAiCompatibleAdjudicator {
     config: LlmConfig,
     client: reqwest::blocking::Client,
     signals: RetrySignals,
+    /// Model maintenance suggestions collected from the latest batch. Drained
+    /// by the analyzer after the batch; never executed directly.
+    maintenance: Mutex<Vec<sift_apps::MaintenanceHint>>,
 }
 
 impl OpenAiCompatibleAdjudicator {
@@ -228,6 +233,7 @@ impl OpenAiCompatibleAdjudicator {
             config,
             client,
             signals: RetrySignals::default(),
+            maintenance: Mutex::new(Vec::new()),
         })
     }
 
@@ -447,7 +453,15 @@ impl OpenAiCompatibleAdjudicator {
             Protocol::Anthropic => extract_anthropic_content(&text),
         };
         let content = raw_content.map_err(|err| Retry::Fatal(err.to_string()))?;
-        let raw = parse_raw_verdicts(&content).map_err(|err| Retry::Fatal(err.to_string()))?;
+        let (raw, maintenance) =
+            parse_raw_response(&content).map_err(|err| Retry::Fatal(err.to_string()))?;
+        let hints: Vec<sift_apps::MaintenanceHint> = maintenance
+            .iter()
+            .filter_map(|raw| sanitize_maintenance(raw, now_ms))
+            .collect();
+        if !hints.is_empty() {
+            self.maintenance.lock().unwrap().extend(hints);
+        }
         Ok(apply_remote_verdicts(
             batch,
             &raw,
@@ -535,6 +549,10 @@ impl RemoteAdjudicator for OpenAiCompatibleAdjudicator {
             out.extend(self.request_batch(chunk, guardrails, now_ms, context)?);
         }
         Ok(out)
+    }
+
+    fn take_maintenance_hints(&self) -> Vec<sift_apps::MaintenanceHint> {
+        std::mem::take(&mut *self.maintenance.lock().unwrap())
     }
 }
 

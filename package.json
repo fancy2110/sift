@@ -1,7 +1,7 @@
 {
   "name": "sift",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Sift — AI-native cross-platform disk space manager",
   "scripts": {

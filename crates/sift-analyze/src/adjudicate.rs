@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use crate::candidate::Candidate;
-use sift_apps::ScanContext;
+use sift_apps::{HintSource, HintStatus, MaintenanceHint, ScanContext};
 use crate::reason::{
     clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource,
 };
@@ -64,6 +64,13 @@ pub trait Adjudicator: Send + Sync {
         batch: &[Candidate],
         now_ms: i64,
     ) -> Result<Vec<Verdict>, AdjudicateError>;
+
+    /// Drain maintenance suggestions produced by the last batch. Local
+    /// adjudicators return an empty list; remote ones return only sanitized,
+    /// `Proposed` hints.
+    fn take_maintenance_hints(&self) -> Vec<MaintenanceHint> {
+        Vec::new()
+    }
 
     /// Judge one batch with the scan's environment snapshot.
     ///
@@ -354,11 +361,34 @@ pub struct RawVerdict {
     pub impact: String,
 }
 
+/// One optional maintenance suggestion returned alongside verdicts.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawMaintenance {
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub impact: String,
+}
+
 /// Parse a model's answer into raw verdicts.
 ///
 /// Accepts either a bare array or an object with a `verdicts` array, because
 /// both shapes are common; rejects anything else rather than guessing.
 pub fn parse_raw_verdicts(text: &str) -> Result<Vec<RawVerdict>, AdjudicateError> {
+    parse_raw_response(text).map(|(verdicts, _)| verdicts)
+}
+
+/// Parse both the required `verdicts` and the optional `maintenance` array.
+pub fn parse_raw_response(
+    text: &str,
+) -> Result<(Vec<RawVerdict>, Vec<RawMaintenance>), AdjudicateError> {
     let trimmed = text.trim();
     // Tolerate a fenced code block around the JSON.
     let json = if let Some(rest) = trimmed.strip_prefix("```") {
@@ -369,18 +399,66 @@ pub fn parse_raw_verdicts(text: &str) -> Result<Vec<RawVerdict>, AdjudicateError
     };
 
     if let Ok(list) = serde_json::from_str::<Vec<RawVerdict>>(json) {
-        return Ok(list);
+        return Ok((list, Vec::new()));
     }
     #[derive(serde::Deserialize)]
     struct Wrapper {
         verdicts: Vec<RawVerdict>,
+        #[serde(default)]
+        maintenance: Vec<RawMaintenance>,
     }
     if let Ok(wrapper) = serde_json::from_str::<Wrapper>(json) {
-        return Ok(wrapper.verdicts);
+        return Ok((wrapper.verdicts, wrapper.maintenance));
     }
     Err(AdjudicateError::Response(
         "expected a JSON array of verdicts".to_string(),
     ))
+}
+
+/// Convert a model maintenance suggestion into a stored hint.
+///
+/// Only the closed action vocabulary is accepted; unknown actions, malformed
+/// subjects and empty explanations are dropped. The hint always starts as
+/// `Proposed` and can never execute anything by itself.
+pub fn sanitize_maintenance(raw: &RawMaintenance, now_ms: i64) -> Option<MaintenanceHint> {
+    let allowed = [
+        sift_apps::ACTION_CLEAN_CACHE,
+        sift_apps::ACTION_PRUNE_STORE,
+        sift_apps::ACTION_DEDUPE,
+        sift_apps::ACTION_REMOVE_ORPHAN,
+        sift_apps::ACTION_REMOVE_OLD_VERSION,
+        sift_apps::ACTION_VERIFY_INTEGRITY,
+    ];
+    if !allowed.contains(&raw.action.as_str()) {
+        return None;
+    }
+    let subject = raw.subject.trim();
+    if !(subject.starts_with("pm:") || subject.starts_with("app:") || subject.starts_with("project:")) {
+        return None;
+    }
+    let reason = Reason::sanitized_text(&raw.reason)?;
+    let impact = Reason::sanitized_text(&raw.impact)?;
+    Some(MaintenanceHint {
+        id: format!("{subject}:{}", raw.action),
+        subject: subject.to_string(),
+        action: raw.action.clone(),
+        status: HintStatus::Proposed,
+        source: HintSource::Model,
+        confidence: clamp_confidence(raw.confidence),
+        reason_key: String::new(),
+        impact_key: String::new(),
+        model_reason: Some(reason.describe()),
+        model_impact: Some(impact.describe()),
+        requires_admin: false,
+        pm_version: None,
+        created_at_ms: now_ms,
+        last_seen_ms: now_ms,
+        success_count: 0,
+        failure_count: 0,
+        last_validated_ms: None,
+    })
+    // Note: the reason/impact are stored as `model_reason`; the UI renders
+    // them as text, while local hints keep stable i18n keys.
 }
 
 /// How much authority a remote adjudicator is granted.
@@ -615,6 +693,8 @@ pub struct AnalysisReport {
     pub source_counts: BTreeMap<String, usize>,
     /// Candidates whose batch failed and were left unjudged.
     pub unjudged: usize,
+    /// Optional maintenance suggestions returned by a remote adjudicator.
+    pub maintenance: Vec<MaintenanceHint>,
 }
 
 impl AnalysisReport {
@@ -635,6 +715,7 @@ impl AnalysisReport {
             finished_at_ms,
             source_counts,
             unjudged,
+            maintenance: Vec::new(),
         }
     }
 
@@ -964,6 +1045,39 @@ mod tests {
         assert!(verdicts
             .iter()
             .all(|verdict| !verdict.is_automatically_removable(&ConfidencePolicy::default())));
+    }
+
+    #[test]
+    fn model_maintenance_is_closed_and_proposed() {
+        let raw = RawMaintenance {
+            subject: "pm:pnpm".into(),
+            action: sift_apps::ACTION_PRUNE_STORE.into(),
+            confidence: 0.9,
+            reason: "Store has old packages".into(),
+            impact: "Re-download on next install".into(),
+        };
+        let hint = sanitize_maintenance(&raw, 7).expect("hint");
+        assert_eq!(hint.status, HintStatus::Proposed);
+        assert_eq!(hint.source, HintSource::Model);
+        assert_eq!(hint.model_reason.as_deref(), Some("Store has old packages"));
+        assert_eq!(hint.model_impact.as_deref(), Some("Re-download on next install"));
+
+        let mut invalid = raw.clone();
+        invalid.action = "runShell".into();
+        assert!(sanitize_maintenance(&invalid, 7).is_none());
+
+        let mut invalid = raw;
+        invalid.subject = "root".into();
+        assert!(sanitize_maintenance(&invalid, 7).is_none());
+    }
+
+    #[test]
+    fn parse_raw_response_keeps_maintenance() {
+        let text = r#"{"verdicts":[{"id":"a","safety":"review","confidence":0.5,"reason":"r","impact":"i"}],"maintenance":[{"subject":"pm:pnpm","action":"pruneStore","confidence":0.8,"reason":"r","impact":"i"}]}"#;
+        let (verdicts, maintenance) = parse_raw_response(text).unwrap();
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(maintenance.len(), 1);
+        assert_eq!(maintenance[0].action, "pruneStore");
     }
 
     #[test]

@@ -53,10 +53,18 @@ pub struct MaintenanceHint {
     /// Model-provided sentence, if any. Local hints leave this empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_impact: Option<String>,
     pub requires_admin: bool,
     pub pm_version: Option<String>,
     pub created_at_ms: i64,
     pub last_seen_ms: i64,
+    #[serde(default)]
+    pub success_count: u32,
+    #[serde(default)]
+    pub failure_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_validated_ms: Option<i64>,
 }
 
 /// Deterministic hints for the detected package managers. Conservative: one or
@@ -112,10 +120,14 @@ fn hint_for(pm: &PmFact, now: i64) -> Option<MaintenanceHint> {
         reason_key: reason_key.to_string(),
         impact_key: impact_key.to_string(),
         model_reason: None,
+        model_impact: None,
         requires_admin: matches!(pm.id.as_str(), "snap" | "flatpak"),
         pm_version: pm.version.clone(),
         created_at_ms: now,
         last_seen_ms: now,
+        success_count: 0,
+        failure_count: 0,
+        last_validated_ms: None,
     })
 }
 

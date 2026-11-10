@@ -123,6 +123,8 @@ pub fn run() {
             apps::plan_app_uninstall,
             apps::execute_app_uninstall,
             apps::restore_app_uninstall,
+            apps::plan_pm_action,
+            apps::run_pm_action,
             ai_routine::save_routine_draft,
             analyze::set_finding_dismissed,
             cleanup_rules::list_cleanup_rules,
@@ -154,6 +156,7 @@ pub fn run() {
         .setup(|app| {
             startup_trace::mark("setup:enter");
             schedule::start(app.handle());
+            apps::start_environment_watch(app.handle().clone());
 
             // Closing the window keeps the app in the tray; the tray menu's
             // quit is the real exit.

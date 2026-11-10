@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-11
+
+### Added
+
+- Full app uninstall flow in the UI: build a plan, choose artifacts, move them to Sift's quarantine and restore them later.
+- Shared-path detection: a path used by another installed app is downgraded from auto-safe to review and labeled in the plan.
+- Homebrew Cask `zap` recipes: the planner probes the installed cask on demand, parses its trash/rmdir/delete entries and merges them into the plan.
+- Package-manager action runner: a closed command catalog (`brew cleanup`, `pnpm store prune`, `npm cache verify`, `pip cache purge`, ...), no shell, static arguments and a timeout. Every run requires confirmation and updates the hint lifecycle.
+- Model maintenance suggestions: the prompt can request a `maintenance` array; answers are parsed, restricted to the closed action vocabulary and stored as `Proposed` hints.
+- Linux app inventory from `.desktop` entries (including flatpak exports) and Windows app inventory from the registry uninstall keys.
+- Event-driven environment invalidation: a watcher on the application directories marks the five-minute cache dirty when apps are installed or removed.
+
+### Changed
+
+- Maintenance hints now carry model reason/impact text, success/failure counts and a last-validated timestamp.
+- Successful package-manager actions move the matching hint to `Validated`; failures move it to `Stale`.
+- The uninstall planner merges recipe evidence with conventional paths and keeps the stronger source.
+
+### Known limitations
+
+- Windows registry and Linux `.desktop` inventory are best-effort and not exercised on those platforms by CI; macOS remains the primary target.
+- The package-manager runner covers a conservative subset of actions; project-scoped commands and system package managers are not runnable from the UI.
+- Homebrew zap lookup guesses the cask slug from the app name and only covers installed casks.
+- System-scope and admin-only uninstall artifacts are shown but not executed.
+- The environment watcher is non-recursive on the application directories and uses a dirty flag, not a full event pipeline.
+
 ## [0.3.0] - 2026-11-10
 
 ### Added

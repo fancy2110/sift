@@ -6,10 +6,38 @@
   import { onMount } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import { t } from '../lib/i18n.svelte';
+  import AppUninstallDialog from '../lib/components/AppUninstallDialog.svelte';
+  import { runPmAction } from '../lib/ipc';
+  import type { AppFact, MaintenanceHint } from '../lib/types';
 
   onMount(() => {
     void store.loadEnvironment();
   });
+
+  let uninstallApp = $state<AppFact | null>(null);
+  let runningHint = $state<string | null>(null);
+
+  async function runHint(hint: MaintenanceHint) {
+    const pmId = hint.subject.startsWith('pm:') ? hint.subject.slice(3) : '';
+    if (!pmId) return;
+    if (!confirm(t('env.runConfirm', [hint.action, pmId]))) return;
+    runningHint = hint.id;
+    try {
+      const report = await runPmAction(pmId, hint.action);
+      if (report.success) {
+        store.toast(t('env.runOk', [hint.action]), 'success');
+      } else {
+        store.toast(
+          t('env.runFail', [hint.action, report.stderr.trim() || String(report.exitCode ?? '')]),
+          'error'
+        );
+      }
+    } catch (cause) {
+      store.toast(t('env.runFail', [hint.action, String(cause)]), 'error');
+    } finally {
+      runningHint = null;
+    }
+  }
 
   function ago(ts: number): string {
     const d = Math.round((Date.now() - ts) / 86400000);
@@ -189,6 +217,13 @@
               <div class="env-row">
                 <span class="env-name">{app.name}</span>
                 <span class="num env-meta">{app.version ?? '—'}</span>
+                <button
+                  class="btn btn-quiet env-action"
+                  type="button"
+                  onclick={() => (uninstallApp = app)}
+                >
+                  {t('env.manage')}
+                </button>
               </div>
             {:else}
               <p class="empty">{t('env.empty')}</p>
@@ -209,8 +244,21 @@
             <h3 class="env-head">{t('env.hints')}</h3>
             {#each store.environment.hints.slice(0, 6) as hint (hint.id)}
               <div class="env-row">
-                <span class="env-name">{hint.subject} · {hint.action}</span>
+                <span class="env-name">
+                  {hint.subject} · {hint.action}
+                  {#if hint.source === 'model'}<span class="chip env-ai">{t('env.modelHint')}</span>{/if}
+                </span>
                 <span class="chip">{t(`env.status.${hint.status}`)}</span>
+                {#if hint.subject.startsWith('pm:')}
+                  <button
+                    class="btn btn-quiet env-action"
+                    type="button"
+                    disabled={runningHint === hint.id}
+                    onclick={() => runHint(hint)}
+                  >
+                    {t('env.run')}
+                  </button>
+                {/if}
               </div>
             {:else}
               <p class="empty">{t('env.empty')}</p>
@@ -221,6 +269,14 @@
         <p class="empty">{store.environmentLoading ? t('env.loading') : t('env.empty')}</p>
       {/if}
     </section>
+
+    {#if uninstallApp}
+      <AppUninstallDialog
+        appKey={uninstallApp.key}
+        appName={uninstallApp.name}
+        onClose={() => (uninstallApp = null)}
+      />
+    {/if}
   </div>
 </div>
 
@@ -535,6 +591,16 @@
   .env-meta {
     color: var(--color-faint);
     flex: none;
+  }
+  .env-action {
+    flex: none;
+    padding: 2px 8px;
+    font-size: 11px;
+  }
+  .env-ai {
+    margin-left: 6px;
+    font-size: 10px;
+    color: var(--color-accent);
   }
 
 </style>

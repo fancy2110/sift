@@ -52,6 +52,11 @@ pub trait RemoteAdjudicator: Send + Sync {
         let _ = context;
         self.adjudicate_remote(batch, guardrails, now_ms)
     }
+
+    /// Drain maintenance suggestions collected by the remote implementation.
+    fn take_maintenance_hints(&self) -> Vec<sift_apps::MaintenanceHint> {
+        Vec::new()
+    }
 }
 
 /// Splits a batch between the local rules and an optional remote provider.
@@ -130,6 +135,13 @@ where
         context: Option<&ScanContext>,
     ) -> Result<Vec<Verdict>, AdjudicateError> {
         self.route(batch, now_ms, context)
+    }
+
+    fn take_maintenance_hints(&self) -> Vec<sift_apps::MaintenanceHint> {
+        self.remote
+            .as_ref()
+            .map(|remote| remote.take_maintenance_hints())
+            .unwrap_or_default()
     }
 }
 

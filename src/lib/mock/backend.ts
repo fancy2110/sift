@@ -755,6 +755,62 @@ export function createMockBackend(bus: EventBus): MockBackend {
             warnings: ['warn.reviewRemoval']
           } as unknown as T);
           break;
+        case 'execute_app_uninstall': {
+          const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
+          const appKey = String(args.appKey ?? '');
+          const app = String(args.appKey ?? '').startsWith('com.example.player') ? 'Player' : 'Notes';
+          resolve({
+            schemaVersion: 1,
+            id: `manifest-${Date.now()}`,
+            appKey,
+            appName: app,
+            createdAtMs: Date.now(),
+            quarantineRoot: '~/Library/Application Support/Sift/Quarantine/manifest',
+            entries: paths.map((path, index) => ({
+              original: path,
+              stored: `payload/${index}-item`,
+              isDir: true
+            }))
+          } as unknown as T);
+          break;
+        }
+        case 'restore_app_uninstall':
+          resolve({
+            restored: ['/Users/demo/Library/Caches/com.example.notes'],
+            skipped: []
+          } as unknown as T);
+          break;
+        case 'plan_pm_action': {
+          const pmId = String(args.pmId ?? '');
+          const action = String(args.action ?? '');
+          if (pmId !== 'pnpm' || action !== 'pruneStore') {
+            resolve(null as unknown as T);
+            break;
+          }
+          resolve({
+            pmId,
+            action,
+            program: 'pnpm',
+            args: ['store', 'prune'],
+            scope: 'global',
+            requiresAdmin: false,
+            destructiveness: 'safe',
+            reasonKey: 'maintenance.pm.pruneStore.reason',
+            impactKey: 'maintenance.pm.pruneStore.impact'
+          } as unknown as T);
+          break;
+        }
+        case 'run_pm_action':
+          resolve({
+            pmId: String(args.pmId ?? ''),
+            action: String(args.action ?? ''),
+            success: true,
+            exitCode: 0,
+            durationMs: 420,
+            stdout: 'Pruned store',
+            stderr: ''
+          } as unknown as T);
+          break;
         case 'list_cleanable':
           resolve([...state.cleanable.values()] as unknown as T);
           break;
