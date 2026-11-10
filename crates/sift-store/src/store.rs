@@ -360,6 +360,18 @@ impl Store {
         self.inner.lock().unwrap().environment.clone()
     }
 
+    /// Move one maintenance hint through its lifecycle.
+    pub fn set_hint_status(&self, id: &str, status: sift_apps::HintStatus) -> bool {
+        let changed = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.environment.set_status(id, status)
+        };
+        if changed {
+            self.dirty.store(true, Ordering::Relaxed);
+        }
+        changed
+    }
+
     /// Replace the snapshot and merge hints, marking vanished proposals stale.
     pub fn record_environment(
         &self,

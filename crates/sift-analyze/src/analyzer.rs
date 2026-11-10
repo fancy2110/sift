@@ -379,7 +379,9 @@ impl Analyzer {
 
         let finished_at_ms = now_ms;
         on_progress(AnalysisStage::Done, 1, 1);
-        AnalysisReport::new(items, now_ms, finished_at_ms)
+        let mut report = AnalysisReport::new(items, now_ms, finished_at_ms);
+        report.maintenance = adjudicator.take_maintenance_hints();
+        report
     }
 }
 

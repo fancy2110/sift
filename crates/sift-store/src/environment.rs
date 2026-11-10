@@ -34,6 +34,21 @@ impl Default for EnvironmentDoc {
 }
 
 impl EnvironmentDoc {
+    /// Move one hint to a new lifecycle state; returns whether it existed.
+    pub fn set_status(&mut self, id: &str, status: HintStatus) -> bool {
+        let Some(hint) = self.hints.iter_mut().find(|hint| hint.id == id) else {
+            return false;
+        };
+        hint.status = status;
+        if status == HintStatus::Validated {
+            hint.success_count = hint.success_count.saturating_add(1);
+            hint.last_validated_ms = Some(self.updated_at_ms);
+        } else if status == HintStatus::Rejected {
+            hint.failure_count = hint.failure_count.saturating_add(1);
+        }
+        true
+    }
+
     /// Replace the snapshot and merge hints by id.
     ///
     /// - A validated/rejected hint keeps its state across rescans; only its
@@ -52,6 +67,8 @@ impl EnvironmentDoc {
                     existing.pm_version = fresh.pm_version.clone();
                     existing.reason_key = fresh.reason_key.clone();
                     existing.impact_key = fresh.impact_key.clone();
+                    existing.model_reason = fresh.model_reason.clone();
+                    existing.model_impact = fresh.model_impact.clone();
                 }
                 None => {
                     if matches!(existing.status, HintStatus::Proposed) {
@@ -99,10 +116,14 @@ mod tests {
             reason_key: "reason".to_string(),
             impact_key: "impact".to_string(),
             model_reason: None,
+            model_impact: None,
             requires_admin: false,
             pm_version: Some("1.0".to_string()),
             created_at_ms: 1,
             last_seen_ms: 1,
+            success_count: 0,
+            failure_count: 0,
+            last_validated_ms: None,
         }
     }
 

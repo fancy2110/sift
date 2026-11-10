@@ -85,7 +85,10 @@ Rules:\n\
 regenerated after deletion (which app must rebuild, which data is unrecoverable).\n\
 - Do not propose shell commands: the app attaches the correct cleanup command.\n\
 - Judge only what you are given. You cannot see file contents; do not imply that you did.\n\
-- Return one element per item, using the exact ids given.\n\n\
+- Return one element per item, using the exact ids given.\n\
+- Optionally include a \"maintenance\" array for package managers present in the environment: \
+each element is {{\"subject\": \"pm:<id>\", \"action\": one of cleanCache|pruneStore|dedupe|removeOrphan|removeOldVersion|verifyIntegrity, \
+\"confidence\": number 0..1, \"reason\": string, \"impact\": string}}. Omit it when unsure; never invent a manager.\n\n\
 {guide}\n\
 {context_guide}",
         language = language,

@@ -12,7 +12,11 @@ import type {
   StoreWarning,
   VolumeInfo,
   EnvironmentSummary,
-  AppUninstallPlan
+  AppUninstallPlan,
+  UninstallManifest,
+  RestoreReport,
+  PmActionPlan,
+  PmRunReport
 } from './types';
 
 // ---- transport selection ----------------------------------------------------
@@ -68,6 +72,25 @@ export function refreshEnvironment(): Promise<EnvironmentSummary> {
 
 export function planAppUninstall(appKey: string): Promise<AppUninstallPlan> {
   return call<AppUninstallPlan>('plan_app_uninstall', { appKey });
+}
+
+export function executeAppUninstall(
+  appKey: string,
+  paths: string[]
+): Promise<UninstallManifest> {
+  return call<UninstallManifest>('execute_app_uninstall', { appKey, paths });
+}
+
+export function restoreAppUninstall(manifestId: string): Promise<RestoreReport> {
+  return call<RestoreReport>('restore_app_uninstall', { manifestId });
+}
+
+export function planPmAction(pmId: string, action: string): Promise<PmActionPlan | null> {
+  return call<PmActionPlan | null>('plan_pm_action', { pmId, action });
+}
+
+export function runPmAction(pmId: string, action: string): Promise<PmRunReport> {
+  return call<PmRunReport>('run_pm_action', { pmId, action });
 }
 
 // ---- commands: volumes & scanning ------------------------------------------

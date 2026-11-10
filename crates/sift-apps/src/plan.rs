@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::context::AppFact;
+use crate::recipes::RecipeArtifact;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +19,7 @@ pub enum ArtifactKind {
     Cache,
     Preferences,
     Container,
+    GroupContainer,
     SavedState,
     Log,
     LaunchAgent,
@@ -52,7 +54,10 @@ pub struct UninstallArtifact {
     pub exists: bool,
     pub size_bytes: Option<u64>,
     pub requires_admin: bool,
-    /// Why it is in the plan: `bundle`, `convention`, `user`, ...
+    /// Other installed apps that also appear to use this path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared_with: Vec<String>,
+    /// Why it is in the plan: `bundle`, `convention`, `recipe:homebrew`, `user`.
     pub source: String,
 }
 
@@ -70,6 +75,25 @@ pub struct AppUninstallPlan {
 /// kept in the plan with `exists: false` only for the app bundle itself; other
 /// missing locations are omitted so the UI does not show noise.
 pub fn plan_uninstall(app: &AppFact, home: &Path) -> AppUninstallPlan {
+    plan_uninstall_with_apps(app, home, &[])
+}
+
+/// Build a plan and mark paths that another installed app appears to share.
+pub fn plan_uninstall_with_apps(
+    app: &AppFact,
+    home: &Path,
+    all_apps: &[AppFact],
+) -> AppUninstallPlan {
+    plan_uninstall_with_recipes(app, home, all_apps, &[])
+}
+
+/// Build a plan and merge curated recipe paths (currently Homebrew cask zap).
+pub fn plan_uninstall_with_recipes(
+    app: &AppFact,
+    home: &Path,
+    all_apps: &[AppFact],
+    recipes: &[RecipeArtifact],
+) -> AppUninstallPlan {
     let bundle = path_from_display(&app.install_path, home);
     let bundle_id = app.bundle_id.as_deref();
     let name = &app.name;
@@ -141,6 +165,12 @@ pub fn plan_uninstall(app: &AppFact, home: &Path) -> AppUninstallPlan {
             continue;
         }
         let size = if exists { size_of(&path) } else { None };
+        let shared_with = shared_with(&path, app, all_apps);
+        let disposition = if !shared_with.is_empty() && disposition == Disposition::AutoSafe {
+            Disposition::Review
+        } else {
+            disposition
+        };
         total = total.saturating_add(size.unwrap_or(0));
         artifacts.push(UninstallArtifact {
             path,
@@ -150,12 +180,50 @@ pub fn plan_uninstall(app: &AppFact, home: &Path) -> AppUninstallPlan {
             exists,
             size_bytes: size,
             requires_admin: false,
+            shared_with,
             source: if kind == ArtifactKind::Bundle {
                 "bundle"
             } else {
                 "convention"
             }
             .to_string(),
+        });
+    }
+
+    for recipe in recipes {
+        if let Some(existing) = artifacts
+            .iter_mut()
+            .find(|artifact| artifact.path == recipe.path)
+        {
+            // A recipe is stronger evidence than a convention; keep the
+            // existing disposition/size but credit the source.
+            existing.source = recipe.source.clone();
+            continue;
+        }
+        if !seen.insert(recipe.path.clone()) {
+            continue;
+        }
+        let exists = recipe.path.exists();
+        let size = if exists { size_of(&recipe.path) } else { None };
+        let shared_with = shared_with(&recipe.path, app, all_apps);
+        let disposition = match recipe.kind {
+            ArtifactKind::Cache | ArtifactKind::SavedState if shared_with.is_empty() => {
+                Disposition::AutoSafe
+            }
+            ArtifactKind::GroupContainer => Disposition::Keep,
+            _ => Disposition::Review,
+        };
+        total = total.saturating_add(size.unwrap_or(0));
+        artifacts.push(UninstallArtifact {
+            path: recipe.path.clone(),
+            kind: recipe.kind,
+            scope: ArtifactScope::User,
+            disposition,
+            exists,
+            size_bytes: size,
+            requires_admin: false,
+            shared_with,
+            source: recipe.source.clone(),
         });
     }
 
@@ -174,6 +242,26 @@ pub fn plan_uninstall(app: &AppFact, home: &Path) -> AppUninstallPlan {
         total_bytes: total,
         warnings,
     }
+}
+
+fn shared_with(path: &Path, app: &AppFact, all_apps: &[AppFact]) -> Vec<String> {
+    let haystack = path.to_string_lossy().to_ascii_lowercase();
+    let mut shared = Vec::new();
+    for other in all_apps {
+        if other.key == app.key {
+            continue;
+        }
+        let name = other.name.trim().to_ascii_lowercase();
+        let bundle_match = other
+            .bundle_id
+            .as_deref()
+            .is_some_and(|id| haystack.contains(&id.to_ascii_lowercase()));
+        let name_match = name.len() >= 3 && haystack.contains(&name);
+        if bundle_match || name_match {
+            shared.push(other.key.clone());
+        }
+    }
+    shared
 }
 
 fn path_from_display(text: &str, home: &Path) -> PathBuf {
@@ -271,6 +359,45 @@ mod tests {
             .expect("support artifact");
         assert_eq!(support.disposition, Disposition::Review);
         assert!(plan.total_bytes >= 100);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn shared_paths_are_downgraded_to_review() {
+        let home = temp_home("shared");
+        std::fs::create_dir_all(home.join("Library/Caches/com.example.app")).unwrap();
+        let current = app("Example", "com.example.app");
+        let other = app("Example Helper", "com.example");
+        let plan = plan_uninstall_with_apps(&current, &home, &[current.clone(), other]);
+        let cache = plan
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == ArtifactKind::Cache && artifact.exists)
+            .expect("cache");
+        assert_eq!(cache.disposition, Disposition::Review);
+        assert!(!cache.shared_with.is_empty());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn recipe_paths_are_merged_and_deduped() {
+        let home = temp_home("recipe");
+        let cache = home.join("Library/Caches/com.example.app");
+        std::fs::create_dir_all(&cache).unwrap();
+        let app = app("Example", "com.example.app");
+        let recipe = crate::recipes::RecipeArtifact {
+            path: cache.clone(),
+            kind: ArtifactKind::Cache,
+            source: "recipe:homebrew".into(),
+        };
+        let plan = plan_uninstall_with_recipes(&app, &home, &[], &[recipe]);
+        let matches: Vec<_> = plan
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.path == cache)
+            .collect();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].source, "recipe:homebrew");
         let _ = std::fs::remove_dir_all(&home);
     }
 

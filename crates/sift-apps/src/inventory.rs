@@ -202,10 +202,163 @@ fn detect_apps(home: Option<&Path>) -> Vec<AppFact> {
     apps
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn detect_apps(home: Option<&Path>) -> Vec<AppFact> {
+    let mut dirs = vec![
+        PathBuf::from("/usr/share/applications"),
+        PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+    ];
+    if let Some(home) = home {
+        dirs.push(home.join(".local/share/applications"));
+        dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
+    }
+    let mut apps = Vec::new();
+    let mut seen = BTreeSet::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "desktop") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let mut name = None;
+            let mut flatpak = None;
+            let mut no_display = false;
+            for line in text.lines() {
+                let line = line.trim();
+                if let Some(value) = line.strip_prefix("Name=") {
+                    name.get_or_insert_with(|| value.trim().to_string());
+                } else if let Some(value) = line.strip_prefix("X-Flatpak=") {
+                    flatpak = Some(value.trim().to_string());
+                } else if line.eq_ignore_ascii_case("NoDisplay=true") {
+                    no_display = true;
+                }
+            }
+            if no_display {
+                continue;
+            }
+            let Some(name) = name else {
+                continue;
+            };
+            let key = flatpak.unwrap_or_else(|| {
+                path.file_stem()
+                    .map(|stem| format!("desktop:{}", stem.to_string_lossy()))
+                    .unwrap_or_else(|| format!("desktop:{}", path.display()))
+            });
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            apps.push(AppFact {
+                key,
+                name,
+                version: None,
+                bundle_id: None,
+                install_path: redact_path(&path, home),
+                last_used_days: None,
+                artifact_count: 0,
+            });
+            if apps.len() >= MAX_APPS {
+                return apps;
+            }
+        }
+    }
+    apps
+}
+
+#[cfg(windows)]
+fn detect_apps(home: Option<&Path>) -> Vec<AppFact> {
+    // Registry is the canonical uninstall list on Windows. `reg query /s` is
+    // used instead of a new dependency; output is treated as best-effort text.
+    let mut apps = Vec::new();
+    let mut seen = BTreeSet::new();
+    for root in [
+        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    ] {
+        let Ok(output) = Command::new("reg")
+            .args(["query", root, "/s"])
+            .stdin(Stdio::null())
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut current_key = String::new();
+        let mut name = None;
+        let mut version = None;
+        let mut location = None;
+        let mut flush = |key: &str,
+                         name: &Option<String>,
+                         version: &Option<String>,
+                         location: &Option<String>| {
+            let Some(name) = name else {
+                return None;
+            };
+            if !seen.insert(key.to_string()) {
+                return None;
+            }
+            Some(AppFact {
+                key: format!("registry:{key}"),
+                name: name.clone(),
+                version: version.clone(),
+                bundle_id: None,
+                install_path: location
+                    .as_deref()
+                    .map(|path| redact_path(Path::new(path), home))
+                    .unwrap_or_default(),
+                last_used_days: None,
+                artifact_count: 0,
+            })
+        };
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("HKEY_") {
+                if let Some(app) = flush(&current_key, &name, &version, &location) {
+                    apps.push(app);
+                    if apps.len() >= MAX_APPS {
+                        return apps;
+                    }
+                }
+                current_key = trimmed.to_string();
+                name = None;
+                version = None;
+                location = None;
+            } else if let Some(value) = trimmed.strip_prefix("DisplayName") {
+                name = registry_value(value);
+            } else if let Some(value) = trimmed.strip_prefix("DisplayVersion") {
+                version = registry_value(value);
+            } else if let Some(value) = trimmed.strip_prefix("InstallLocation") {
+                location = registry_value(value);
+            }
+        }
+        if let Some(app) = flush(&current_key, &name, &version, &location) {
+            apps.push(app);
+        }
+    }
+    apps
+}
+
+#[cfg(windows)]
+fn registry_value(line: &str) -> Option<String> {
+    let value = line.split_once("REG_SZ").map(|(_, value)| value.trim())?;
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn detect_apps(_home: Option<&Path>) -> Vec<AppFact> {
-    // Linux/Windows inventory is a follow-up; the context shape is already
-    // stable, so callers and prompts do not need to change.
     Vec::new()
 }
 

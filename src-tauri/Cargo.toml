@@ -35,6 +35,7 @@ serde_json = { workspace = true }
 dirs = "6"
 chrono = "0.4"
 regex = "1"
+notify = { workspace = true }
 
 [features]
 default = ["remote-ai"]
