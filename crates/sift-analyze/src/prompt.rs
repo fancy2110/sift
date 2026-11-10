@@ -14,6 +14,14 @@
 
 use crate::candidate::Candidate;
 
+/// Family-specific triage guidance, embedded at compile time.
+///
+/// Kept as a separate markdown asset so the policy can be reviewed and diffed
+/// like code, while the JSON contract above stays small and stable. It only
+/// covers the families that are model-adjudicable; structural families never
+/// reach a model.
+const TRIAGE_GUIDE: &str = include_str!("../prompts/triage.md");
+
 /// One candidate as the model sees it. A dedicated projection so adding a field
 /// to [`Candidate`] can never silently enlarge the payload.
 #[derive(serde::Serialize)]
@@ -53,8 +61,10 @@ Rules:\n\
 regenerated after deletion (which app must rebuild, which data is unrecoverable).\n\
 - Do not propose shell commands: the app attaches the correct cleanup command.\n\
 - Judge only what you are given. You cannot see file contents; do not imply that you did.\n\
-- Return one element per item, using the exact ids given.",
-        language = language
+- Return one element per item, using the exact ids given.\n\n\
+{guide}",
+        language = language,
+        guide = TRIAGE_GUIDE
     );
 
     let items: Vec<PromptItem<'_>> = batch
@@ -107,6 +117,31 @@ mod tests {
         assert!(system.contains("\"impact\""));
         assert!(system.contains("verdicts"));
         assert!(system.contains("Do not propose shell commands"));
+    }
+
+    #[test]
+    fn prompt_includes_family_specific_triage_guidance() {
+        let (system, _user) = build_at(&[candidate("~/Downloads/x.dmg")], "zh", 0);
+        for family in [
+            "staleLargeFile",
+            "archive",
+            "packageInstaller",
+            "duplicateGroup",
+        ] {
+            assert!(
+                system.contains(family),
+                "system prompt is missing {family} guidance"
+            );
+        }
+        assert!(
+            system.contains("Never answer `safe` for this family"),
+            "duplicate groups must never be model-authorized safe"
+        );
+        assert!(
+            system.contains("at least 0.85"),
+            "the confident-safe threshold must be stated"
+        );
+        assert!(system.len() > 2_000, "triage guidance was not embedded");
     }
 
     #[test]

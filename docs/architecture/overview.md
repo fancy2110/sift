@@ -134,6 +134,8 @@ macOS 快路径的解析器严格按 `ATTR_CMN_RETURNED_ATTRS` 的**升序位**�
 - 模型说 `Safe` 时，必须同时满足：该家族允许模型授权、策略未全局关闭、且置信度 ≥ 远程阈值（默认 0.85）——否则降级为 `Review`；
 - 编造的 id 被丢弃；漏答的条目变成 `Review`；批量失败也变成 `Review`（网络问题只会让分析**退化**，不会让它越权）。
 
+模型侧的分家族判定细则放在 `crates/sift-analyze/prompts/triage.md`，编译期通过 `include_str!` 嵌入 system prompt。它只覆盖四个可送模型的 family（`staleLargeFile`、`archive`、`packageInstaller`、`duplicateGroup`），并明确：`duplicateGroup` 永远不能由模型授权 `safe`，置信度低于 0.85 的 `safe` 会被降级为 `Review`。
+
 ### 4.4 隐私边界
 
 - 只发送：脱敏路径（`~/Downloads/x.dmg`）、是否目录、大小、天数、家族、命中的规则信号；
