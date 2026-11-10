@@ -10,7 +10,9 @@ import type {
   Routine,
   RoutineSuggestion,
   StoreWarning,
-  VolumeInfo
+  VolumeInfo,
+  EnvironmentSummary,
+  AppUninstallPlan
 } from './types';
 
 // ---- transport selection ----------------------------------------------------
@@ -52,6 +54,20 @@ async function subscribe<T>(event: string, cb: (payload: T) => void): Promise<Un
   }
   const bus = await ensureBus();
   return bus.listen<T>(event, cb) as unknown as UnlistenFn;
+}
+
+// ---- commands: environment -------------------------------------------------
+
+export function environmentSummary(): Promise<EnvironmentSummary> {
+  return call<EnvironmentSummary>('environment_summary');
+}
+
+export function refreshEnvironment(): Promise<EnvironmentSummary> {
+  return call<EnvironmentSummary>('refresh_environment');
+}
+
+export function planAppUninstall(appKey: string): Promise<AppUninstallPlan> {
+  return call<AppUninstallPlan>('plan_app_uninstall', { appKey });
 }
 
 // ---- commands: volumes & scanning ------------------------------------------

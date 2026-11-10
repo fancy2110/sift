@@ -18,11 +18,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use sift_apps::ScanContext;
 use sift_core::deletable::classify;
 use sift_core::{ByteSize, ScanTree};
 use sift_platform::dir::DirReader;
 
-use crate::adjudicate::{adjudicate_all, Adjudicator, AnalysisReport, AnalyzedItem};
+use crate::adjudicate::{adjudicate_all_with_context, Adjudicator, AnalysisReport, AnalyzedItem};
 use crate::candidate::{redact_path, Candidate, CandidateKind, Evidence};
 use crate::rules::{self, RuleThresholds};
 
@@ -326,6 +327,19 @@ impl Analyzer {
         adjudicator: &A,
         tree: &mut ScanTree,
         now_ms: i64,
+        on_progress: impl FnMut(AnalysisStage, usize, usize),
+    ) -> AnalysisReport {
+        self.analyze_with_context(adjudicator, tree, now_ms, None, on_progress)
+    }
+
+    /// [`Analyzer::analyze`] with the scan's environment snapshot. The context
+    /// is passed to the adjudicator; local rules still decide every candidate.
+    pub fn analyze_with_context<A: Adjudicator + ?Sized>(
+        &self,
+        adjudicator: &A,
+        tree: &mut ScanTree,
+        now_ms: i64,
+        context: Option<&ScanContext>,
         mut on_progress: impl FnMut(AnalysisStage, usize, usize),
     ) -> AnalysisReport {
         on_progress(AnalysisStage::DirectoryPass, 0, 1);
@@ -347,11 +361,12 @@ impl Analyzer {
 
         let total = candidates.len();
         on_progress(AnalysisStage::Adjudicating, 0, total.max(1));
-        let verdicts = adjudicate_all(
+        let verdicts = adjudicate_all_with_context(
             adjudicator,
             &candidates,
             self.policy.batch_size,
             now_ms,
+            context,
             |done, _| on_progress(AnalysisStage::Adjudicating, done, total.max(1)),
         );
         on_progress(AnalysisStage::Adjudicating, total, total.max(1));

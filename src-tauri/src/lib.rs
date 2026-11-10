@@ -7,6 +7,7 @@
 
 mod ai_explain;
 mod ai_routine;
+mod apps;
 mod explorer;
 mod analyze;
 mod cleanup;
@@ -117,6 +118,11 @@ pub fn run() {
             analyze::mark_path,
             analyze::ai_prompt,
             ai_routine::ai_routine,
+            apps::environment_summary,
+            apps::refresh_environment,
+            apps::plan_app_uninstall,
+            apps::execute_app_uninstall,
+            apps::restore_app_uninstall,
             ai_routine::save_routine_draft,
             analyze::set_finding_dismissed,
             cleanup_rules::list_cleanup_rules,

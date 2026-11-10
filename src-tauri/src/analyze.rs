@@ -200,12 +200,37 @@ pub(crate) fn analyze_current_with(
     let adjudicator = build_adjudicator(services);
     let used_remote = adjudicator.is_remote();
 
+    // Refresh the environment snapshot for this analysis. Inventory is bounded
+    // and read-only; a failure only leaves the context empty, never fails the
+    // analysis. A five-minute cache keeps repeated analyses from re-probing
+    // every app and package manager.
+    let roots: Vec<PathBuf> = manager.last_root().into_iter().collect();
+    let home = dirs_home();
+    let cached = services.store.environment();
+    let roots_redacted: Vec<String> = roots
+        .iter()
+        .map(|root| sift_apps::redact_path(root, home.as_deref()))
+        .collect();
+    let now = now_ms();
+    let use_cached = cached.updated_at_ms > 0
+        && now.saturating_sub(cached.updated_at_ms) < 5 * 60 * 1000
+        && cached.context.roots == roots_redacted
+        && !cached.context.is_empty();
+    let (context, hints) = if use_cached {
+        (cached.context, cached.hints)
+    } else {
+        let context = sift_apps::detect(&roots, home.as_deref());
+        let hints = sift_apps::hints_for(&context);
+        (context, hints)
+    };
+
     let mut report = {
         let mut guard = tree.lock().map_err(|err| err.to_string())?;
-        analyzer.analyze(
+        analyzer.analyze_with_context(
             &*adjudicator,
             &mut guard,
             now_ms(),
+            Some(&context),
             |_stage, _done, _total| {},
         )
     };
@@ -223,6 +248,7 @@ pub(crate) fn analyze_current_with(
 
     // Requirement 2: persist what is definitively cleanable plus the verdicts.
     services.store.record_analysis(&report, now_ms());
+    services.store.record_environment(context, hints, now_ms());
     let _ = services.store.flush_if_dirty();
 
     let cleanable = services.store.cleanable();

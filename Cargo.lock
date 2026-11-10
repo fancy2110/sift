@@ -3851,7 +3851,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sift"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -3859,6 +3859,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sift-analyze",
+ "sift-apps",
  "sift-core",
  "sift-monitor",
  "sift-platform",
@@ -3875,27 +3876,38 @@ dependencies = [
 
 [[package]]
 name = "sift-analyze"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
  "reqwest",
  "serde",
  "serde_json",
+ "sift-apps",
  "sift-core",
  "sift-platform",
 ]
 
 [[package]]
+name = "sift-apps"
+version = "0.3.0"
+dependencies = [
+ "dirs 6.0.0",
+ "serde",
+ "serde_json",
+ "sift-core",
+]
+
+[[package]]
 name = "sift-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "sift-monitor"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -3909,7 +3921,7 @@ dependencies = [
 
 [[package]]
 name = "sift-platform"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "crossbeam-channel",
  "libc",
@@ -3923,7 +3935,7 @@ dependencies = [
 
 [[package]]
 name = "sift-scan"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "crossbeam-channel",
  "serde",
@@ -3933,13 +3945,14 @@ dependencies = [
 
 [[package]]
 name = "sift-store"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dirs 6.0.0",
  "rusqlite",
  "serde",
  "serde_json",
  "sift-analyze",
+ "sift-apps",
  "sift-core",
  "sift-scan",
  "tempfile",

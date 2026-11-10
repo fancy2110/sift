@@ -3,8 +3,13 @@
   import { formatSize } from '../lib/format';
   import Icon from '../lib/components/Icon.svelte';
   import { fly, fade } from 'svelte/transition';
+  import { onMount } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import { t } from '../lib/i18n.svelte';
+
+  onMount(() => {
+    void store.loadEnvironment();
+  });
 
   function ago(ts: number): string {
     const d = Math.round((Date.now() - ts) / 86400000);
@@ -154,6 +159,68 @@
         </div>
       </section>
     </div>
+
+    <section class="panel env-panel" in:fly={{ y: 18, duration: 480, delay: 220, easing: cubicOut }}>
+      <div class="panel-head">
+        <h2 class="section-title">{t('env.title')}</h2>
+        {#if store.environment}
+          <span class="chip">
+            {t('env.counts', [
+              store.environment.apps.length,
+              store.environment.packageManagers.length,
+              store.environment.projects.length
+            ])}
+          </span>
+        {/if}
+        <button
+          class="btn btn-quiet btn-sm"
+          onclick={() => store.loadEnvironment(true)}
+          disabled={store.environmentLoading}
+        >
+          {store.environmentLoading ? t('env.loading') : t('env.refresh')}
+        </button>
+      </div>
+
+      {#if store.environment}
+        <div class="env-grid">
+          <div class="env-col">
+            <h3 class="env-head">{t('env.apps')}</h3>
+            {#each store.environment.apps.slice(0, 6) as app (app.key)}
+              <div class="env-row">
+                <span class="env-name">{app.name}</span>
+                <span class="num env-meta">{app.version ?? '—'}</span>
+              </div>
+            {:else}
+              <p class="empty">{t('env.empty')}</p>
+            {/each}
+          </div>
+          <div class="env-col">
+            <h3 class="env-head">{t('env.packageManagers')}</h3>
+            {#each store.environment.packageManagers as pm (pm.id)}
+              <div class="env-row">
+                <span class="env-name">{pm.id}</span>
+                <span class="num env-meta">{pm.version ?? '—'}</span>
+              </div>
+            {:else}
+              <p class="empty">{t('env.empty')}</p>
+            {/each}
+          </div>
+          <div class="env-col">
+            <h3 class="env-head">{t('env.hints')}</h3>
+            {#each store.environment.hints.slice(0, 6) as hint (hint.id)}
+              <div class="env-row">
+                <span class="env-name">{hint.subject} · {hint.action}</span>
+                <span class="chip">{t(`env.status.${hint.status}`)}</span>
+              </div>
+            {:else}
+              <p class="empty">{t('env.empty')}</p>
+            {/each}
+          </div>
+        </div>
+      {:else}
+        <p class="empty">{store.environmentLoading ? t('env.loading') : t('env.empty')}</p>
+      {/if}
+    </section>
   </div>
 </div>
 
@@ -429,5 +496,45 @@
     .d-grid {
       grid-template-columns: 1fr;
     }
+    .env-grid {
+      grid-template-columns: 1fr;
+    }
   }
+  .env-panel {
+    margin-top: 14px;
+  }
+  .env-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 22px;
+    margin-top: 14px;
+  }
+  .env-head {
+    margin: 0 0 8px;
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+  .env-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid color-mix(in oklch, var(--color-border) 55%, transparent);
+    font-size: 12.5px;
+  }
+  .env-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .env-meta {
+    color: var(--color-faint);
+    flex: none;
+  }
+
 </style>

@@ -3,6 +3,8 @@ import { isTauri } from './runtime';
 import {
   aiPrompt as apiAiPrompt,
   analyzeCurrent,
+  environmentSummary as apiEnvironmentSummary,
+  refreshEnvironment as apiRefreshEnvironment,
   cancelCleanup,
   cancelScan,
   cleanPaths,
@@ -73,7 +75,8 @@ import type {
   Node,
   Routine,
   RoutineSuggestion,
-  VolumeInfo
+  VolumeInfo,
+  EnvironmentSummary
 } from './types';
 import { t, tr, renderStoreWarning, i18n } from './i18n.svelte';
 import { startupMark } from './startup';
@@ -108,6 +111,9 @@ class AppStore {
   settingsOpen = $state(false);
   /** AI provider configuration behind the settings sheet. */
   aiConfig = $state<AiConfig | null>(null);
+  /** Last environment snapshot (apps / package managers / maintenance hints). */
+  environment = $state<EnvironmentSummary | null>(null);
+  environmentLoading = $state(false);
 
   // ---- scan scopes ----
   volumes = $state<VolumeInfo[]>([]);
@@ -987,6 +993,8 @@ class AppStore {
     try {
       const summary = await analyzeCurrent();
       this.findings = summary.findings;
+      this.environment = null;
+      void this.loadEnvironment();
       this.routineSuggestions = await routineSuggestions();
 
       const next = new Set(this.selectedIds);
@@ -996,6 +1004,21 @@ class AppStore {
       this.selectedIds = next;
     } catch (error) {
       this.toastError(t('toast.analyzeFailed', [String(error)]));
+    }
+  }
+
+  /** Load the persisted environment snapshot; `force` re-runs inventory. */
+  async loadEnvironment(force = false) {
+    if (this.environment && !force) return;
+    this.environmentLoading = true;
+    try {
+      this.environment = force
+        ? await apiRefreshEnvironment()
+        : await apiEnvironmentSummary();
+    } catch {
+      this.environment = null;
+    } finally {
+      this.environmentLoading = false;
     }
   }
 

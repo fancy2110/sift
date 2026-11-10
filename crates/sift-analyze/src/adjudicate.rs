@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use crate::candidate::Candidate;
+use sift_apps::ScanContext;
 use crate::reason::{
     clamp_confidence, ConfidencePolicy, PathFingerprint, Reason, Safety, Verdict, VerdictSource,
 };
@@ -63,6 +64,22 @@ pub trait Adjudicator: Send + Sync {
         batch: &[Candidate],
         now_ms: i64,
     ) -> Result<Vec<Verdict>, AdjudicateError>;
+
+    /// Judge one batch with the scan's environment snapshot.
+    ///
+    /// The default forwards to [`Adjudicator::adjudicate_batch`], so local
+    /// adjudicators and tests are unaffected. A remote implementation uses the
+    /// context to explain candidates but must never let it widen what may be
+    /// transmitted or authorized.
+    fn adjudicate_batch_with_context(
+        &self,
+        batch: &[Candidate],
+        now_ms: i64,
+        context: Option<&ScanContext>,
+    ) -> Result<Vec<Verdict>, AdjudicateError> {
+        let _ = context;
+        self.adjudicate_batch(batch, now_ms)
+    }
 
     /// Whether this adjudicator transmits anything off the machine. The UI uses
     /// this to require explicit consent before the first run.
@@ -527,6 +544,19 @@ pub fn adjudicate_all<A: Adjudicator + ?Sized>(
     candidates: &[Candidate],
     batch_size: usize,
     now_ms: i64,
+    on_batch: impl FnMut(usize, usize),
+) -> Vec<Verdict> {
+    adjudicate_all_with_context(adjudicator, candidates, batch_size, now_ms, None, on_batch)
+}
+
+/// [`adjudicate_all`] with an optional environment snapshot for the remote
+/// adjudicator. Local adjudicators ignore it.
+pub fn adjudicate_all_with_context<A: Adjudicator + ?Sized>(
+    adjudicator: &A,
+    candidates: &[Candidate],
+    batch_size: usize,
+    now_ms: i64,
+    context: Option<&ScanContext>,
     mut on_batch: impl FnMut(usize, usize),
 ) -> Vec<Verdict> {
     let batch_size = batch_size.max(1);
@@ -535,7 +565,7 @@ pub fn adjudicate_all<A: Adjudicator + ?Sized>(
     for (index, chunk) in candidates.chunks(batch_size).enumerate() {
         let offset = index * batch_size;
         on_batch(offset.min(total), total);
-        match adjudicator.adjudicate_batch(chunk, now_ms) {
+        match adjudicator.adjudicate_batch_with_context(chunk, now_ms, context) {
             Ok(batch) if batch.len() == chunk.len() => verdicts.extend(batch),
             Ok(short) => {
                 // A short answer is treated as a failure, not padded silently.
@@ -934,6 +964,57 @@ mod tests {
         assert!(verdicts
             .iter()
             .all(|verdict| !verdict.is_automatically_removable(&ConfidencePolicy::default())));
+    }
+
+    #[test]
+    fn adjudicate_all_forwards_the_environment_context() {
+        use std::sync::{Arc, Mutex};
+
+        struct Spy(Arc<Mutex<Option<String>>>);
+        impl Adjudicator for Spy {
+            fn name(&self) -> &str {
+                "spy"
+            }
+            fn adjudicate_batch(
+                &self,
+                batch: &[Candidate],
+                now_ms: i64,
+            ) -> Result<Vec<Verdict>, AdjudicateError> {
+                Ok(batch.iter().map(|_| Verdict::unknown(now_ms)).collect())
+            }
+            fn adjudicate_batch_with_context(
+                &self,
+                batch: &[Candidate],
+                now_ms: i64,
+                context: Option<&ScanContext>,
+            ) -> Result<Vec<Verdict>, AdjudicateError> {
+                *self.0.lock().unwrap() = context.map(ScanContext::fingerprint);
+                Ok(batch.iter().map(|_| Verdict::unknown(now_ms)).collect())
+            }
+        }
+
+        let mut context = ScanContext::default();
+        context.apps.push(sift_apps::AppFact {
+            key: "com.example".into(),
+            name: "Example".into(),
+            version: Some("1.0".into()),
+            bundle_id: Some("com.example".into()),
+            install_path: "/Applications/Example.app".into(),
+            last_used_days: None,
+            artifact_count: 0,
+        });
+        let captured = Arc::new(Mutex::new(None));
+        let spy = Spy(Arc::clone(&captured));
+        let verdicts = adjudicate_all_with_context(
+            &spy,
+            &[candidate(CandidateKind::StaleLargeFile, "file.stale_large")],
+            1,
+            0,
+            Some(&context),
+            |_, _| {},
+        );
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(captured.lock().unwrap().as_deref(), Some(context.fingerprint().as_str()));
     }
 
     #[test]

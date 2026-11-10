@@ -12,12 +12,13 @@ members = [
     "crates/sift-platform",
     "crates/sift-scan",
     "crates/sift-analyze",
+    "crates/sift-apps",
     "crates/sift-store",
     "crates/sift-monitor",
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.85"
@@ -28,6 +29,7 @@ sift-core = { path = "crates/sift-core" }
 sift-platform = { path = "crates/sift-platform" }
 sift-scan = { path = "crates/sift-scan" }
 sift-analyze = { path = "crates/sift-analyze" }
+sift-apps = { path = "crates/sift-apps" }
 sift-store = { path = "crates/sift-store" }
 sift-monitor = { path = "crates/sift-monitor" }
 

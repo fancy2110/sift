@@ -106,10 +106,6 @@ fn normalize_cadence(raw: &str) -> String {
 /// Keep only absolute, existing directories inside the home directory.
 /// Expand a leading `~` so the model can name the home directory without
 /// knowing the account name.
-fn expand_tilde(raw: &str) -> Option<std::path::PathBuf> {
-    expand_tilde_in(raw, dirs::home_dir().as_deref())
-}
-
 fn expand_tilde_in(raw: &str, home: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
     if raw == "~" {
         return home.map(std::path::Path::to_path_buf);
