@@ -194,6 +194,7 @@ mod tests {
       }]
     }"#;
 
+    #[cfg(unix)]
     #[test]
     fn parses_trash_rmdir_and_delete() {
         let home = PathBuf::from("/Users/alice");
