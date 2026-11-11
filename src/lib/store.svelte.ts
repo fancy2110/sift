@@ -738,6 +738,20 @@ class AppStore {
    * Open the Explorer at a path (default: the scanned root, else the user's
    * home). Reading a directory does not require a completed scan.
    */
+  /**
+   * The scan tree already holds a rolled-up size for every directory it saw.
+   * Reuse it before walking the filesystem again; pending/denied nodes have no
+   * trustworthy total and fall back to the lazy walk.
+   */
+  private treeSize(path: string): number | undefined {
+    const id = this.pathToId.get(path);
+    if (!id) return undefined;
+    const node = this.nodeRecords.get(id);
+    if (!node || !node.isDir || node.pending) return undefined;
+    if (node.status !== 'ok' && node.status !== 'estimated') return undefined;
+    return node.size;
+  }
+
   /** Open a directory without requiring a scan (home when no path is given). */
   async openExplorer(path?: string) {
     const startPath = path ?? this.currentNode?.path ?? '';
@@ -754,13 +768,24 @@ class AppStore {
     } catch {
       entries = [];
     }
+    // Apply scan-tree totals before the first paint. This is the common case:
+    // the folder is already in the scanned tree, so the numbers are instant and
+    // no recursive walk is needed.
+    for (const entry of entries) {
+      if (!entry.isDir) continue;
+      const size = this.treeSize(entry.path);
+      if (size !== undefined) entry.size = size;
+    }
     this.explorerPath = resolved;
     this.explorerRightPath = resolved;
     this.explorerRight = entries;
     this.explorerRightLoading = false;
-    this.explorerTotal = null;
-    void this.loadExplorerTotal(resolved);
-    this.fillExplorerSizes(entries, () => {
+
+    const treeTotal = this.treeSize(resolved);
+    this.explorerTotal = treeTotal ?? null;
+    if (treeTotal === undefined) void this.loadExplorerTotal(resolved);
+
+    this.fillExplorerSizes(resolved, entries, () => {
       if (this.explorerRightPath === resolved) this.explorerRight = [...this.explorerRight];
     });
   }
@@ -792,6 +817,13 @@ class AppStore {
     const out = new Map<string, number>();
     const misses: string[] = [];
     for (const path of paths) {
+      if (!force) {
+        const tree = this.treeSize(path);
+        if (tree !== undefined) {
+          out.set(path, tree);
+          continue;
+        }
+      }
       const hit = this.sizeCache.get(path);
       if (!force && hit && now - hit.at < AppStore.SIZE_TTL_MS) out.set(path, hit.size);
       else misses.push(path);
@@ -841,12 +873,22 @@ class AppStore {
     }
   }
 
-  /** Lazy child-folder totals for both panes (best-effort, in place). */
-  private async fillExplorerSizes(entries: DirEntry[], apply: () => void) {
-    const dirs = entries.filter((entry) => entry.isDir).map((entry) => entry.path);
+  /**
+   * Lazy child-folder totals for folders the scan did not cover (or whose scan
+   * is still pending). The scan tree is always preferred.
+   */
+  private async fillExplorerSizes(
+    path: string,
+    entries: DirEntry[],
+    apply: () => void
+  ) {
+    const dirs = entries
+      .filter((entry) => entry.isDir && this.treeSize(entry.path) === undefined)
+      .map((entry) => entry.path);
     if (dirs.length === 0) return;
     try {
       const byPath = await this.sizesFor(dirs);
+      if (this.explorerRightPath !== path) return;
       for (const entry of this.explorerRight) {
         const size = byPath.get(entry.path);
         if (size !== undefined) entry.size = size;
