@@ -246,6 +246,8 @@ export interface RuleRun {
   bytes: number;
   truncated: boolean;
   results: DeleteResultItem[];
+  /** Removed files with sizes, for debiting the shared size cache. */
+  removedPaths: { path: string; size: number }[];
 }
 
 export interface DeleteResultItem {
