@@ -557,4 +557,6 @@ export const hi: Record<string, string> = {
   'settings.protectRemove': '{0} हटाएँ',
   'toast.protectedPath': '“{0}” संरक्षित फ़ोल्डर में है, छोड़ा गया',
   'err.protectedPath': 'यह पथ संरक्षित फ़ोल्डर में है',
+  'routines.more': 'अधिक',
+  'routines.moreAria': '“{0}” के लिए और विकल्प',
 };

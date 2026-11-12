@@ -584,6 +584,8 @@ const zh: Record<string, string> = {
   'settings.protectRemove': '移除 {0}',
   'toast.protectedPath': '「{0}」在保护目录中，已跳过',
   'err.protectedPath': '该路径位于保护目录中',
+  'routines.more': '更多',
+  'routines.moreAria': '「{0}」的更多操作',
 };
 
 const en: Record<string, string> = {
@@ -1129,6 +1131,8 @@ const en: Record<string, string> = {
   'settings.protectRemove': 'Remove {0}',
   'toast.protectedPath': '“{0}” is protected and was skipped',
   'err.protectedPath': 'This path is inside a protected folder',
+  'routines.more': 'More',
+  'routines.moreAria': 'More actions for “{0}”',
 };
 
 type ParamValue = string | number;

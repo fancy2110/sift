@@ -350,7 +350,18 @@ export function createMockBackend(bus: EventBus): MockBackend {
         cadence: 'routine.cadence.weekly'
       }
     ] as RoutineSuggestion[],
-    routines: [] as Routine[],
+    routines: [
+      {
+        id: 'demo-downloads',
+        title: 'Downloads',
+        kind: 'customPath',
+        cadence: 'routine.cadence.weekly',
+        averageBytes: 1_200_000,
+        mode: 'approve',
+        paths: ['/Users/you/Downloads'],
+        enabled: true
+      }
+    ] as Routine[],
     monitorRunning: false,
     autoMode: 'off' as 'off' | 'notify' | 'auto',
     scheduled: false,

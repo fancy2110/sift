@@ -552,4 +552,6 @@ export const zhTW: Record<string, string> = {
   'settings.protectRemove': '移除 {0}',
   'toast.protectedPath': '「{0}」在保護目錄中，已略過',
   'err.protectedPath': '該路徑位於保護目錄中',
+  'routines.more': '更多',
+  'routines.moreAria': '「{0}」的更多操作',
 };

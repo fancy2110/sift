@@ -574,4 +574,6 @@ export const id: Record<string, string> = {
   'settings.protectRemove': 'Hapus {0}',
   'toast.protectedPath': '“{0}” berada di folder dilindungi, dilewati',
   'err.protectedPath': 'Path ini berada di folder dilindungi',
+  'routines.more': 'Lainnya',
+  'routines.moreAria': 'Tindakan lain untuk “{0}”',
 };
