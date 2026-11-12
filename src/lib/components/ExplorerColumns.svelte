@@ -157,6 +157,8 @@
           {@const finding = store.findingForPath(entry.path)}
           {@const isQueued = finding ? store.isSelected(finding.id) : false}
           {@const verdict = store.explorerAi.items[entry.name]}
+          {@const size =
+            (entry.isDir ? entry.size || store.dirSize(entry.path) || 0 : entry.size) ?? 0}
           <div
             class="fx-file"
             class:fx-file-on={store.explorerSelected?.path === entry.path}
@@ -197,7 +199,7 @@
                     : t('explorer.verdictCaution')}
               </span>
             {/if}
-            <span class="fx-size">{entry.size ? formatSize(entry.size) : '…'}</span>
+            <span class="fx-size">{size ? formatSize(size) : '…'}</span>
             <button
               type="button"
               class="fx-act"

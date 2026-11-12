@@ -884,16 +884,17 @@ class AppStore {
     entries: DirEntry[],
     apply: () => void
   ) {
-    const dirs = entries
-      .filter((entry) => entry.isDir && this.treeSize(entry.path) === undefined)
-      .map((entry) => entry.path);
+    // Tree totals are instant but may be missing (folder outside the scan).
+    // Request totals for every folder that still lacks one; cachedSizes
+    // reuses anything already known, so this never re-walks for free.
+    const dirs = entries.filter((entry) => entry.isDir && entry.size === 0).map((entry) => entry.path);
     if (dirs.length === 0) return;
     try {
       const byPath = await cachedSizes(dirs);
       if (this.explorerRightPath !== path) return;
       for (const entry of this.explorerRight) {
         const size = byPath.get(entry.path);
-        if (size !== undefined) entry.size = size;
+        if (size !== undefined && size > 0) entry.size = size;
       }
       apply();
       this.sizeRevision += 1;
