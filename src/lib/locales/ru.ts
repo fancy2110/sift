@@ -562,4 +562,12 @@ export const ru: Record<string, string> = {
   'home.healthCritical': 'Критично',
   'home.healthFree': 'Свободно {0}',
   'home.healthUsed': 'Занято {0}',
+  'explorer.unusedDays': 'не использовалась {0} дн.',
+  'settings.protectTitle': 'Защищённые папки',
+  'settings.protectDesc': 'Эти папки никогда не очищаются.',
+  'settings.protectEmpty': 'Пока пусто',
+  'settings.protectAdd': 'Добавить',
+  'settings.protectRemove': 'Удалить {0}',
+  'toast.protectedPath': '«{0}» в защищённой папке — пропущено',
+  'err.protectedPath': 'Этот путь находится в защищённой папке',
 };

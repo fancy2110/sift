@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
+### Added
+
+- Explorer two-pane work landed on a single full-width list: the top bar carries a Finder-style chevron path (root first), the header names the folder with its item count, recursive size and, after an explanation, what the folder is for.
+- One press of AI 解读 rescans the folder and asks the model for a per-child verdict (Deletable / Careful / Keep) shown at the right edge of each row, with a purpose tooltip; old directories now carry how long they have been unused, and folders untouched for 180+ days are treated as candidates for attention.
+- Directory totals include every subdirectory; listings and recursive sizes share a persistent global cache (30 min) so one scan serves every view and survives restarts. Cleanup and manual rescans invalidate it.
+- Routines have an enable switch; mined suggestions are inserted into the list once, disabled, and deleted suggestions never return.
+- Storage health moved into the dashboard tile: health state, free percentage, free/used bytes and a usage bar, refreshed at launch and every minute.
+- Custom analysis prompt ("skill") in settings, appended to directory analysis and routine drafts, plus provider presets for Ollama, OpenRouter and SiliconFlow behind a dropdown.
+- Protected folders: a list saved in settings; the explorer refuses to add them and routine drafts reject them.
+- Default weekly routines are seeded once for Downloads and Desktop screenshots (approve mode, editable, deletable).
+
+### Fixed
+
+- Breadcrumb no longer repeats the volume name shown by the disk picker, and its segments interlock instead of leaving gaps.
+- Selected AI profile card uses a softer border and no doubled focus outline.
+
 ## [0.4.0] - 2026-11-11
 
 ### Added

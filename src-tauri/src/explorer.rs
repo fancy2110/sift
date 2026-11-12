@@ -17,6 +17,8 @@ pub struct DirEntryDto {
     pub is_dir: bool,
     /// File size for files; 0 for directories until `dir_sizes` fills it.
     pub size: u64,
+    /// Last modification time in Unix ms; `None` when unavailable.
+    pub modified_ms: Option<i64>,
 }
 
 /// One file below a directory (recursive listing for the right pane).
@@ -85,11 +87,17 @@ fn list_entries(path: &str) -> Result<DirListingDto, String> {
         // could leave the subtree the user is browsing.
         let is_dir = meta.is_dir();
         let size = if is_dir { 0 } else { meta.len() };
+        let modified_ms = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|age| age.as_millis() as i64);
         entries.push(DirEntryDto {
             name,
             path: entry_path.to_string_lossy().into_owned(),
             is_dir,
             size,
+            modified_ms,
         });
     }
     entries.sort_by(|a, b| {

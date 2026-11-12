@@ -549,4 +549,12 @@ export const hi: Record<string, string> = {
   'home.healthCritical': 'गंभीर',
   'home.healthFree': 'उपलब्ध {0}',
   'home.healthUsed': 'उपयोग {0}',
+  'explorer.unusedDays': '{0} दिन से अप्रयुक्त',
+  'settings.protectTitle': 'संरक्षित फ़ोल्डर',
+  'settings.protectDesc': 'ये फ़ोल्डर कभी साफ़ नहीं होंगे।',
+  'settings.protectEmpty': 'अभी कोई संरक्षित फ़ोल्डर नहीं',
+  'settings.protectAdd': 'जोड़ें',
+  'settings.protectRemove': '{0} हटाएँ',
+  'toast.protectedPath': '“{0}” संरक्षित फ़ोल्डर में है, छोड़ा गया',
+  'err.protectedPath': 'यह पथ संरक्षित फ़ोल्डर में है',
 };

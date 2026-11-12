@@ -171,6 +171,8 @@ pub struct MonitorStatusDto {
     pub scheduled_cleanup_enabled: bool,
     pub scheduled_hour: u32,
     pub scheduled_auto_execute: bool,
+    /// Directories that must never be cleaned.
+    pub protected_paths: Vec<String>,
 }
 
 // ---- commands --------------------------------------------------------------
@@ -686,6 +688,7 @@ pub fn monitor_status(
         scheduled_cleanup_enabled: settings.monitor.scheduled_cleanup_enabled,
         scheduled_hour: settings.monitor.scheduled_hour,
         scheduled_auto_execute: settings.monitor.scheduled_auto_execute,
+        protected_paths: settings.monitor.protected_paths.clone(),
     }
 }
 
@@ -1457,6 +1460,67 @@ pub fn set_ai_prompt(
     });
     let _ = services.store.flush_if_dirty();
     Ok(ai_config_dto(&services.store.settings().ai))
+}
+
+/// Seed the built-in uploads/screenshots routines once per install. They are
+/// ordinary rows: the user can disable, edit or delete them.
+pub fn seed_default_routines(store: &sift_store::Store) {
+    if store.settings().monitor.defaults_seeded {
+        return;
+    }
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let defaults = [
+        (home.join("Downloads"), "Downloads"),
+        (home.join("Desktop"), "Screenshots"),
+    ];
+    for (path, title) in defaults {
+        if !path.is_dir() {
+            continue;
+        }
+        let id = format!("default:{}", title.to_lowercase());
+        if store
+            .routines()
+            .entries()
+            .iter()
+            .any(|entry| entry.id == id)
+        {
+            continue;
+        }
+        store.upsert_routine(sift_store::RoutineEntry {
+            id,
+            title: title.to_string(),
+            kind: CUSTOM_PATH_KIND.to_string(),
+            cadence: "routine.cadence.weekly".to_string(),
+            average_bytes: 0,
+            mode: sift_store::RoutineMode::Approve,
+            paths: vec![path.to_string_lossy().into_owned()],
+            enabled: true,
+        });
+    }
+    store.update_settings(|settings| {
+        settings.monitor.defaults_seeded = true;
+    });
+    let _ = store.flush_if_dirty();
+}
+
+/// Replace the protected-directory list. Paths must be absolute; the store
+/// normalizes (dedupes, caps at 50) and the cleaner skips anything inside.
+#[tauri::command]
+pub fn set_protected_paths(
+    services: State<'_, AppServices>,
+    scans: State<'_, ScanManager>,
+    paths: Vec<String>,
+) -> Result<MonitorStatusDto, String> {
+    if paths.iter().any(|path| !path.trim().starts_with('/')) {
+        return Err("err.protectedPathRelative".to_string());
+    }
+    services.store.update_settings(|settings| {
+        settings.monitor.protected_paths = paths.clone();
+    });
+    let _ = services.store.flush_if_dirty();
+    Ok(monitor_status(services, scans))
 }
 
 /// Persist the language model reasons should be written in.

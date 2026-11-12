@@ -63,6 +63,7 @@ pub fn run() {
     startup_trace::mark("run:enter");
     let services_timer = std::time::Instant::now();
     let services = AppServices::new();
+    analyze::seed_default_routines(&services.store);
     startup_trace::mark(&format!(
         "services:new ({} ms)",
         services_timer.elapsed().as_millis()

@@ -566,4 +566,12 @@ export const id: Record<string, string> = {
   'home.healthCritical': 'Kritis',
   'home.healthFree': 'Tersedia {0}',
   'home.healthUsed': 'Terpakai {0}',
+  'explorer.unusedDays': 'tidak dipakai {0} hari',
+  'settings.protectTitle': 'Folder dilindungi',
+  'settings.protectDesc': 'Folder ini tidak akan pernah dibersihkan.',
+  'settings.protectEmpty': 'Belum ada folder dilindungi',
+  'settings.protectAdd': 'Tambah',
+  'settings.protectRemove': 'Hapus {0}',
+  'toast.protectedPath': '“{0}” berada di folder dilindungi, dilewati',
+  'err.protectedPath': 'Path ini berada di folder dilindungi',
 };

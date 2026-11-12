@@ -139,6 +139,7 @@ export interface MonitorStatus {
   scheduledCleanupEnabled: boolean;
   scheduledHour: number;
   scheduledAutoExecute: boolean;
+  protectedPaths: string[];
 }
 
 export interface VolumeInfo {

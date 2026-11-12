@@ -35,6 +35,7 @@ import {
   listVolumes,
   markPath,
   monitorStatus,
+  setProtectedPaths,
   onFsDeleted,
   onMonitorEvent,
   onScheduledReady,
@@ -158,8 +159,9 @@ class AppStore {
   explorerAi = $state<{
     loading: boolean;
     error: string;
+    summary: string;
     items: Record<string, { verdict: string; purpose: string }>;
-  }>({ loading: false, error: '', items: {} });
+  }>({ loading: false, error: '', summary: '', items: {} });
 
   scanning = $state(false);
   scannedFiles = $state(0);
@@ -185,6 +187,7 @@ class AppStore {
   scheduledOn = $state(false);
   scheduledHour = $state(4);
   scheduledAutoExecute = $state(false);
+  protectedPaths = $state<string[]>([]);
   /** Set by the daily analysis pass; cleared when the user acts on it. */
   scheduledPending = $state<{ pending: number; ruleMatches: number } | null>(null);
 
@@ -759,7 +762,7 @@ class AppStore {
   async openExplorer(path?: string) {
     const startPath = path ?? this.currentNode?.path ?? '';
     this.explorerSelected = null;
-    this.explorerAi = { loading: false, error: '', items: {} };
+    this.explorerAi = { loading: false, error: '', summary: '', items: {} };
     this.explorerRightLoading = true;
     this.explorerRight = [];
     let resolved = startPath;
@@ -836,15 +839,21 @@ class AppStore {
   async askExplorerAi() {
     const path = this.explorerPath;
     if (!path) return;
-    this.explorerAi = { loading: true, error: '', items: {} };
-    const names = this.explorerRight.slice(0, 40).map((entry) => entry.name);
+    this.explorerAi = { loading: true, error: '', summary: '', items: {} };
+    const list = this.explorerRight.slice(0, 40);
+    const names = list.map((entry) => entry.name);
+    const ages = list.map((entry) =>
+      entry.modifiedMs
+        ? Math.max(0, Math.floor((Date.now() - entry.modifiedMs) / 86_400_000))
+        : null
+    );
     try {
-      const result = await aiExplainDir(path, names, i18n.current);
+      const result = await aiExplainDir(path, names, ages, i18n.current);
       const items: Record<string, { verdict: string; purpose: string }> = {};
       for (const item of result.items) items[item.name] = item;
-      this.explorerAi = { loading: false, error: '', items };
+      this.explorerAi = { loading: false, error: '', summary: result.summary, items };
     } catch (error) {
-      this.explorerAi = { loading: false, error: tr(String(error)), items: {} };
+      this.explorerAi = { loading: false, error: tr(String(error)), summary: '', items: {} };
     }
   }
 
@@ -1410,6 +1419,10 @@ class AppStore {
 
   /** One-click add/remove from the Explorer (works for files and folders). */
   async toggleExplorerCandidate(entry: DirEntry) {
+    if (this.isProtected(entry.path) && !this.findingForPath(entry.path)) {
+      this.toast(t('toast.protectedPath', [entry.name]));
+      return;
+    }
     const existing = this.findingForPath(entry.path);
     if (existing) {
       this.toggleSelected(existing.id);
@@ -1646,9 +1659,27 @@ class AppStore {
       this.scheduledOn = status.scheduledCleanupEnabled;
       this.scheduledHour = status.scheduledHour;
       this.scheduledAutoExecute = status.scheduledAutoExecute;
+      this.protectedPaths = status.protectedPaths ?? [];
     } catch {
       // Status is best-effort.
     }
+  }
+
+  /** Persist the protected-directory list (absolute paths). */
+  async saveProtectedPaths(paths: string[]) {
+    try {
+      const status = await setProtectedPaths(paths);
+      this.protectedPaths = status.protectedPaths;
+    } catch (error) {
+      this.toastError(tr(String(error)));
+    }
+  }
+
+  /** True when `path` sits inside a protected directory. */
+  isProtected(path: string): boolean {
+    return this.protectedPaths.some(
+      (root) => path === root || path.startsWith(root.endsWith('/') ? root : `${root}/`)
+    );
   }
 
   async saveScheduled(enabled: boolean, hour: number, autoExecute = this.scheduledAutoExecute) {

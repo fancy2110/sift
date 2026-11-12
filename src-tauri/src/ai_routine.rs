@@ -291,6 +291,16 @@ pub fn save_routine_draft(
     if title.is_empty() {
         return Err("err.aiRoutineTitle".into());
     }
+    let protected = services.store.settings().monitor.protected_paths.clone();
+    let hits_protected = paths.iter().any(|path| {
+        protected.iter().any(|root| {
+            let root = root.trim_end_matches('/');
+            path == root || path.starts_with(&format!("{root}/"))
+        })
+    });
+    if hits_protected {
+        return Err("err.protectedPath".to_string());
+    }
     let id = format!(
         "ai:{}",
         sift_core::NodeKey::from_path(Path::new(&paths[0]))

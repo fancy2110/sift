@@ -133,6 +133,8 @@ export interface DirEntry {
   isDir: boolean;
   /** File size for files; 0 for folders until totals load. */
   size: number;
+  /** Last modification time (Unix ms) when readable. */
+  modifiedMs?: number | null;
 }
 
 export interface DirSize {
@@ -162,6 +164,8 @@ export interface DirVerdict {
 }
 
 export interface DirVerdicts {
+  /** One sentence describing the directory's purpose. */
+  summary: string;
   items: DirVerdict[];
 }
 
@@ -169,9 +173,19 @@ export interface DirVerdicts {
 export function aiExplainDir(
   path: string,
   names: string[],
+  ages: (number | null)[],
   language?: string
 ): Promise<DirVerdicts> {
-  return call<DirVerdicts>('ai_explain_dir', { path, names, language: language ?? null });
+  return call<DirVerdicts>('ai_explain_dir', {
+    path,
+    names,
+    ages,
+    language: language ?? null
+  });
+}
+
+export function setProtectedPaths(paths: string[]): Promise<MonitorStatus> {
+  return call<MonitorStatus>('set_protected_paths', { paths });
 }
 
 /** One directory listing plus the resolved absolute path. */
