@@ -82,8 +82,8 @@ import type {
 } from './types';
 import { t, tr, renderStoreWarning, i18n } from './i18n.svelte';
 import { startupMark } from './startup';
-import { sizesFor as cachedSizes, clearSizeCache, peekSize } from './sizeCache';
-import { listingFor, updateListing, clearDirCache } from './dirCache';
+import { sizesFor as cachedSizes, clearSizeCache, peekSize, debitSize } from './sizeCache';
+import { listingFor, updateListing, clearDirCache, applyDeletion } from './dirCache';
 import type { DirEntry } from './ipc';
 
 export interface ExplorerColumn {
@@ -1269,10 +1269,13 @@ class AppStore {
     this.pruneIds(removed);
     this.findings = this.findings.filter((f) => !removed.has(f.id));
     if (removed.size > 0) {
-      // Sizes and listings changed on disk: drop the shared caches so every
-      // view recomputes once instead of showing deleted bytes.
-      clearSizeCache();
-      clearDirCache();
+      // Update the shared scan data in place: subtract each removed item from
+      // its cached ancestors instead of throwing the whole cache away.
+      for (const target of targets) {
+        if (!removed.has(target.id)) continue;
+        debitSize(target.path, target.size);
+        applyDeletion(target.path, target.size);
+      }
     }
     const wasCancelled = this.cleanupCancelled || cancelledPaths.size > 0;
     // Keep selection only for items that were not attempted, so pressing

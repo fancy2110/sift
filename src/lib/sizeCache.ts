@@ -110,6 +110,20 @@ export async function sizesFor(
   return out;
 }
 
+/** Subtract bytes of a removed item from every cached ancestor folder. */
+export function debitSize(path: string, bytes: number): void {
+  if (bytes <= 0) return;
+  const map = load();
+  const now = Date.now();
+  for (const [dir, entry] of map) {
+    const prefix = dir === '/' ? '/' : dir.endsWith('/') ? dir : `${dir}/`;
+    if (dir === path || path.startsWith(prefix)) {
+      map.set(dir, { size: Math.max(0, entry.size - bytes), at: now });
+    }
+  }
+  scheduleFlush();
+}
+
 /** Drop every cached total (manual rescan, or after a cleanup). */
 export function clearSizeCache(): void {
   load().clear();
