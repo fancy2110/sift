@@ -75,6 +75,26 @@ export async function listingFor(
   return snapshot;
 }
 
+/** Remove a deleted path from cached listings and debit its ancestors. */
+export function applyDeletion(path: string, bytes: number): void {
+  const map = load();
+  for (const [key, snapshot] of map) {
+    const kept = snapshot.entries.filter(
+      (entry) => entry.path !== path && !entry.path.startsWith(`${path}/`)
+    );
+    if (kept.length === snapshot.entries.length) continue;
+    const adjusted = kept.map((entry) => {
+      if (!entry.isDir) return entry;
+      const prefix = entry.path.endsWith('/') ? entry.path : `${entry.path}/`;
+      return path.startsWith(prefix)
+        ? { ...entry, size: Math.max(0, entry.size - bytes) }
+        : entry;
+    });
+    map.set(key, { ...snapshot, entries: adjusted });
+  }
+  scheduleFlush();
+}
+
 /** Replace the cached listing after sizes were filled in. */
 export function updateListing(path: string, entries: DirEntry[]): void {
   const map = load();
