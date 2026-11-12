@@ -116,7 +116,11 @@
         <p class="fx-folder-meta">
           {t('explorer.filesSummary', [
             String(store.explorerRight.length),
-            store.explorerTotal === null ? t('explorer.loading') : formatSize(store.explorerTotal)
+            store.explorerTotal === null
+              ? store.dirSize(store.explorerPath) !== null
+                ? formatSize(store.dirSize(store.explorerPath) ?? 0)
+                : t('explorer.loading')
+              : formatSize(store.explorerTotal)
           ])}
         </p>
         {#if store.explorerAi.summary}
