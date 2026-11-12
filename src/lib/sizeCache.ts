@@ -13,9 +13,13 @@ interface CachedSize {
 const STORAGE_KEY = 'sift.sizeCache.v1';
 /** Totals older than this are recomputed; anything younger is reused. */
 const TTL_MS = 30 * 60_000;
+/** Hard cap on retained folders: the cache is core data, not a leak. */
+const MAX_ENTRIES = 800;
 
 let cache: Map<string, CachedSize> | null = null;
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
+/** Concurrent callers asking for the same folder share one walk. */
+const inflight = new Map<string, Promise<void>>();
 
 function load(): Map<string, CachedSize> {
   if (cache) return cache;
@@ -50,6 +54,20 @@ function scheduleFlush(): void {
   }, 500);
 }
 
+/** Fresh cached total for `path`, or null when missing/stale. */
+export function peekSize(path: string): number | null {
+  const hit = load().get(path);
+  return hit && Date.now() - hit.at < TTL_MS ? hit.size : null;
+}
+
+/** Drop the oldest entries when the cache grows past its cap. */
+function prune(): void {
+  const map = load();
+  if (map.size <= MAX_ENTRIES) return;
+  const oldest = [...map.entries()].sort((a, b) => a[1].at - b[1].at);
+  for (const [path] of oldest.slice(0, map.size - MAX_ENTRIES)) map.delete(path);
+}
+
 /** Totals for `paths`, recursively including every subdirectory. */
 export async function sizesFor(
   paths: string[],
@@ -64,13 +82,30 @@ export async function sizesFor(
     if (!force && hit && now - hit.at < TTL_MS) out.set(path, hit.size);
     else misses.push(path);
   }
-  if (misses.length > 0) {
-    const sizes = await dirSizes(misses);
-    for (const size of sizes) {
-      map.set(size.path, { size: size.size, at: now });
-      out.set(size.path, size.size);
+  const pending = misses.filter((path) => inflight.has(path));
+  const fresh = misses.filter((path) => !inflight.has(path));
+  if (fresh.length > 0) {
+    const request = dirSizes(fresh).then((sizes) => {
+      for (const size of sizes) {
+        map.set(size.path, { size: size.size, at: now });
+        out.set(size.path, size.size);
+      }
+    });
+    for (const path of fresh) {
+      inflight.set(
+        path,
+        request.finally(() => inflight.delete(path))
+      );
     }
+    await request;
+    prune();
     scheduleFlush();
+  }
+  for (const path of pending) {
+    // Someone else is already walking this folder: wait for that result.
+    await inflight.get(path)?.catch(() => undefined);
+    const hit = map.get(path);
+    if (hit) out.set(path, hit.size);
   }
   return out;
 }

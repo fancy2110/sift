@@ -82,7 +82,7 @@ import type {
 } from './types';
 import { t, tr, renderStoreWarning, i18n } from './i18n.svelte';
 import { startupMark } from './startup';
-import { sizesFor as cachedSizes, clearSizeCache } from './sizeCache';
+import { sizesFor as cachedSizes, clearSizeCache, peekSize } from './sizeCache';
 import { listingFor, updateListing, clearDirCache } from './dirCache';
 import type { DirEntry } from './ipc';
 
@@ -156,6 +156,8 @@ class AppStore {
   explorerSelected = $state<DirEntry | null>(null);
   /** Recursive total of the current directory; null while it is computed. */
   explorerTotal = $state<number | null>(null);
+  /** Bumped whenever a shared size lands, so readers re-render. */
+  sizeRevision = $state(0);
   explorerAi = $state<{
     loading: boolean;
     error: string;
@@ -806,6 +808,22 @@ class AppStore {
     }
   }
 
+  /**
+   * Shared read-side of the scan data: any page can ask for a folder's
+   * recursive size without triggering a walk. Returns null when unknown.
+   */
+  dirSize(path: string): number | null {
+    this.sizeRevision;
+    return peekSize(path);
+  }
+
+  /** Ensure shared totals for `paths`; other views re-render via the revision. */
+  async ensureDirSizes(paths: string[]): Promise<Map<string, number>> {
+    const sizes = await cachedSizes(paths);
+    this.sizeRevision += 1;
+    return sizes;
+  }
+
   /** Re-read the current directory; `force` also drops cached totals. */
   async refreshExplorer(force = false) {
     if (!this.explorerPath) return;
@@ -878,6 +896,7 @@ class AppStore {
         if (size !== undefined) entry.size = size;
       }
       apply();
+      this.sizeRevision += 1;
       if (this.explorerRightPath && this.explorerRight.length > 0) {
         updateListing(this.explorerRightPath, this.explorerRight);
       }
