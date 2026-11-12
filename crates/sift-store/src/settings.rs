@@ -121,6 +121,13 @@ pub struct MonitorSettings {
     /// scheduled cleanup. Each run is bounded and deletes through the trash.
     #[serde(default)]
     pub cleanup_rules: Vec<CleanupRule>,
+    /// Directories that must never be cleaned, whatever else says otherwise.
+    #[serde(default)]
+    pub protected_paths: Vec<String>,
+    /// Whether the built-in default routines (Downloads / screenshots) were
+    /// seeded once; deleting them must not bring them back.
+    #[serde(default)]
+    pub defaults_seeded: bool,
     /// Local hour the daily cleanup runs at.
     #[serde(default = "default_scheduled_hour")]
     pub scheduled_hour: u32,
@@ -176,6 +183,8 @@ impl Default for MonitorSettings {
             scheduled_cleanup_enabled: false,
             dismissed_findings: Vec::new(),
             cleanup_rules: Vec::new(),
+            protected_paths: Vec::new(),
+            defaults_seeded: false,
             scheduled_hour: 4,
             scheduled_auto_execute: false,
             scheduled_last_run: None,
@@ -212,6 +221,14 @@ impl MonitorSettings {
             .take(50)
             .collect();
         self.scheduled_catchup_hours = self.scheduled_catchup_hours.clamp(0, 48);
+        let mut seen = std::collections::HashSet::new();
+        self.protected_paths = std::mem::take(&mut self.protected_paths)
+            .into_iter()
+            .map(|path| path.trim().to_string())
+            .filter(|path| path.starts_with('/') && !path.is_empty())
+            .filter(|path| seen.insert(path.clone()))
+            .take(50)
+            .collect();
         self
     }
 }

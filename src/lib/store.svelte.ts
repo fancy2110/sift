@@ -53,6 +53,7 @@ import {
   startScan,
   takeStoreWarnings,
   toggleRoutineMode,
+  setRoutineEnabled,
   watchFs,
   acceptRoutineSuggestion,
   type BatchUpdate,
@@ -1578,6 +1579,17 @@ class AppStore {
       await this.loadRoutines();
     } catch (error) {
       this.toastError(t('toast.settingsFailed', [String(error)]));
+    }
+  }
+
+  async setSavedRoutineEnabled(id: string, enabled: boolean) {
+    try {
+      await setRoutineEnabled(id, enabled);
+      this.routines = this.routines.map((routine) =>
+        routine.id === id ? { ...routine, enabled } : routine
+      );
+    } catch (error) {
+      this.toastError(tr(String(error)));
     }
   }
 

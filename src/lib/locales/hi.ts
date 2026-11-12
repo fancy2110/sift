@@ -542,4 +542,11 @@ export const hi: Record<string, string> = {
   'env.modelHint': 'AI सुझाव',
   'env.admin': 'व्यवस्थापक आवश्यक',
   'env.danger': 'चलाने योग्य नहीं',
+  'routines.toggleAria': '“{0}” सक्षम या अक्षम करें',
+  'home.health': 'संग्रहण स्थिति',
+  'home.healthGood': 'स्वस्थ',
+  'home.healthWarn': 'कम',
+  'home.healthCritical': 'गंभीर',
+  'home.healthFree': 'उपलब्ध {0}',
+  'home.healthUsed': 'उपयोग {0}',
 };

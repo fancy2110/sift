@@ -345,56 +345,12 @@
         <div class="routine-scroll">
           <div class="rt-block">
             <div class="rt-block-head">
-              <h3 class="rt-block-title">{t('routines.suggested')}</h3>
-              <span class="rt-count chip">{store.routineSuggestions.length}</span>
-            </div>
-            {#each store.routineSuggestions as s, i (s.kind + s.name)}
-              <article class="rt-card" in:listIn={{ index: i }}>
-                <span class="rt-card-icon">
-                  <Icon name="routine" size={15} />
-                </span>
-                <div class="rt-card-body">
-                  <div class="rt-card-top">
-                    <p class="rt-card-name">{s.name}</p>
-                    <span class="rt-chip">{t(s.cadence)}</span>
-                  </div>
-                  <p class="rt-card-meta num">
-                    {t('routines.cadence', [s.distinctDays, s.occurrences])} · ≈{formatSize(s.averageBytes)}
-                  </p>
-                  <p class="rt-card-reason">{t(s.reason)}</p>
-                </div>
-                <div class="rt-card-actions">
-                  <button
-                    type="button"
-                    class="rt-btn rt-btn-primary"
-                    onclick={() => store.acceptSuggestion(s.name, s.kind)}
-                  >
-                    <Icon name="check" size={11} stroke={2.2} /> {t('routines.accept')}
-                  </button>
-                  <button
-                    type="button"
-                    class="rt-btn"
-                    title={t('routines.ignoreTitle')}
-                    aria-label={t('routines.ignoreAria', [s.name])}
-                    onclick={() => store.dismissSuggestion(s.name, s.kind)}
-                  >
-                    <Icon name="x" size={12} />
-                  </button>
-                </div>
-              </article>
-            {:else}
-              <p class="rt-empty">{t('routines.empty1')}</p>
-            {/each}
-          </div>
-
-          <div class="rt-block">
-            <div class="rt-block-head">
               <h3 class="rt-block-title">{t('routines.tasksTitle')}</h3>
               <span class="rt-count chip">{store.routines.length + store.cleanupRules.length}</span>
               <RoutineComposer bind:this={composerRef} />
             </div>
             {#each store.routines as r, i (r.id)}
-              <article class="rt-card" in:listIn={{ index: i }}>
+              <article class="rt-card" class:rt-card-off={!r.enabled} in:listIn={{ index: i }}>
                 <span class="rt-card-icon" class:rt-card-icon-on={r.mode === 'auto'}>
                   <Icon name={r.mode === 'auto' ? 'bolt' : 'clock'} size={15} />
                 </span>
@@ -415,7 +371,20 @@
                 <div class="rt-card-actions">
                   <button
                     type="button"
+                    class="switch"
+                    class:switch-on={r.enabled}
+                    role="switch"
+                    aria-checked={r.enabled}
+                    aria-label={t('routines.toggleAria', [r.title])}
+                    title={t('routines.toggleAria', [r.title])}
+                    onclick={() => store.setSavedRoutineEnabled(r.id, !r.enabled)}
+                  >
+                    <span class="switch-knob"></span>
+                  </button>
+                  <button
+                    type="button"
                     class="rt-btn rt-btn-primary"
+                    disabled={!r.enabled}
                     title={t('routines.runTitle')}
                     aria-label={t('routines.runAria', [r.title])}
                     onclick={() => store.runSavedRoutine(r.id)}
@@ -1023,6 +992,9 @@
     font-size: 10px;
     color: var(--color-faint);
   }
+  .rt-card-off {
+    opacity: 0.55;
+  }
   .rt-card {
     display: flex;
     align-items: center;
@@ -1085,14 +1057,6 @@
     font-size: 10.5px;
     color: var(--color-faint);
     opacity: 0.85;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .rt-card-reason {
-    margin: 2px 0 0;
-    font-size: 11px;
-    color: var(--color-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

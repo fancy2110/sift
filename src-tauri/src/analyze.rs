@@ -1117,33 +1117,37 @@ fn ai_prompt_blocking(store: &sift_store::Store, prompt: String) -> Result<Strin
 /// Suggest routines from the persisted decisions.
 #[tauri::command]
 pub fn routine_suggestions(services: State<'_, AppServices>) -> Vec<RoutineSuggestionDto> {
-    services
-        .store
-        .decisions()
-        .suggest_routines(3, 3)
-        .into_iter()
-        .filter(|suggestion| {
-            let key = sift_store::suggestion_key(&suggestion.name, &suggestion.kind_token);
-            !services.store.routines().is_ignored(&key)
-        })
-        .map(|suggestion| {
-            // Read the derived flags before moving any field out.
-            let destructive = suggestion.is_destructive();
-            let reason = suggestion.reason.label_key().to_string();
-            let cadence = suggestion.cadence.label_key().to_string();
-            RoutineSuggestionDto {
-                name: suggestion.name,
+    // Mined suggestions become ordinary (disabled) routines in the list
+    // instead of a separate "suggested" block. They start disabled, so a
+    // new suggestion can never clean anything until the user enables it.
+    for suggestion in services.store.decisions().suggest_routines(3, 3) {
+        let id = sift_store::suggestion_key(&suggestion.name, &suggestion.kind_token);
+        if services.store.routines().is_ignored(&id) {
+            continue;
+        }
+        if !services
+            .store
+            .routines()
+            .entries()
+            .iter()
+            .any(|entry| entry.id == id)
+        {
+            services.store.upsert_routine(sift_store::RoutineEntry {
+                id: id.clone(),
+                title: suggestion.name,
                 kind: suggestion.kind_token,
-                occurrences: suggestion.occurrences,
-                distinct_days: suggestion.distinct_days,
+                cadence: suggestion.cadence.label_key().to_string(),
                 average_bytes: suggestion.average_bytes,
-                total_bytes: suggestion.total_bytes,
-                destructive,
-                reason,
-                cadence,
-            }
-        })
-        .collect()
+                mode: sift_store::RoutineMode::Approve,
+                paths: Vec::new(),
+                enabled: false,
+            });
+        }
+        // Insert once: deleting the row must not bring it back.
+        services.store.ignore_routine_suggestion(id);
+    }
+    let _ = services.store.flush_if_dirty();
+    Vec::new()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1620,6 +1624,8 @@ pub struct RoutineDto {
     pub mode: String,
     /// Explicit targets of a path-based routine; empty for a kind-based one.
     pub paths: Vec<String>,
+    /// Disabled routines stay listed but never run.
+    pub enabled: bool,
 }
 
 /// Read the user-facing cleanup timeline, newest first.
@@ -1657,6 +1663,7 @@ pub fn list_routines(services: State<'_, AppServices>) -> Vec<RoutineDto> {
             average_bytes: entry.average_bytes,
             mode: routine_mode_token(entry.mode).to_string(),
             paths: entry.paths.clone(),
+            enabled: entry.enabled,
         })
         .collect()
 }
@@ -1678,6 +1685,7 @@ pub fn accept_routine_suggestion(
 
     let id = sift_store::suggestion_key(&suggestion.name, &suggestion.kind_token);
     services.store.upsert_routine(sift_store::RoutineEntry {
+        enabled: true,
         id,
         title: suggestion.name,
         kind: suggestion.kind_token,
@@ -1707,6 +1715,7 @@ pub fn save_routine(
         let key = sift_core::NodeKey::from_path(std::path::Path::new(&path));
         let id = format!("custom:{key}");
         services.store.upsert_routine(sift_store::RoutineEntry {
+        enabled: true,
             id,
             title,
             kind: CUSTOM_PATH_KIND.to_string(),
@@ -1721,6 +1730,7 @@ pub fn save_routine(
         }
         let id = sift_store::suggestion_key(&title, &kind);
         services.store.upsert_routine(sift_store::RoutineEntry {
+        enabled: true,
             id,
             title,
             kind: kind.clone(),
@@ -1778,6 +1788,25 @@ pub fn toggle_routine_mode(services: State<'_, AppServices>, id: String) -> Resu
     Ok(changed)
 }
 
+/// Enable or disable one routine; disabled routines never run.
+#[tauri::command]
+pub fn set_routine_enabled(
+    services: State<'_, AppServices>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut entry = services
+        .store
+        .routines()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "err.routineNotFound".to_string())?;
+    entry.enabled = enabled;
+    services.store.upsert_routine(entry);
+    let _ = services.store.flush_if_dirty();
+    Ok(())
+}
+
 /// Run one saved routine now: trash every remembered, individually approved
 /// `safe` item of its kind.
 #[tauri::command]
@@ -1791,6 +1820,9 @@ pub async fn run_routine(
         .get(&id)
         .cloned()
         .ok_or_else(|| "err.routineNotFound".to_string())?;
+    if !routine.enabled {
+        return Err("err.routineDisabled".to_string());
+    }
 
     let paths = if !routine.paths.is_empty() {
         // A path-based routine: act only on targets that still exist, leaving

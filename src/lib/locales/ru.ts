@@ -555,4 +555,11 @@ export const ru: Record<string, string> = {
   'env.modelHint': 'Предложение ИИ',
   'env.admin': 'Нужны права администратора',
   'env.danger': 'Нельзя запустить',
+  'routines.toggleAria': 'Включить или отключить «{0}»',
+  'home.health': 'Состояние хранилища',
+  'home.healthGood': 'В норме',
+  'home.healthWarn': 'Мало',
+  'home.healthCritical': 'Критично',
+  'home.healthFree': 'Свободно {0}',
+  'home.healthUsed': 'Занято {0}',
 };

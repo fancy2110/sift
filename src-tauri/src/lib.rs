@@ -142,6 +142,7 @@ pub fn run() {
             analyze::dismiss_routine_suggestion,
             analyze::delete_routine,
             analyze::toggle_routine_mode,
+            analyze::set_routine_enabled,
             analyze::run_routine,
             analyze::get_language,
             analyze::set_language,

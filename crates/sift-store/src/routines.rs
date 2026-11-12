@@ -41,6 +41,14 @@ pub struct RoutineEntry {
     /// resolve from the cleanable list when the routine runs.
     #[serde(default)]
     pub paths: Vec<String>,
+    /// Disabled routines stay in the list but never run. Suggested routines
+    /// are inserted disabled so nothing new starts cleaning on its own.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 /// On-disk shape: definitions plus dismissed suggestion keys.

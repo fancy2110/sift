@@ -551,4 +551,11 @@ export const ja: Record<string, string> = {
   'env.modelHint': 'AI の提案',
   'env.admin': '管理者権限が必要',
   'env.danger': '実行不可',
+  'routines.toggleAria': '「{0}」を有効/無効にする',
+  'home.health': 'ストレージ健全性',
+  'home.healthGood': '良好',
+  'home.healthWarn': '少なめ',
+  'home.healthCritical': 'ひっ迫',
+  'home.healthFree': '空き {0}',
+  'home.healthUsed': '使用中 {0}',
 };

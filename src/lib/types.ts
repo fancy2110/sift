@@ -122,6 +122,8 @@ export interface Routine {
   mode: 'auto' | 'approve';
   /** Explicit targets of a path-based routine; empty for a kind-based one. */
   paths: string[];
+  /** Disabled routines stay listed but never run. */
+  enabled: boolean;
 }
 
 export interface MonitorStatus {
