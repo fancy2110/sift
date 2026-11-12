@@ -566,4 +566,6 @@ export const ja: Record<string, string> = {
   'settings.protectRemove': '{0} を削除',
   'toast.protectedPath': '「{0}」は保護フォルダ内のためスキップしました',
   'err.protectedPath': 'このパスは保護フォルダ内です',
+  'routines.more': 'その他',
+  'routines.moreAria': '「{0}」のその他の操作',
 };

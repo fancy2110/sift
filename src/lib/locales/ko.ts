@@ -543,4 +543,6 @@ export const ko: Record<string, string> = {
   'settings.protectRemove': '{0} 제거',
   'toast.protectedPath': '“{0}”은(는) 보호 폴더에 있어 건너뛰었습니다',
   'err.protectedPath': '이 경로는 보호 폴더 안에 있습니다',
+  'routines.more': '더 보기',
+  'routines.moreAria': '“{0}”의 추가 작업',
 };

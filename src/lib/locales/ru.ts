@@ -570,4 +570,6 @@ export const ru: Record<string, string> = {
   'settings.protectRemove': 'Удалить {0}',
   'toast.protectedPath': '«{0}» в защищённой папке — пропущено',
   'err.protectedPath': 'Этот путь находится в защищённой папке',
+  'routines.more': 'Ещё',
+  'routines.moreAria': 'Другие действия для «{0}»',
 };

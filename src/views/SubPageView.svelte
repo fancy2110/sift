@@ -19,6 +19,8 @@
   });
 
   let composerRef = $state<{ editRule: (rule: CleanupRule) => void } | null>(null);
+  /** Routine id whose "more" menu is open. */
+  let openMenu = $state<string | null>(null);
 
   function selectAllSmart() {
     store.selectedIds = new Set(store.smartItems.map((i) => i.id));
@@ -381,36 +383,59 @@
                   >
                     <span class="switch-knob"></span>
                   </button>
-                  <button
-                    type="button"
-                    class="rt-btn rt-btn-primary"
-                    disabled={!r.enabled}
-                    title={t('routines.runTitle')}
-                    aria-label={t('routines.runAria', [r.title])}
-                    onclick={() => store.runSavedRoutine(r.id)}
-                  >
-                    <Icon name="play" size={10.5} /> {t('routines.runNow')}
-                  </button>
-                  {#if !r.paths.length}
+                  <div class="rt-more">
                     <button
                       type="button"
                       class="rt-btn"
-                      title={t('settings.toggleMode')}
-                      aria-label={t('settings.toggleMode')}
-                      onclick={() => store.toggleSavedRoutineMode(r.id)}
+                      aria-haspopup="menu"
+                      aria-expanded={openMenu === r.id}
+                      aria-label={t('routines.moreAria', [r.title])}
+                      title={t('routines.more')}
+                      onclick={() => (openMenu = openMenu === r.id ? null : r.id)}
                     >
-                      <Icon name="refresh" size={12} />
+                      <Icon name="sliders" size={12} /> {t('routines.more')}
                     </button>
-                  {/if}
-                  <button
-                    type="button"
-                    class="rt-btn rt-btn-danger"
-                    title={t('settings.delete')}
-                    aria-label={t('settings.delete')}
-                    onclick={() => store.deleteSavedRoutine(r.id)}
-                  >
-                    <Icon name="trash" size={12} />
-                  </button>
+                    {#if openMenu === r.id}
+                      <div class="rt-menu" role="menu">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          class="rt-menu-item"
+                          disabled={!r.enabled}
+                          onclick={() => {
+                            openMenu = null;
+                            void store.runSavedRoutine(r.id);
+                          }}
+                        >
+                          <Icon name="play" size={11} /> {t('routines.runNow')}
+                        </button>
+                        {#if !r.paths.length}
+                          <button
+                            type="button"
+                            role="menuitem"
+                            class="rt-menu-item"
+                            onclick={() => {
+                              openMenu = null;
+                              void store.toggleSavedRoutineMode(r.id);
+                            }}
+                          >
+                            <Icon name="refresh" size={11} /> {t('settings.toggleMode')}
+                          </button>
+                        {/if}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          class="rt-menu-item rt-menu-danger"
+                          onclick={() => {
+                            openMenu = null;
+                            void store.deleteSavedRoutine(r.id);
+                          }}
+                        >
+                          <Icon name="trash" size={11} /> {t('settings.delete')}
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
                 </div>
               </article>
             {/each}
@@ -992,6 +1017,76 @@
     font-size: 10px;
     color: var(--color-faint);
   }
+  .switch {
+    position: relative;
+    width: 34px;
+    height: 20px;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-3);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .switch-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--color-surface);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+    transition: transform 0.15s ease;
+  }
+  .switch-on {
+    background: var(--color-violet);
+    border-color: transparent;
+  }
+  .switch-on .switch-knob {
+    transform: translateX(14px);
+  }
+  .rt-more {
+    position: relative;
+  }
+  .rt-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    z-index: 20;
+    min-width: 150px;
+    padding: 5px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    box-shadow: 0 14px 30px -14px rgb(0 0 0 / 0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .rt-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--color-fg);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .rt-menu-item:hover:not(:disabled) {
+    background: color-mix(in oklch, var(--color-surface-2) 70%, transparent);
+  }
+  .rt-menu-item:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .rt-menu-danger {
+    color: var(--color-danger);
+  }
   .rt-card-off {
     opacity: 0.55;
   }
@@ -1100,15 +1195,6 @@
   .rt-btn:hover {
     color: var(--color-fg);
     border-color: var(--color-faint);
-  }
-  .rt-btn-primary {
-    color: var(--color-accent-hi);
-    border-color: color-mix(in oklch, var(--color-accent) 50%, transparent);
-    background: color-mix(in oklch, var(--color-accent) 12%, transparent);
-  }
-  .rt-btn-primary:hover {
-    color: var(--color-accent-hi);
-    border-color: color-mix(in oklch, var(--color-accent) 70%, transparent);
   }
   .rt-btn-danger:hover {
     color: var(--color-danger);
