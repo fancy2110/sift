@@ -72,6 +72,12 @@
     if (volume) void store.openExplorer(volume.mountPoint);
   }
 
+  function ageDays(entry: { modifiedMs?: number | null }): number | null {
+    return entry.modifiedMs
+      ? Math.max(0, Math.floor((Date.now() - entry.modifiedMs) / 86_400_000))
+      : null;
+  }
+
   function queued(entry: { path: string }): boolean {
     const finding = store.findingForPath(entry.path);
     return finding ? store.isSelected(finding.id) : false;
@@ -113,6 +119,9 @@
             store.explorerTotal === null ? t('explorer.loading') : formatSize(store.explorerTotal)
           ])}
         </p>
+        {#if store.explorerAi.summary}
+          <p class="fx-purpose" title={store.explorerAi.summary}>{store.explorerAi.summary}</p>
+        {/if}
       </div>
       <button
         type="button"
@@ -164,7 +173,12 @@
           >
             <Icon name={entry.isDir ? 'folder' : 'file'} size={14} />
             <span class="fx-file-name">{entry.name}</span>
-            <span class="fx-file-dir">{entry.isDir ? t('explorer.folderBadge') : ''}</span>
+            <span class="fx-file-dir">
+              {entry.isDir ? t('explorer.folderBadge') : ''}
+              {#if entry.isDir && (ageDays(entry) ?? 0) >= 180}
+                · {t('explorer.unusedDays', [String(ageDays(entry) ?? 0)])}
+              {/if}
+            </span>
             {#if verdict}
               <span
                 class="fx-verdict"
@@ -325,6 +339,16 @@
     margin: 1px 0 0;
     font-size: 11px;
     color: var(--color-faint);
+  }
+  .fx-purpose {
+    margin: 3px 0 0;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--color-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 560px;
   }
   .fx-ai {
     flex: none;

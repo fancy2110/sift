@@ -356,6 +356,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
     scheduled: false,
     scheduledHour: 2,
     scheduledAutoExecute: false,
+    protectedPaths: [] as string[],
     timers: [] as Array<ReturnType<typeof setTimeout>>,
     ai: {
       enabled: false,
@@ -919,7 +920,8 @@ export function createMockBackend(bus: EventBus): MockBackend {
             lastTotalBytes: VOLUMES[0].totalBytes,
             scheduledCleanupEnabled: state.scheduled,
             scheduledHour: state.scheduledHour,
-            scheduledAutoExecute: state.scheduledAutoExecute ?? false
+            scheduledAutoExecute: state.scheduledAutoExecute ?? false,
+            protectedPaths: state.protectedPaths ?? []
           };
           resolve(status as unknown as T);
           break;
@@ -1184,6 +1186,26 @@ export function createMockBackend(bus: EventBus): MockBackend {
           resolve(mockAiConfig() as unknown as T);
           break;
         }
+        case 'set_protected_paths':
+          state.protectedPaths = (args.paths as string[]) ?? [];
+          resolve(
+            {
+              running: state.monitorRunning,
+              enabled: true,
+              autoMode: state.autoMode,
+              cleanableItems: 0,
+              autoEligibleItems: 0,
+              autoEligibleBytes: 0,
+              lastLevel: 'ok',
+              lastAvailableBytes: VOLUMES[0].availableBytes,
+              lastTotalBytes: VOLUMES[0].totalBytes,
+              scheduledCleanupEnabled: state.scheduled,
+              scheduledHour: state.scheduledHour,
+              scheduledAutoExecute: state.scheduledAutoExecute ?? false,
+              protectedPaths: state.protectedPaths
+            } as unknown as T
+          );
+          break;
         case 'set_ai_prompt':
           state.ai.analysisPrompt = String(args.prompt ?? '');
           resolve(mockAiConfig() as unknown as T);

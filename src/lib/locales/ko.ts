@@ -535,4 +535,12 @@ export const ko: Record<string, string> = {
   'home.healthCritical': '위험',
   'home.healthFree': '여유 {0}',
   'home.healthUsed': '사용 {0}',
+  'explorer.unusedDays': '{0}일 미사용',
+  'settings.protectTitle': '보호 폴더',
+  'settings.protectDesc': '이 폴더는 절대 정리되지 않습니다.',
+  'settings.protectEmpty': '보호 폴더가 없습니다',
+  'settings.protectAdd': '추가',
+  'settings.protectRemove': '{0} 제거',
+  'toast.protectedPath': '“{0}”은(는) 보호 폴더에 있어 건너뛰었습니다',
+  'err.protectedPath': '이 경로는 보호 폴더 안에 있습니다',
 };

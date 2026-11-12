@@ -544,4 +544,12 @@ export const zhTW: Record<string, string> = {
   'home.healthCritical': '緊張',
   'home.healthFree': '可用 {0}',
   'home.healthUsed': '已用 {0}',
+  'explorer.unusedDays': '{0} 天未用',
+  'settings.protectTitle': '保護目錄',
+  'settings.protectDesc': '這些目錄永遠不會被清理；補充後立即生效。',
+  'settings.protectEmpty': '還沒有保護目錄',
+  'settings.protectAdd': '新增',
+  'settings.protectRemove': '移除 {0}',
+  'toast.protectedPath': '「{0}」在保護目錄中，已略過',
+  'err.protectedPath': '該路徑位於保護目錄中',
 };

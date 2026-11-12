@@ -18,7 +18,9 @@ const SYSTEM: &str = r#"You classify the children of one directory on the user's
 For every provided name, decide what it is for and whether it can be deleted. Base the answer only on the directory path and the names — never invent file contents. When unsure, use "caution".
 
 Reply with JSON only, no markdown and no prose:
-{"items":[{"name":"<exact name>","verdict":"safe|caution|keep","purpose":"<at most 18 words>"}]}
+{"summary":"<one sentence: what this directory is for>","items":[{"name":"<exact name>","verdict":"safe|caution|keep","purpose":"<at most 18 words>"}]}
+
+Time matters: each name may carry how many days ago it last changed. A directory untouched for more than 180 days is usually abandoned — give it verdict "caution" and say it has not been used for a long time.
 
 Verdicts:
 - "safe": caches, build output, logs or temporary data that regenerate;
@@ -63,6 +65,8 @@ pub struct DirVerdictDto {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DirVerdictsDto {
+    #[serde(default)]
+    pub summary: String,
     pub items: Vec<DirVerdictDto>,
 }
 
@@ -71,11 +75,12 @@ pub async fn ai_explain_dir(
     services: State<'_, AppServices>,
     path: String,
     names: Vec<String>,
+    ages: Vec<Option<i64>>,
     language: Option<String>,
 ) -> Result<DirVerdictsDto, String> {
     let store = Arc::clone(&services.store);
     let language = language.unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || explain(&store, path, names, &language))
+    tauri::async_runtime::spawn_blocking(move || explain(&store, path, names, ages, &language))
         .await
         .map_err(|error| format!("err.aiRequest|{error}"))?
 }
@@ -84,6 +89,7 @@ fn explain(
     store: &sift_store::Store,
     path: String,
     names: Vec<String>,
+    ages: Vec<Option<i64>>,
     language: &str,
 ) -> Result<DirVerdictsDto, String> {
     let ai = store.settings().ai;
@@ -126,13 +132,16 @@ fn explain(
 
         let sample: Vec<String> = names
             .iter()
-            .map(|name| name.trim())
-            .filter(|name| !name.is_empty())
+            .zip(ages.iter())
+            .filter(|(name, _)| !name.trim().is_empty())
             .take(MAX_NAMES)
-            .map(|name| name.to_string())
+            .map(|(name, age)| match age {
+                Some(days) => format!("{} (~{days} days)", name.trim()),
+                None => name.trim().to_string(),
+            })
             .collect();
         let user = format!(
-            "Directory: {path}\nChildren (names only, not contents):\n{}\n\nClassify every child. Write each purpose in {}.",
+            "Directory: {path}\nChildren (names only, not contents; `~N days` = days since last change):\n{}\n\nClassify every child. Write each purpose in {}.",
             sample.join("\n"),
             language_name(language)
         );
@@ -162,6 +171,7 @@ fn parse_verdicts(reply: &str) -> Result<DirVerdictsDto, String> {
     let end = reply.rfind('}').ok_or_else(|| "err.aiRoutineParse".to_string())?;
     let parsed: DirVerdictsDto = serde_json::from_str(&reply[start..=end])
         .map_err(|_| "err.aiRoutineParse".to_string())?;
+    let summary = parsed.summary.trim().to_string();
     let items = parsed
         .items
         .into_iter()
@@ -179,7 +189,7 @@ fn parse_verdicts(reply: &str) -> Result<DirVerdictsDto, String> {
             }
         })
         .collect();
-    Ok(DirVerdictsDto { items })
+    Ok(DirVerdictsDto { summary, items })
 }
 
 #[cfg(test)]

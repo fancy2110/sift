@@ -576,6 +576,14 @@ const zh: Record<string, string> = {
   'home.healthCritical': '紧张',
   'home.healthFree': '可用 {0}',
   'home.healthUsed': '已用 {0}',
+  'explorer.unusedDays': '{0} 天未用',
+  'settings.protectTitle': '保护目录',
+  'settings.protectDesc': '这些目录永远不会被清理；补充后立即生效。',
+  'settings.protectEmpty': '还没有保护目录',
+  'settings.protectAdd': '添加',
+  'settings.protectRemove': '移除 {0}',
+  'toast.protectedPath': '「{0}」在保护目录中，已跳过',
+  'err.protectedPath': '该路径位于保护目录中',
 };
 
 const en: Record<string, string> = {
@@ -1113,6 +1121,14 @@ const en: Record<string, string> = {
   'home.healthCritical': 'Critical',
   'home.healthFree': 'Free {0}',
   'home.healthUsed': 'Used {0}',
+  'explorer.unusedDays': 'unused for {0} days',
+  'settings.protectTitle': 'Protected folders',
+  'settings.protectDesc': 'These folders are never cleaned; changes apply immediately.',
+  'settings.protectEmpty': 'No protected folders yet',
+  'settings.protectAdd': 'Add',
+  'settings.protectRemove': 'Remove {0}',
+  'toast.protectedPath': '“{0}” is protected and was skipped',
+  'err.protectedPath': 'This path is inside a protected folder',
 };
 
 type ParamValue = string | number;

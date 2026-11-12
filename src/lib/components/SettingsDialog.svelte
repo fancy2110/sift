@@ -39,6 +39,14 @@
   let clearToken = $state(false);
   let saving = $state(false);
   let promptDraft = $state('');
+  let protectDraft = $state('');
+
+  function addProtected() {
+    const path = protectDraft.trim();
+    if (!path.startsWith('/') || store.protectedPaths.includes(path)) return;
+    void store.saveProtectedPaths([...store.protectedPaths, path]);
+    protectDraft = '';
+  }
   let presetLabel = $state('');
   let promptSynced = false;
   $effect(() => {
@@ -506,6 +514,49 @@
             </button>
           </div>
         </div>
+
+        <div class="set-card ai-config-cell">
+          <div class="set-card-info">
+            <p class="set-card-title">{t('settings.protectTitle')}</p>
+            <p class="set-card-desc">{t('settings.protectDesc')}</p>
+          </div>
+          <div class="protect-chips">
+            {#each store.protectedPaths as path (path)}
+              <span class="protect-chip">
+                {path}
+                <button
+                  type="button"
+                  class="protect-x"
+                  aria-label={t('settings.protectRemove', [path])}
+                  onclick={() =>
+                    void store.saveProtectedPaths(
+                      store.protectedPaths.filter((item) => item !== path)
+                    )}
+                >
+                  ×
+                </button>
+              </span>
+            {:else}
+              <span class="protect-empty">{t('settings.protectEmpty')}</span>
+            {/each}
+          </div>
+          <form
+            class="protect-add"
+            onsubmit={(event) => {
+              event.preventDefault();
+              addProtected();
+            }}
+          >
+            <input
+              class="ai-input"
+              type="text"
+              bind:value={protectDraft}
+              placeholder="/Users/you/Documents"
+              spellcheck="false"
+            />
+            <button type="submit" class="btn btn-sm">{t('settings.protectAdd')}</button>
+          </form>
+        </div>
       </div>
 
     </div>
@@ -919,6 +970,51 @@
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
+  }
+  .protect-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .protect-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--color-muted);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .protect-x {
+    border: none;
+    background: transparent;
+    color: var(--color-faint);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+  }
+  .protect-x:hover {
+    color: var(--color-danger);
+  }
+  .protect-empty {
+    font-size: 11px;
+    color: var(--color-faint);
+  }
+  .protect-add {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .protect-add .ai-input {
+    margin-bottom: 0;
   }
   .ai-prompt {
     height: auto;

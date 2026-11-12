@@ -558,4 +558,12 @@ export const ja: Record<string, string> = {
   'home.healthCritical': 'ひっ迫',
   'home.healthFree': '空き {0}',
   'home.healthUsed': '使用中 {0}',
+  'explorer.unusedDays': '{0} 日未使用',
+  'settings.protectTitle': '保護フォルダ',
+  'settings.protectDesc': 'これらのフォルダは決して削除されません。',
+  'settings.protectEmpty': '保護フォルダはまだありません',
+  'settings.protectAdd': '追加',
+  'settings.protectRemove': '{0} を削除',
+  'toast.protectedPath': '「{0}」は保護フォルダ内のためスキップしました',
+  'err.protectedPath': 'このパスは保護フォルダ内です',
 };
