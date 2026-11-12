@@ -150,36 +150,6 @@
 </script>
 
 <div class="hub">
-  {#if primary}
-    <section
-      class="hub-health"
-      class:hub-health-warn={health === 'warn'}
-      class:hub-health-critical={health === 'critical'}
-      in:fade={intro({ duration: 480, delay: 80 })}
-    >
-      <div class="hh-head">
-        <span class="hh-title">{t('home.health')}</span>
-        <span class="hh-pill">
-          {t(
-            health === 'good'
-              ? 'home.healthGood'
-              : health === 'warn'
-                ? 'home.healthWarn'
-                : 'home.healthCritical'
-          )}
-        </span>
-      </div>
-      <div class="hh-bar" role="img" aria-label={`${Math.round(freeRatio * 100)}%`}>
-        <span class="hh-fill" style:width={`${(1 - freeRatio) * 100}%`}></span>
-      </div>
-      <p class="hh-meta">
-        {t('home.healthFree', [formatSize(primary.availableBytes)])}
-        · {t('home.healthUsed', [formatSize(primary.totalBytes - primary.availableBytes)])}
-        · {Math.round(freeRatio * 100)}%
-      </p>
-    </section>
-  {/if}
-
   <!-- corner meta -->
   <div class="hub-meta hub-meta-l" in:fly={intro({ y: -8, duration: 420, delay: 60 })}>
     <span class="hub-mark"><Icon name="spark" size={13} /></span>
@@ -325,9 +295,42 @@
   <div class="hub-cards">
     <button class="hub-card" onclick={() => store.go('dashboard')} in:fly={intro({ y: 26, duration: 520, delay: 420, easing: cubicOut })}>
       <span class="card-glyph glyph-blue"><Icon name="gauge" size={19} /></span>
-      <span class="card-title">{t('home.card.dashboard')}</span>
-      <span class="card-big num">{formatSize(store.totalReclaimable)}</span>
-      <span class="card-sub">{t('home.card.dashboardSub')}</span>
+      <span class="card-title">
+        {t('home.card.dashboard')}
+        {#if primary}
+          <span
+            class="card-pill"
+            class:card-pill-warn={health === 'warn'}
+            class:card-pill-critical={health === 'critical'}
+          >
+            {t(
+              health === 'good'
+                ? 'home.healthGood'
+                : health === 'warn'
+                  ? 'home.healthWarn'
+                  : 'home.healthCritical'
+            )}
+          </span>
+        {/if}
+      </span>
+      {#if primary}
+        <span class="card-big num">{Math.round(freeRatio * 100)}%</span>
+        <span class="card-sub">
+          {t('home.healthFree', [formatSize(primary.availableBytes)])} ·
+          {t('home.healthUsed', [formatSize(primary.totalBytes - primary.availableBytes)])}
+        </span>
+        <span class="card-bar" aria-hidden="true">
+          <span
+            class="card-bar-fill"
+            class:card-bar-warn={health === 'warn'}
+            class:card-bar-critical={health === 'critical'}
+            style:width={`${(1 - freeRatio) * 100}%`}
+          ></span>
+        </span>
+      {:else}
+        <span class="card-big num">{formatSize(store.totalReclaimable)}</span>
+        <span class="card-sub">{t('home.card.dashboardSub')}</span>
+      {/if}
     </button>
 
     <button class="hub-card" onclick={() => store.goSub('smart')} in:fly={intro({ y: 26, duration: 520, delay: 480, easing: cubicOut })}>
@@ -359,77 +362,45 @@
 </div>
 
 <style>
-  .hub-health {
-    position: absolute;
-    top: 52px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 3;
-    width: min(360px, calc(100% - 40px));
-    padding: 10px 13px;
-    border-radius: 12px;
-    border: 1px solid var(--color-border);
-    background: color-mix(in oklch, var(--color-surface) 82%, transparent);
-    backdrop-filter: blur(10px);
-  }
-  .hub-health-warn {
-    border-color: color-mix(in oklch, var(--color-warn) 40%, var(--color-border));
-  }
-  .hub-health-critical {
-    border-color: color-mix(in oklch, var(--color-danger) 55%, var(--color-border));
-  }
-  .hh-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-  .hh-title {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    color: var(--color-muted);
-  }
-  .hh-pill {
-    padding: 1px 8px;
+  .card-pill {
+    margin-left: 6px;
+    padding: 0 6px;
     border-radius: 999px;
     border: 1px solid color-mix(in oklch, var(--color-ok) 45%, transparent);
     color: var(--color-ok);
-    font-size: 10px;
+    font-size: 9.5px;
     font-weight: 600;
+    vertical-align: 1px;
   }
-  .hub-health-warn .hh-pill {
+  .card-pill-warn {
     color: var(--color-warn);
     border-color: color-mix(in oklch, var(--color-warn) 50%, transparent);
   }
-  .hub-health-critical .hh-pill {
+  .card-pill-critical {
     color: var(--color-danger);
     border-color: color-mix(in oklch, var(--color-danger) 55%, transparent);
   }
-  .hh-bar {
-    margin-top: 8px;
-    height: 5px;
+  .card-bar {
+    display: block;
+    width: 100%;
+    height: 4px;
+    margin-top: 6px;
     border-radius: 999px;
     background: color-mix(in oklch, var(--color-surface-3) 80%, transparent);
     overflow: hidden;
   }
-  .hh-fill {
+  .card-bar-fill {
     display: block;
     height: 100%;
     border-radius: inherit;
     background: var(--color-ok);
+    transition: width 0.4s ease;
   }
-  .hub-health-warn .hh-fill {
+  .card-bar-warn {
     background: var(--color-warn);
   }
-  .hub-health-critical .hh-fill {
+  .card-bar-critical {
     background: var(--color-danger);
-  }
-  .hh-meta {
-    margin: 7px 0 0;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    color: var(--color-faint);
   }
   .hub {
     position: relative;
