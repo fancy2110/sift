@@ -81,6 +81,8 @@ import type {
 } from './types';
 import { t, tr, renderStoreWarning, i18n } from './i18n.svelte';
 import { startupMark } from './startup';
+import { sizesFor as cachedSizes, clearSizeCache } from './sizeCache';
+import { listingFor, updateListing, clearDirCache } from './dirCache';
 import type { DirEntry } from './ipc';
 
 export interface ExplorerColumn {
@@ -763,7 +765,7 @@ class AppStore {
     let resolved = startPath;
     let entries: DirEntry[] = [];
     try {
-      const listing = await listDirEntries(startPath);
+      const listing = await listingFor(startPath);
       resolved = listing.path || startPath;
       entries = listing.entries;
     } catch {
@@ -794,49 +796,21 @@ class AppStore {
   /** Scan the selected directory itself for its recursive total. */
   private async loadExplorerTotal(path: string) {
     try {
-      const sizes = await this.sizesFor([path]);
+      const sizes = await cachedSizes([path]);
       if (this.explorerPath === path) this.explorerTotal = sizes.get(path) ?? 0;
     } catch {
       if (this.explorerPath === path) this.explorerTotal = 0;
     }
   }
 
-  /** Cached recursive totals, so switching tabs does not re-walk folders. */
-  private sizeCache = new Map<string, { size: number; at: number }>();
-  private static readonly SIZE_TTL_MS = 60_000;
-
   /** Re-read the current directory; `force` also drops cached totals. */
   async refreshExplorer(force = false) {
     if (!this.explorerPath) return;
-    if (force) this.sizeCache.clear();
+    if (force) {
+      clearSizeCache();
+      clearDirCache();
+    }
     await this.openExplorer(this.explorerPath);
-  }
-
-  /** Totals for `paths`, reusing cache entries younger than the TTL. */
-  private async sizesFor(paths: string[], force = false): Promise<Map<string, number>> {
-    const now = Date.now();
-    const out = new Map<string, number>();
-    const misses: string[] = [];
-    for (const path of paths) {
-      if (!force) {
-        const tree = this.treeSize(path);
-        if (tree !== undefined) {
-          out.set(path, tree);
-          continue;
-        }
-      }
-      const hit = this.sizeCache.get(path);
-      if (!force && hit && now - hit.at < AppStore.SIZE_TTL_MS) out.set(path, hit.size);
-      else misses.push(path);
-    }
-    if (misses.length) {
-      const sizes = await dirSizes(misses);
-      for (const size of sizes) {
-        this.sizeCache.set(size.path, { size: size.size, at: now });
-        out.set(size.path, size.size);
-      }
-    }
-    return out;
   }
 
   /** Folder row: make it the current directory. */
@@ -888,13 +862,16 @@ class AppStore {
       .map((entry) => entry.path);
     if (dirs.length === 0) return;
     try {
-      const byPath = await this.sizesFor(dirs);
+      const byPath = await cachedSizes(dirs);
       if (this.explorerRightPath !== path) return;
       for (const entry of this.explorerRight) {
         const size = byPath.get(entry.path);
         if (size !== undefined) entry.size = size;
       }
       apply();
+      if (this.explorerRightPath && this.explorerRight.length > 0) {
+        updateListing(this.explorerRightPath, this.explorerRight);
+      }
     } catch {
       // Sizes are best-effort.
     }
@@ -1263,6 +1240,12 @@ class AppStore {
 
     this.pruneIds(removed);
     this.findings = this.findings.filter((f) => !removed.has(f.id));
+    if (removed.size > 0) {
+      // Sizes and listings changed on disk: drop the shared caches so every
+      // view recomputes once instead of showing deleted bytes.
+      clearSizeCache();
+      clearDirCache();
+    }
     const wasCancelled = this.cleanupCancelled || cancelledPaths.size > 0;
     // Keep selection only for items that were not attempted, so pressing
     // "clean" again resumes with the remainder. Build from the original
