@@ -129,12 +129,57 @@
 
   // Transitions were configured during component init; clear the one-shot
   // flag after mount so navigating back to Home later plays the real intro.
+  const primary = $derived(
+    store.volumes.find((volume) => !volume.isRemovable) ?? store.volumes[0] ?? null
+  );
+  const freeRatio = $derived(
+    primary && primary.totalBytes > 0 ? primary.availableBytes / primary.totalBytes : 0
+  );
+  const health = $derived(
+    freeRatio >= 0.2 ? 'good' : freeRatio >= 0.08 ? 'warn' : 'critical'
+  );
+
   onMount(() => {
     firstBoot.value = false;
+    // Storage resources change while the app is open; refresh at launch and
+    // once a minute so the ratio is never a stale snapshot.
+    void store.refreshVolumes();
+    const timer = setInterval(() => void store.refreshVolumes(), 60_000);
+    return () => clearInterval(timer);
   });
 </script>
 
 <div class="hub">
+  {#if primary}
+    <section
+      class="hub-health"
+      class:hub-health-warn={health === 'warn'}
+      class:hub-health-critical={health === 'critical'}
+      in:fade={intro({ duration: 480, delay: 80 })}
+    >
+      <div class="hh-head">
+        <span class="hh-title">{t('home.health')}</span>
+        <span class="hh-pill">
+          {t(
+            health === 'good'
+              ? 'home.healthGood'
+              : health === 'warn'
+                ? 'home.healthWarn'
+                : 'home.healthCritical'
+          )}
+        </span>
+      </div>
+      <div class="hh-bar" role="img" aria-label={`${Math.round(freeRatio * 100)}%`}>
+        <span class="hh-fill" style:width={`${(1 - freeRatio) * 100}%`}></span>
+      </div>
+      <p class="hh-meta">
+        {t('home.healthFree', [formatSize(primary.availableBytes)])}
+        · {t('home.healthUsed', [formatSize(primary.totalBytes - primary.availableBytes)])}
+        · {Math.round(freeRatio * 100)}%
+      </p>
+    </section>
+  {/if}
+
   <!-- corner meta -->
   <div class="hub-meta hub-meta-l" in:fly={intro({ y: -8, duration: 420, delay: 60 })}>
     <span class="hub-mark"><Icon name="spark" size={13} /></span>
@@ -314,6 +359,78 @@
 </div>
 
 <style>
+  .hub-health {
+    position: absolute;
+    top: 52px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 3;
+    width: min(360px, calc(100% - 40px));
+    padding: 10px 13px;
+    border-radius: 12px;
+    border: 1px solid var(--color-border);
+    background: color-mix(in oklch, var(--color-surface) 82%, transparent);
+    backdrop-filter: blur(10px);
+  }
+  .hub-health-warn {
+    border-color: color-mix(in oklch, var(--color-warn) 40%, var(--color-border));
+  }
+  .hub-health-critical {
+    border-color: color-mix(in oklch, var(--color-danger) 55%, var(--color-border));
+  }
+  .hh-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .hh-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--color-muted);
+  }
+  .hh-pill {
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in oklch, var(--color-ok) 45%, transparent);
+    color: var(--color-ok);
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .hub-health-warn .hh-pill {
+    color: var(--color-warn);
+    border-color: color-mix(in oklch, var(--color-warn) 50%, transparent);
+  }
+  .hub-health-critical .hh-pill {
+    color: var(--color-danger);
+    border-color: color-mix(in oklch, var(--color-danger) 55%, transparent);
+  }
+  .hh-bar {
+    margin-top: 8px;
+    height: 5px;
+    border-radius: 999px;
+    background: color-mix(in oklch, var(--color-surface-3) 80%, transparent);
+    overflow: hidden;
+  }
+  .hh-fill {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--color-ok);
+  }
+  .hub-health-warn .hh-fill {
+    background: var(--color-warn);
+  }
+  .hub-health-critical .hh-fill {
+    background: var(--color-danger);
+  }
+  .hh-meta {
+    margin: 7px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--color-faint);
+  }
   .hub {
     position: relative;
     height: 100%;

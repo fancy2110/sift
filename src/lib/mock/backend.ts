@@ -972,6 +972,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
               cadence,
               averageBytes: 0,
               mode: 'approve',
+                enabled: true,
               paths
             }
           ];
@@ -1003,6 +1004,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
             cadence: suggestion.cadence,
             averageBytes: suggestion.averageBytes,
             mode: 'approve',
+                enabled: true,
             paths: []
           };
           state.routines.push(routine);
@@ -1022,6 +1024,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
                 cadence: 'cadence.weekly',
                 averageBytes,
                 mode: 'approve',
+                enabled: true,
                 paths: [path]
               }
             : {
@@ -1031,6 +1034,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
                 cadence: 'cadence.weekly',
                 averageBytes,
                 mode: 'approve',
+                enabled: true,
                 paths: []
               };
           state.routines = state.routines.filter((r) => r.id !== routine.id);
@@ -1052,6 +1056,12 @@ export function createMockBackend(bus: EventBus): MockBackend {
           const before = state.routines.length;
           state.routines = state.routines.filter((r) => r.id !== id);
           resolve((state.routines.length < before) as unknown as T);
+          break;
+        }
+        case 'set_routine_enabled': {
+          const routine = state.routines.find((r) => r.id === String(args.id ?? ''));
+          if (routine) routine.enabled = Boolean(args.enabled);
+          resolve(undefined as unknown as T);
           break;
         }
         case 'toggle_routine_mode': {

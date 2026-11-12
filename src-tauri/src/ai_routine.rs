@@ -296,6 +296,7 @@ pub fn save_routine_draft(
         sift_core::NodeKey::from_path(Path::new(&paths[0]))
     );
     services.store.upsert_routine(sift_store::RoutineEntry {
+        enabled: true,
         id,
         title: title.to_string(),
         kind: crate::analyze::CUSTOM_PATH_KIND.to_string(),

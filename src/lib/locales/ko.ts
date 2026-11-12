@@ -528,4 +528,11 @@ export const ko: Record<string, string> = {
   'env.modelHint': 'AI 제안',
   'env.admin': '관리자 권한 필요',
   'env.danger': '실행 불가',
+  'routines.toggleAria': '“{0}” 켜기/끄기',
+  'home.health': '저장소 상태',
+  'home.healthGood': '양호',
+  'home.healthWarn': '부족',
+  'home.healthCritical': '위험',
+  'home.healthFree': '여유 {0}',
+  'home.healthUsed': '사용 {0}',
 };

@@ -569,6 +569,13 @@ const zh: Record<string, string> = {
   'env.modelHint': 'AI 建议',
   'env.admin': '需要管理员',
   'env.danger': '不可运行',
+  'routines.toggleAria': '启用或停用「{0}」',
+  'home.health': '存储健康度',
+  'home.healthGood': '健康',
+  'home.healthWarn': '偏低',
+  'home.healthCritical': '紧张',
+  'home.healthFree': '可用 {0}',
+  'home.healthUsed': '已用 {0}',
 };
 
 const en: Record<string, string> = {
@@ -1099,6 +1106,13 @@ const en: Record<string, string> = {
   'env.modelHint': 'AI suggestion',
   'env.admin': 'Admin required',
   'env.danger': 'Not runnable',
+  'routines.toggleAria': 'Enable or disable “{0}”',
+  'home.health': 'Storage health',
+  'home.healthGood': 'Healthy',
+  'home.healthWarn': 'Low',
+  'home.healthCritical': 'Critical',
+  'home.healthFree': 'Free {0}',
+  'home.healthUsed': 'Used {0}',
 };
 
 type ParamValue = string | number;

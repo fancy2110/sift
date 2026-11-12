@@ -559,4 +559,11 @@ export const id: Record<string, string> = {
   'env.modelHint': 'Saran AI',
   'env.admin': 'Perlu admin',
   'env.danger': 'Tidak dapat dijalankan',
+  'routines.toggleAria': 'Aktifkan atau nonaktifkan “{0}”',
+  'home.health': 'Kesehatan penyimpanan',
+  'home.healthGood': 'Sehat',
+  'home.healthWarn': 'Rendah',
+  'home.healthCritical': 'Kritis',
+  'home.healthFree': 'Tersedia {0}',
+  'home.healthUsed': 'Terpakai {0}',
 };

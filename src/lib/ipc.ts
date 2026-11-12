@@ -384,6 +384,10 @@ export function deleteRoutine(id: string): Promise<boolean> {
   return call<boolean>('delete_routine', { id });
 }
 
+export function setRoutineEnabled(id: string, enabled: boolean): Promise<void> {
+  return call<void>('set_routine_enabled', { id, enabled });
+}
+
 export function toggleRoutineMode(id: string): Promise<boolean> {
   return call<boolean>('toggle_routine_mode', { id });
 }

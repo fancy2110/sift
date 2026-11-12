@@ -537,4 +537,11 @@ export const zhTW: Record<string, string> = {
   'env.modelHint': 'AI 建議',
   'env.admin': '需要管理員',
   'env.danger': '不可執行',
+  'routines.toggleAria': '啟用或停用「{0}」',
+  'home.health': '儲存健康度',
+  'home.healthGood': '健康',
+  'home.healthWarn': '偏低',
+  'home.healthCritical': '緊張',
+  'home.healthFree': '可用 {0}',
+  'home.healthUsed': '已用 {0}',
 };
