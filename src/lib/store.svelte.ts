@@ -1030,6 +1030,11 @@ class AppStore {
     this.goSub('smart');
     this.scheduledPending = event;
     await this.runAnalysis();
+    if (this.scheduledAutoExecute) {
+      // The scheduled pass may have deleted items while we were not looking.
+      clearSizeCache();
+      clearDirCache();
+    }
   }
 
   dismissScheduledPending() {
@@ -1138,6 +1143,11 @@ class AppStore {
   async runCleanupRule(rule: CleanupRule) {
     try {
       const result = await apiRunCleanupRule(rule.id);
+      for (const item of result.removedPaths ?? []) {
+        debitSize(item.path, item.size);
+        applyDeletion(item.path, item.size);
+      }
+      this.sizeRevision += 1;
       this.toast(
         t('toast.ruleRunDone', [String(result.removed), formatSize(result.bytes)])
       );

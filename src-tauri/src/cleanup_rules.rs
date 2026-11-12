@@ -54,6 +54,16 @@ pub struct RuleRunDto {
     pub bytes: u64,
     pub truncated: bool,
     pub results: Vec<DeleteResultItem>,
+    /// Successfully removed paths with their sizes, so the UI can debit the
+    /// shared size cache without a rescan.
+    pub removed_paths: Vec<RemovedPathDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedPathDto {
+    pub path: String,
+    pub size: u64,
 }
 
 fn now_ms() -> i64 {
@@ -225,10 +235,15 @@ pub fn run_rule(store: &Store, rule: &CleanupRule) -> Result<RuleRunDto, String>
     let mut failed = 0usize;
     let mut bytes = 0u64;
     let mut titles = Vec::new();
+    let mut removed_paths = Vec::new();
     for (entry, result) in outcome.matches.iter().zip(trash_results.iter()) {
         if result.ok {
             removed += 1;
             bytes = bytes.saturating_add(entry.size);
+            removed_paths.push(RemovedPathDto {
+                path: entry.path.to_string_lossy().into_owned(),
+                size: entry.size,
+            });
             if let Some(name) = entry.path.file_name() {
                 titles.push(name.to_string_lossy().into_owned());
             }
@@ -247,6 +262,7 @@ pub fn run_rule(store: &Store, rule: &CleanupRule) -> Result<RuleRunDto, String>
         bytes,
         truncated: outcome.truncated,
         results,
+        removed_paths,
     })
 }
 
