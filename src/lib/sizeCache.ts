@@ -110,6 +110,13 @@ export async function sizesFor(
   return out;
 }
 
+/** Record a size that is already known (e.g. a volume's used bytes) without
+ * walking the subtree. */
+export function seedSize(path: string, size: number): void {
+  load().set(path, { size, at: Date.now() });
+  scheduleFlush();
+}
+
 /** Subtract bytes of a removed item from every cached ancestor folder. */
 export function debitSize(path: string, bytes: number): void {
   if (bytes <= 0) return;

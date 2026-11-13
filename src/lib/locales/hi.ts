@@ -565,4 +565,5 @@ export const hi: Record<string, string> = {
   'explorer.previewType': 'प्रकार',
   'explorer.previewSize': 'आकार',
   'explorer.previewPath': 'पथ',
+  'home.rootSize': 'रूट आकार',
 };

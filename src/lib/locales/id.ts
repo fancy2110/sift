@@ -582,4 +582,5 @@ export const id: Record<string, string> = {
   'explorer.previewType': 'Tipe',
   'explorer.previewSize': 'Ukuran',
   'explorer.previewPath': 'Lokasi',
+  'home.rootSize': 'Ukuran root',
 };

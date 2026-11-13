@@ -135,6 +135,17 @@
   const freeRatio = $derived(
     primary && primary.totalBytes > 0 ? primary.availableBytes / primary.totalBytes : 0
   );
+  const rootUsed = $derived(
+    primary ? primary.totalBytes - primary.availableBytes : 0
+  );
+  const heroBytes = $derived(
+    store.totalReclaimable > 0
+      ? store.totalReclaimable
+      : primary
+        ? (store.dirSize(primary.mountPoint) ?? rootUsed)
+        : 0
+  );
+  const showingRoot = $derived(store.totalReclaimable === 0 && heroBytes > 0);
   const health = $derived(
     freeRatio >= 0.2 ? 'good' : freeRatio >= 0.08 ? 'warn' : 'critical'
   );
@@ -246,14 +257,16 @@
         ? (store.progress.awaiting > 0
             ? t('home.awaitingAuth')
             : t('home.scanning'))
-        : t('home.total')}
+        : showingRoot
+          ? t('home.rootSize')
+          : t('home.total')}
     </p>
     {#if store.scanning}
       <h1 class="hub-total num">
         {Math.round(shownPercent)}<span class="hub-pct">%</span>
       </h1>
     {:else}
-      {@const main = formatSizeParts(store.totalReclaimable)}
+      {@const main = formatSizeParts(heroBytes)}
       <h1 class="hub-total num" in:fly={intro({ y: 16, duration: 620, delay: 180, easing: cubicOut })}>
         {main.value}<span class="hub-unit">{main.unit}</span>
       </h1>

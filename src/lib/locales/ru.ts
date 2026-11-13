@@ -578,4 +578,5 @@ export const ru: Record<string, string> = {
   'explorer.previewType': 'Тип',
   'explorer.previewSize': 'Размер',
   'explorer.previewPath': 'Путь',
+  'home.rootSize': 'Размер корня',
 };
