@@ -568,4 +568,10 @@ export const ja: Record<string, string> = {
   'err.protectedPath': 'このパスは保護フォルダ内です',
   'routines.more': 'その他',
   'routines.moreAria': '「{0}」のその他の操作',
+  'explorer.preview': 'プレビュー',
+  'explorer.previewUnsupported': 'この形式はプレビューできません。以下はファイル詳細です',
+  'explorer.previewTruncated': '大きいファイルのため冒頭のみ表示',
+  'explorer.previewType': '種類',
+  'explorer.previewSize': 'サイズ',
+  'explorer.previewPath': 'パス',
 };

@@ -559,4 +559,10 @@ export const hi: Record<string, string> = {
   'err.protectedPath': 'यह पथ संरक्षित फ़ोल्डर में है',
   'routines.more': 'अधिक',
   'routines.moreAria': '“{0}” के लिए और विकल्प',
+  'explorer.preview': 'पूर्वावलोकन',
+  'explorer.previewUnsupported': 'इस प्रकार का पूर्वावलोकन नहीं है; नीचे विवरण है',
+  'explorer.previewTruncated': 'बड़ी फ़ाइल — केवल शुरुआत दिखाई गई',
+  'explorer.previewType': 'प्रकार',
+  'explorer.previewSize': 'आकार',
+  'explorer.previewPath': 'पथ',
 };

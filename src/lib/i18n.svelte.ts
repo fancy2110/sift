@@ -586,6 +586,12 @@ const zh: Record<string, string> = {
   'err.protectedPath': '该路径位于保护目录中',
   'routines.more': '更多',
   'routines.moreAria': '「{0}」的更多操作',
+  'explorer.preview': '预览',
+  'explorer.previewUnsupported': '此类型暂不支持预览，以下是文件详情',
+  'explorer.previewTruncated': '文件较大，仅显示开头部分',
+  'explorer.previewType': '类型',
+  'explorer.previewSize': '大小',
+  'explorer.previewPath': '路径',
 };
 
 const en: Record<string, string> = {
@@ -1133,6 +1139,12 @@ const en: Record<string, string> = {
   'err.protectedPath': 'This path is inside a protected folder',
   'routines.more': 'More',
   'routines.moreAria': 'More actions for “{0}”',
+  'explorer.preview': 'Preview',
+  'explorer.previewUnsupported': 'No inline preview for this type — details below',
+  'explorer.previewTruncated': 'Large file — showing the beginning only',
+  'explorer.previewType': 'Type',
+  'explorer.previewSize': 'Size',
+  'explorer.previewPath': 'Path',
 };
 
 type ParamValue = string | number;

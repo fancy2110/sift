@@ -168,12 +168,12 @@
             onclick={() =>
               entry.isDir
                 ? void store.enterExplorerFolder(entry)
-                : (store.explorerSelected = entry)}
+                : void store.openFilePreview(entry)}
             onkeydown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
                 if (entry.isDir) void store.enterExplorerFolder(entry);
-                else store.explorerSelected = entry;
+                else void store.openFilePreview(entry);
               }
             }}
           >
@@ -219,6 +219,49 @@
         {/each}
       {/if}
     </div>
+
+    {#if store.explorerPreview}
+      {@const preview = store.explorerPreview}
+      <aside class="fx-preview" aria-label={t('explorer.preview')}>
+        <header class="fx-preview-head">
+          <span class="fx-preview-name" title={preview.data?.path ?? ''}>
+            {preview.data?.name ?? store.explorerSelected?.name ?? ''}
+          </span>
+          <button
+            type="button"
+            class="fx-preview-close"
+            aria-label={t('common.close')}
+            onclick={() => store.closeFilePreview()}
+          >
+            <Icon name="x" size={12} />
+          </button>
+        </header>
+        {#if preview.loading}
+          <p class="fx-hint">{t('explorer.loading')}</p>
+        {:else if preview.error}
+          <p class="fx-hint">{preview.error}</p>
+        {:else if preview.data}
+          {#if preview.data.kind === 'text'}
+            <pre class="fx-preview-text">{preview.data.text}</pre>
+            {#if preview.data.truncated}
+              <p class="fx-preview-note">{t('explorer.previewTruncated')}</p>
+            {/if}
+          {:else if preview.data.kind === 'image'}
+            <img class="fx-preview-img" src={preview.data.dataUrl ?? ''} alt={preview.data.name} />
+          {:else}
+            <p class="fx-preview-note">{t('explorer.previewUnsupported')}</p>
+            <dl class="fx-details">
+              <dt>{t('explorer.previewType')}</dt>
+              <dd>{(preview.data.name.split('.').pop() ?? '').toUpperCase() || '—'}</dd>
+              <dt>{t('explorer.previewSize')}</dt>
+              <dd>{formatSize(preview.data.size)}</dd>
+              <dt>{t('explorer.previewPath')}</dt>
+              <dd class="fx-details-path">{preview.data.path}</dd>
+            </dl>
+          {/if}
+        {/if}
+      </aside>
+    {/if}
   </div>
 </div>
 
@@ -316,10 +359,100 @@
     color: var(--color-faint);
   }
   .fx-main {
+    position: relative;
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
+  }
+  .fx-preview {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 50%;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--color-border);
+    background: color-mix(in oklch, var(--color-surface) 92%, transparent);
+    backdrop-filter: blur(14px);
+    z-index: 5;
+  }
+  .fx-preview-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .fx-preview-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    font-weight: 620;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .fx-preview-close {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-faint);
+    cursor: pointer;
+  }
+  .fx-preview-close:hover {
+    color: var(--color-fg);
+  }
+  .fx-preview-text {
+    flex: 1;
+    margin: 0;
+    padding: 12px 14px;
+    overflow: auto;
+    font-family: var(--font-mono, monospace);
+    font-size: 11.5px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--color-fg);
+  }
+  .fx-preview-img {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    object-fit: contain;
+    padding: 12px;
+  }
+  .fx-preview-note {
+    margin: 10px 14px 0;
+    font-size: 11.5px;
+    color: var(--color-faint);
+  }
+  .fx-details {
+    margin: 10px 14px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 12px;
+    font-size: 11.5px;
+  }
+  .fx-details dt {
+    color: var(--color-faint);
+  }
+  .fx-details dd {
+    margin: 0;
+    color: var(--color-fg);
+    word-break: break-all;
+  }
+  .fx-details-path {
+    font-family: var(--font-mono, monospace);
+    font-size: 11px;
   }
   .fx-main-head {
     flex: none;

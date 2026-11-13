@@ -576,4 +576,10 @@ export const id: Record<string, string> = {
   'err.protectedPath': 'Path ini berada di folder dilindungi',
   'routines.more': 'Lainnya',
   'routines.moreAria': 'Tindakan lain untuk “{0}”',
+  'explorer.preview': 'Pratinjau',
+  'explorer.previewUnsupported': 'Pratinjau tidak tersedia untuk tipe ini; detail di bawah',
+  'explorer.previewTruncated': 'File besar — hanya awal yang ditampilkan',
+  'explorer.previewType': 'Tipe',
+  'explorer.previewSize': 'Ukuran',
+  'explorer.previewPath': 'Lokasi',
 };

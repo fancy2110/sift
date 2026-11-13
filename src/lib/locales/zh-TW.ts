@@ -554,4 +554,10 @@ export const zhTW: Record<string, string> = {
   'err.protectedPath': '該路徑位於保護目錄中',
   'routines.more': '更多',
   'routines.moreAria': '「{0}」的更多操作',
+  'explorer.preview': '預覽',
+  'explorer.previewUnsupported': '此類型暫不支援預覽，以下是檔案詳情',
+  'explorer.previewTruncated': '檔案較大，僅顯示開頭部分',
+  'explorer.previewType': '類型',
+  'explorer.previewSize': '大小',
+  'explorer.previewPath': '路徑',
 };
