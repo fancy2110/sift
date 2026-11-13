@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { store } from '../store.svelte';
+  import { clickOutside } from '../actions';
   import { formatSize } from '../format';
   import { t } from '../i18n.svelte';
 
@@ -14,14 +15,15 @@
     open = false;
   }
 
-  function onDocClick(event: MouseEvent) {
-    if (open && panel && !panel.contains(event.target as Node)) open = false;
-  }
 </script>
 
-<svelte:document onclick={onDocClick} />
+<svelte:window
+  onkeydown={(event) => {
+    if (event.key === 'Escape' && open) open = false;
+  }}
+/>
 
-<div class="relative" bind:this={panel}>
+<div class="relative" bind:this={panel} use:clickOutside={() => (open = false)}>
   <button
     type="button"
     class="btn btn-quiet btn-sm h-[30px]"
