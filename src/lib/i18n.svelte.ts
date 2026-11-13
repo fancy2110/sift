@@ -753,7 +753,6 @@ const en: Record<string, string> = {
   'toast.browserMode': 'Browser mode: this is simulated data — nothing touches real files',
   'banner.browserMode': 'Browser mode · simulated data',
 
-  'err.noScanYet': 'No scan results available to analyze yet',
   'err.invalidNodeId': 'Invalid node id',
   'err.deleteNotConfirmed': 'Refused: the item was not confirmed by analysis',
   'err.keepRefused': 'Refused: the item is marked to keep',
@@ -1145,6 +1144,7 @@ const en: Record<string, string> = {
   'explorer.previewType': 'Type',
   'explorer.previewSize': 'Size',
   'explorer.previewPath': 'Path',
+  'err.noScanYet': 'No scan results yet',
 };
 
 type ParamValue = string | number;

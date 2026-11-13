@@ -422,7 +422,7 @@ class AppStore {
     // waiting overlaps.
     // Show the latest persisted analysis immediately (no scan is started);
     // later flows call runAnalysis again when they produce new results.
-    void this.runAnalysis();
+    void this.runAnalysis(true);
     const activeEpochPromise = scanRunning();
     const warningsPromise = takeStoreWarnings();
     const volumesPromise = listVolumes();
@@ -1079,7 +1079,7 @@ class AppStore {
    * and the smart list both read `findings`, so any flow that finishes a
    * scan can call this and every view updates.
    */
-  async runAnalysis() {
+  async runAnalysis(quiet = false) {
     if (this.analysisRun) return this.analysisRun;
     this.analysisRun = (async () => {
       try {
@@ -1095,7 +1095,9 @@ class AppStore {
         }
         this.selectedIds = next;
       } catch (error) {
-        this.toastError(t('toast.analyzeFailed', [String(error)]));
+        // Startup adoption must stay silent: "no scan yet" is a normal state,
+        // not something to interrupt the first screen with.
+        if (!quiet) this.toastError(t('toast.analyzeFailed', [tr(String(error))]));
       } finally {
         this.analysisRun = null;
       }
