@@ -8,6 +8,9 @@ import { dirSizes } from './ipc';
 interface CachedSize {
   size: number;
   at: number;
+  /** true when the value came from a full walk of this path; derived sums
+   * are false so an exact walk is never double-counted. */
+  exact?: boolean;
 }
 
 const STORAGE_KEY = 'sift.sizeCache.v1';
@@ -87,7 +90,7 @@ export async function sizesFor(
   if (fresh.length > 0) {
     const request = dirSizes(fresh).then((sizes) => {
       for (const size of sizes) {
-        map.set(size.path, { size: size.size, at: now });
+        map.set(size.path, { size: size.size, at: now, exact: true });
         out.set(size.path, size.size);
       }
     });
@@ -113,7 +116,40 @@ export async function sizesFor(
 /** Record a size that is already known (e.g. a volume's used bytes) without
  * walking the subtree. */
 export function seedSize(path: string, size: number): void {
-  load().set(path, { size, at: Date.now() });
+  load().set(path, { size, at: Date.now(), exact: true });
+  scheduleFlush();
+}
+
+/** True when `dir` is `path` or one of its ancestors. */
+function isAncestor(dir: string, path: string): boolean {
+  if (dir === path) return true;
+  const prefix = dir === '/' ? '/' : dir.endsWith('/') ? dir : `${dir}/`;
+  return path.startsWith(prefix);
+}
+
+/** Push a size change up the cached ancestors (exact walks stay untouched). */
+function propagate(map: Map<string, CachedSize>, path: string, delta: number): void {
+  if (delta === 0) return;
+  const now = Date.now();
+  for (const [dir, entry] of map) {
+    if (dir === path || !isAncestor(dir, path)) continue;
+    if (entry.exact) continue;
+    map.set(dir, { size: Math.max(0, entry.size + delta), at: now, exact: false });
+  }
+}
+
+/**
+ * Record a folder's total assembled from its children (the listing sum) and
+ * recursively update cached ancestors, so a parent's number always reflects
+ * folders that finished measuring after it did.
+ */
+export function setDerivedSize(path: string, size: number): void {
+  const map = load();
+  const previous = map.get(path);
+  if (previous?.exact) return;
+  const before = previous?.size ?? 0;
+  map.set(path, { size, at: Date.now(), exact: false });
+  propagate(map, path, size - before);
   scheduleFlush();
 }
 

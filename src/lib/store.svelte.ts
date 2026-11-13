@@ -88,7 +88,8 @@ import {
   clearSizeCache,
   peekSize,
   debitSize,
-  seedSize
+  seedSize,
+  setDerivedSize
 } from './sizeCache';
 import { listingFor, updateListing, clearDirCache, applyDeletion } from './dirCache';
 import type { DirEntry } from './ipc';
@@ -940,6 +941,10 @@ class AppStore {
       apply();
       this.sizeRevision += 1;
       if (this.explorerRightPath && this.explorerRight.length > 0) {
+        const total = this.explorerRight.reduce((sum, item) => sum + item.size, 0);
+        // The listing sum is this folder's total; push it up so parents that
+        // were measured earlier pick up the newly known bytes.
+        setDerivedSize(this.explorerRightPath, total);
         updateListing(this.explorerRightPath, this.explorerRight);
       }
     } catch {
