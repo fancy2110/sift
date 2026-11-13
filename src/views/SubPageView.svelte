@@ -12,6 +12,7 @@
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { t, tr } from '../lib/i18n.svelte';
+  import { clickOutside } from '../lib/actions';
   import { kindTitle, reasonText, impactText, cleanupMethodText, cleanupCommandText } from '../lib/reasons';
 
   onMount(() => {
@@ -383,7 +384,7 @@
                   >
                     <span class="switch-knob"></span>
                   </button>
-                  <div class="rt-more">
+                  <div class="rt-more" use:clickOutside={() => (openMenu = null)}>
                     <button
                       type="button"
                       class="rt-btn"
