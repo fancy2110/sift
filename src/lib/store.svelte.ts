@@ -413,6 +413,9 @@ class AppStore {
     // (scanRunning → warnings → volumes → history → routines) into one wave.
     // The main-thread cost of each Tauri command is identical; only the
     // waiting overlaps.
+    // Show the latest persisted analysis immediately (no scan is started);
+    // later flows call runAnalysis again when they produce new results.
+    void this.runAnalysis();
     const activeEpochPromise = scanRunning();
     const warningsPromise = takeStoreWarnings();
     const volumesPromise = listVolumes();
@@ -1043,22 +1046,36 @@ class AppStore {
   }
 
   /** Ask the backend to analyse the finished scan and adopt the conclusions. */
-  async runAnalysis() {
-    try {
-      const summary = await analyzeCurrent();
-      this.findings = summary.findings;
-      this.environment = null;
-      void this.loadEnvironment();
-      this.routineSuggestions = await routineSuggestions();
+  /** One analysis at a time: many flows (scan done, schedule, cleanup) ask. */
+  private analysisRun: Promise<void> | null = null;
 
-      const next = new Set(this.selectedIds);
-      for (const finding of summary.findings) {
-        if (finding.safety === 'safe') next.add(finding.id);
+  /**
+   * Adopt the backend's latest analysis without starting a scan. Home totals
+   * and the smart list both read `findings`, so any flow that finishes a
+   * scan can call this and every view updates.
+   */
+  async runAnalysis() {
+    if (this.analysisRun) return this.analysisRun;
+    this.analysisRun = (async () => {
+      try {
+        const summary = await analyzeCurrent();
+        this.findings = summary.findings;
+        this.environment = null;
+        void this.loadEnvironment();
+        this.routineSuggestions = await routineSuggestions();
+
+        const next = new Set(this.selectedIds);
+        for (const finding of summary.findings) {
+          if (finding.safety === 'safe') next.add(finding.id);
+        }
+        this.selectedIds = next;
+      } catch (error) {
+        this.toastError(t('toast.analyzeFailed', [String(error)]));
+      } finally {
+        this.analysisRun = null;
       }
-      this.selectedIds = next;
-    } catch (error) {
-      this.toastError(t('toast.analyzeFailed', [String(error)]));
-    }
+    })();
+    return this.analysisRun;
   }
 
   /** Load the persisted environment snapshot; `force` re-runs inventory. */
@@ -1149,6 +1166,7 @@ class AppStore {
         applyDeletion(item.path, item.size);
       }
       this.sizeRevision += 1;
+      void this.runAnalysis();
       this.toast(
         t('toast.ruleRunDone', [String(result.removed), formatSize(result.bytes)])
       );
