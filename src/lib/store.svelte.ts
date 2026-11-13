@@ -83,7 +83,13 @@ import type {
 } from './types';
 import { t, tr, renderStoreWarning, i18n } from './i18n.svelte';
 import { startupMark } from './startup';
-import { sizesFor as cachedSizes, clearSizeCache, peekSize, debitSize } from './sizeCache';
+import {
+  sizesFor as cachedSizes,
+  clearSizeCache,
+  peekSize,
+  debitSize,
+  seedSize
+} from './sizeCache';
 import { listingFor, updateListing, clearDirCache, applyDeletion } from './dirCache';
 import type { DirEntry } from './ipc';
 
@@ -455,6 +461,13 @@ class AppStore {
     }
 
     this.volumes = volumes;
+    // The volume's used bytes are the root folder's size; seed it so Home and
+    // the explorer share the same number instead of showing nothing.
+    for (const volume of volumes) {
+      const used = volume.totalBytes - volume.availableBytes;
+      if (volume.mountPoint && used > 0) seedSize(volume.mountPoint, used);
+    }
+    this.sizeRevision += 1;
 
     // Pre-select the system disk without scanning; the user starts the first
     // scan explicitly from the home screen CTA.

@@ -592,6 +592,7 @@ const zh: Record<string, string> = {
   'explorer.previewType': '类型',
   'explorer.previewSize': '大小',
   'explorer.previewPath': '路径',
+  'home.rootSize': '根目录大小',
 };
 
 const en: Record<string, string> = {
@@ -1145,6 +1146,7 @@ const en: Record<string, string> = {
   'explorer.previewSize': 'Size',
   'explorer.previewPath': 'Path',
   'err.noScanYet': 'No scan results yet',
+  'home.rootSize': 'Root size',
 };
 
 type ParamValue = string | number;

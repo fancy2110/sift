@@ -574,4 +574,5 @@ export const ja: Record<string, string> = {
   'explorer.previewType': '種類',
   'explorer.previewSize': 'サイズ',
   'explorer.previewPath': 'パス',
+  'home.rootSize': 'ルートのサイズ',
 };
