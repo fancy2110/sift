@@ -18,11 +18,11 @@
       role="status"
       aria-live={toast.tone === 'error' ? 'assertive' : 'polite'}
       style="
-        background: color-mix(in oklch, var(--color-surface-2) 94%, transparent);
+        background: var(--color-surface-2);
         border-color: var(--color-border-strong);
-        backdrop-filter: blur(12px);
         box-shadow: 0 16px 40px -16px var(--color-shadow);
         animation: toast-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+        contain: layout paint;
       "
       in:fly={{ duration: 200, x: 40 }}
       out:fly={{ duration: 220, x: 60 }}
