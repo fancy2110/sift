@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-13
+
+### Added
+
+- File preview: clicking a file opens an overlay on the right half of the explorer — text files show their first 64 KB, images render inline up to 8 MB, everything else falls back to file details.
+- Clicking outside any popover closes it (shared `clickOutside` action), including the disk picker and the routine More menu; both also close on Escape.
+- Routine rows show a visible enable switch and collapse 立即执行 / 切换模式 / 删除 into one More dropdown; disabled routines refuse to run.
+- Home falls back to the root folder size (seeded from the volume's used bytes into the shared size cache) when there are no reclaimable items yet; the reclaimable total follows the latest analysis at startup and after scans, scheduled passes and rule cleanups.
+
+### Fixed
+
+- The Explorer filled folder sizes for every unsized folder and no longer blanks a row while its walk is running; totals and listings are shared through persisted caches, and cleanups debit them instead of clearing.
+- Startup no longer raises a 分析失败 toast for the normal "no scan yet" state, and toasts no longer flash or shift the page (removed backdrop blur, contained paint).
+- The path bar starts at the root item and no longer repeats the volume name; chevron segments interlock without gaps.
+
 ## [0.5.0] - 2026-11-12
 
 ### Added
