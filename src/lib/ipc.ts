@@ -200,6 +200,21 @@ export function listDirEntries(path: string): Promise<DirListing> {
 }
 
 /** Recursive totals for a batch of directories. */
+export interface FilePreview {
+  kind: 'text' | 'image' | 'unsupported';
+  name: string;
+  path: string;
+  size: number;
+  modifiedMs: number | null;
+  text: string | null;
+  dataUrl: string | null;
+  truncated: boolean;
+}
+
+export function filePreview(path: string): Promise<FilePreview> {
+  return call<FilePreview>('file_preview', { path });
+}
+
 export function dirSizes(paths: string[]): Promise<DirSize[]> {
   return call<DirSize[]>('dir_sizes', { paths });
 }

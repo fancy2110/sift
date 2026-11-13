@@ -595,6 +595,22 @@ export function createMockBackend(bus: EventBus): MockBackend {
             700
           );
           break;
+        case 'file_preview': {
+          const path = String(args.path ?? '');
+          const name = path.split('/').pop() ?? path;
+          const isImage = /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
+          resolve({
+            kind: isImage ? 'image' : /\.[a-z0-9]+$/i.test(name) ? 'text' : 'unsupported',
+            name,
+            path,
+            size: 1024,
+            modifiedMs: Date.now() - 86_400_000,
+            text: isImage ? null : `（模拟预览）${name}\n第二行内容\n第三行内容`,
+            dataUrl: null,
+            truncated: false
+          } as unknown as T);
+          break;
+        }
         case 'dir_sizes': {
           const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
           resolve(

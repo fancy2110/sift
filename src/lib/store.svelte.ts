@@ -27,6 +27,7 @@ import {
   dismissRoutineSuggestion,
   listHistory,
   listDirEntries,
+  filePreview,
   listDirFiles,
   listFilesUnder,
   aiExplainDir,
@@ -156,6 +157,12 @@ class AppStore {
   explorerSelected = $state<DirEntry | null>(null);
   /** Recursive total of the current directory; null while it is computed. */
   explorerTotal = $state<number | null>(null);
+  /** Right-half file preview overlay; null when closed. */
+  explorerPreview = $state<{
+    loading: boolean;
+    error: string;
+    data: import('./ipc').FilePreview | null;
+  } | null>(null);
   /** Bumped whenever a shared size lands, so readers re-render. */
   sizeRevision = $state(0);
   explorerAi = $state<{
@@ -767,6 +774,7 @@ class AppStore {
   async openExplorer(path?: string) {
     const startPath = path ?? this.currentNode?.path ?? '';
     this.explorerSelected = null;
+    this.explorerPreview = null;
     this.explorerAi = { loading: false, error: '', summary: '', items: {} };
     this.explorerRightLoading = true;
     this.explorerRight = [];
@@ -838,6 +846,23 @@ class AppStore {
   }
 
   /** Folder row: make it the current directory. */
+  /** Open the preview overlay for one file. */
+  async openFilePreview(entry: DirEntry) {
+    if (entry.isDir) return;
+    this.explorerSelected = entry;
+    this.explorerPreview = { loading: true, error: '', data: null };
+    try {
+      const data = await filePreview(entry.path);
+      this.explorerPreview = { loading: false, error: '', data };
+    } catch (error) {
+      this.explorerPreview = { loading: false, error: tr(String(error)), data: null };
+    }
+  }
+
+  closeFilePreview() {
+    this.explorerPreview = null;
+  }
+
   async enterExplorerFolder(entry: DirEntry) {
     if (!entry.isDir) {
       this.explorerSelected = entry;

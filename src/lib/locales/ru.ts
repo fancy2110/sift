@@ -572,4 +572,10 @@ export const ru: Record<string, string> = {
   'err.protectedPath': 'Этот путь находится в защищённой папке',
   'routines.more': 'Ещё',
   'routines.moreAria': 'Другие действия для «{0}»',
+  'explorer.preview': 'Просмотр',
+  'explorer.previewUnsupported': 'Предпросмотр недоступен; ниже сведения о файле',
+  'explorer.previewTruncated': 'Большой файл — показано начало',
+  'explorer.previewType': 'Тип',
+  'explorer.previewSize': 'Размер',
+  'explorer.previewPath': 'Путь',
 };

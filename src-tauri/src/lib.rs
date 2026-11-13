@@ -9,6 +9,7 @@ mod ai_explain;
 mod ai_routine;
 mod apps;
 mod explorer;
+mod preview;
 mod analyze;
 mod cleanup;
 mod cleanup_rules;
@@ -100,6 +101,7 @@ pub fn run() {
             explorer::list_files_under,
             ai_explain::ai_explain_dir,
             explorer::dir_sizes,
+            preview::file_preview,
             // deletion and filesystem awareness
             watch_fs,
             unwatch_fs,

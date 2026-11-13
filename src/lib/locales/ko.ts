@@ -545,4 +545,10 @@ export const ko: Record<string, string> = {
   'err.protectedPath': '이 경로는 보호 폴더 안에 있습니다',
   'routines.more': '더 보기',
   'routines.moreAria': '“{0}”의 추가 작업',
+  'explorer.preview': '미리보기',
+  'explorer.previewUnsupported': '이 형식은 미리보기를 지원하지 않습니다. 아래는 파일 정보입니다',
+  'explorer.previewTruncated': '큰 파일이라 앞부분만 표시합니다',
+  'explorer.previewType': '유형',
+  'explorer.previewSize': '크기',
+  'explorer.previewPath': '경로',
 };
