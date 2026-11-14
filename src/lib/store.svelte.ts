@@ -27,6 +27,7 @@ import {
   dismissRoutineSuggestion,
   listHistory,
   listDirEntries,
+  dirSizePeek,
   filePreview,
   listDirFiles,
   listFilesUnder,
@@ -180,28 +181,6 @@ class AppStore {
   /** Bumped whenever a shared size lands, so readers re-render. */
   sizeRevision = $state(0);
 
-  /**
-   * Tree update: after a folder's children are measured, set its derived
-   * total and walk up the cached listings, recomputing every parent as the
-   * sum of its children. Parents are always sums — a parent measured early
-   * must not keep a smaller number once a child turns out to be large.
-   */
-  private recomputeParentsFrom(path: string, depth = 0) {
-    if (depth > 64) return;
-    const parent = path.replace(/\/[^/]+\/?$/, '') || '/';
-    if (!parent || parent === path) return;
-    const listing = peekListing(parent);
-    if (!listing || listing.entries.length === 0) return;
-    let sum = 0;
-    for (const entry of listing.entries) {
-      const known = entry.isDir ? (peekSize(entry.path) ?? entry.size) : entry.size;
-      sum += known;
-    }
-    if (sum <= 0) return;
-    setDerivedSize(parent, sum, true);
-    this.sizeRevision += 1;
-    this.recomputeParentsFrom(parent, depth + 1);
-  }
   explorerAi = $state<{
     loading: boolean;
     error: string;
@@ -983,9 +962,14 @@ class AppStore {
         if (this.explorerRightPath === this.explorerPath && total > 0) {
           this.explorerTotal = Math.max(this.explorerTotal ?? 0, total);
         }
-        setDerivedSize(this.explorerRightPath, total, true);
         updateListing(this.explorerRightPath, this.explorerRight);
-        this.recomputeParentsFrom(this.explorerRightPath);
+        // The Rust index recomputed this folder and every ancestor; read the
+        // authoritative number back instead of deriving it here.
+        const peek = await dirSizePeek([this.explorerRightPath]);
+        const authoritative = peek[0]?.size ?? 0;
+        if (authoritative > 0 && this.explorerRightPath === this.explorerPath) {
+          this.explorerTotal = Math.max(this.explorerTotal ?? 0, authoritative);
+        }
       }
     } catch {
       // Sizes are best-effort.
