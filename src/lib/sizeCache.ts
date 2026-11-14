@@ -3,7 +3,7 @@
  * launches. A folder total is expensive to compute (full subtree walk), so
  * the same answer is reused until it goes stale or the user asks to rescan.
  */
-import { dirSizes } from './ipc';
+import { dirSizesTree, clearSizeTree, dirSizePeek } from './ipc';
 
 interface CachedSize {
   size: number;
@@ -85,10 +85,21 @@ export async function sizesFor(
     if (!force && hit && now - hit.at < TTL_MS) out.set(path, hit.size);
     else misses.push(path);
   }
-  const pending = misses.filter((path) => inflight.has(path));
-  const fresh = misses.filter((path) => !inflight.has(path));
+  // Hydrate from the backend's authoritative tree first; only walk what it
+  // does not know (or when the user forces a rescan).
+  if (misses.length > 0) {
+    const peeked = await dirSizePeek(misses);
+    for (const size of peeked) {
+      if (size.size > 0) {
+        map.set(size.path, { size: size.size, at: now, exact: false });
+        out.set(size.path, size.size);
+      }
+    }
+  }
+  const pending = misses.filter((path) => inflight.has(path) && !out.has(path));
+  const fresh = misses.filter((path) => !inflight.has(path) && !out.has(path));
   if (fresh.length > 0) {
-    const request = dirSizes(fresh).then((sizes) => {
+    const request = dirSizesTree(fresh).then((sizes: Awaited<ReturnType<typeof dirSizesTree>>) => {
       for (const size of sizes) {
         map.set(size.path, { size: size.size, at: now, exact: true });
         out.set(size.path, size.size);
@@ -175,4 +186,5 @@ export function clearSizeCache(): void {
   } catch {
     // ignore
   }
+  void clearSizeTree();
 }
