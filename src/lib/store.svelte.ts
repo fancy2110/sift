@@ -91,7 +91,13 @@ import {
   seedSize,
   setDerivedSize
 } from './sizeCache';
-import { listingFor, updateListing, clearDirCache, applyDeletion } from './dirCache';
+import {
+  listingFor,
+  updateListing,
+  clearDirCache,
+  applyDeletion,
+  peekListing
+} from './dirCache';
 import type { DirEntry } from './ipc';
 
 export interface ExplorerColumn {
@@ -172,6 +178,29 @@ class AppStore {
   } | null>(null);
   /** Bumped whenever a shared size lands, so readers re-render. */
   sizeRevision = $state(0);
+
+  /**
+   * Tree update: after a folder's children are measured, set its derived
+   * total and walk up the cached listings, recomputing every parent as the
+   * sum of its children. Parents are always sums — a parent measured early
+   * must not keep a smaller number once a child turns out to be large.
+   */
+  private recomputeParentsFrom(path: string, depth = 0) {
+    if (depth > 64) return;
+    const parent = path.replace(/\/[^/]+\/?$/, '') || '/';
+    if (!parent || parent === path) return;
+    const listing = peekListing(parent);
+    if (!listing || listing.entries.length === 0) return;
+    let sum = 0;
+    for (const entry of listing.entries) {
+      const known = entry.isDir ? (peekSize(entry.path) ?? entry.size) : entry.size;
+      sum += known;
+    }
+    if (sum <= 0) return;
+    setDerivedSize(parent, sum, true);
+    this.sizeRevision += 1;
+    this.recomputeParentsFrom(parent, depth + 1);
+  }
   explorerAi = $state<{
     loading: boolean;
     error: string;
@@ -814,8 +843,12 @@ class AppStore {
     this.explorerRight = entries;
     this.explorerRightLoading = false;
 
+    // Prefer the larger of the scan tree and the cached tree sum: a partial
+    // walk (permissions) must not shrink a folder below its children.
     const treeTotal = this.treeSize(resolved);
-    this.explorerTotal = treeTotal ?? null;
+    const cachedTotal = this.dirSize(resolved) ?? 0;
+    const best = Math.max(treeTotal ?? 0, cachedTotal);
+    this.explorerTotal = best > 0 ? best : null;
     if (treeTotal === undefined) void this.loadExplorerTotal(resolved);
 
     this.fillExplorerSizes(resolved, entries, () => {
@@ -827,7 +860,9 @@ class AppStore {
   private async loadExplorerTotal(path: string) {
     try {
       const sizes = await cachedSizes([path]);
-      if (this.explorerPath === path) this.explorerTotal = sizes.get(path) ?? 0;
+      if (this.explorerPath === path) {
+        this.explorerTotal = Math.max(this.explorerTotal ?? 0, sizes.get(path) ?? 0);
+      }
     } catch {
       if (this.explorerPath === path) this.explorerTotal = 0;
     }
@@ -942,10 +977,14 @@ class AppStore {
       this.sizeRevision += 1;
       if (this.explorerRightPath && this.explorerRight.length > 0) {
         const total = this.explorerRight.reduce((sum, item) => sum + item.size, 0);
-        // The listing sum is this folder's total; push it up so parents that
-        // were measured earlier pick up the newly known bytes.
-        setDerivedSize(this.explorerRightPath, total);
+        // This folder is the sum of its children; the header and every cached
+        // parent are rebuilt from that sum, upward.
+        if (this.explorerRightPath === this.explorerPath && total > 0) {
+          this.explorerTotal = Math.max(this.explorerTotal ?? 0, total);
+        }
+        setDerivedSize(this.explorerRightPath, total, true);
         updateListing(this.explorerRightPath, this.explorerRight);
+        this.recomputeParentsFrom(this.explorerRightPath);
       }
     } catch {
       // Sizes are best-effort.
