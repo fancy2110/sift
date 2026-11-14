@@ -304,3 +304,43 @@ pub fn dir_sizes_clear(_services: State<'_, AppServices>) {
     *data = TreeData::default();
     persist(&data);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> TreeData {
+        let mut data = TreeData::default();
+        for (child, parent) in [("/a/b", "/a"), ("/a/c", "/a"), ("/a", "/")] {
+            data.parents.insert(child.into(), parent.into());
+            data.children
+                .entry(parent.to_string())
+                .or_default()
+                .insert(child.to_string());
+        }
+        data
+    }
+
+    #[test]
+    fn parents_are_the_sum_of_their_children() {
+        let mut data = sample();
+        record(&mut data, "/a/b", 100, true);
+        record(&mut data, "/a/c", 50, true);
+        record(&mut data, "/a", 150, true);
+        assert_eq!(data.sizes.get("/a"), Some(&150));
+        assert_eq!(data.sizes.get("/"), Some(&150));
+        assert_eq!(data.exact.get("/"), Some(&false));
+    }
+
+    #[test]
+    fn a_late_child_updates_every_ancestor() {
+        let mut data = sample();
+        record(&mut data, "/a/b", 10, true);
+        record(&mut data, "/a/c", 10, true);
+        assert_eq!(data.sizes.get("/"), Some(&20));
+        // The child turns out to be much larger than the first measurement.
+        record(&mut data, "/a/c", 10_000, true);
+        assert_eq!(data.sizes.get("/a"), Some(&10_010));
+        assert_eq!(data.sizes.get("/"), Some(&10_010));
+    }
+}
