@@ -438,6 +438,10 @@ fn pump_events(
     let mut outcome = ScanOutcome::Failed;
     let mut latest = sift_core::Progress::default();
 
+    // Live index: the engine reports sizes by node key, so keep the path for
+    // every directory it announces and feed the core size tree as they close.
+    let mut dir_paths: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
     let mut discovered: Vec<NodeInfo> = vec![root_info];
     let mut sized: Vec<SizedInfo> = Vec::new();
     let mut permissions: Vec<PermissionInfo> = Vec::new();
@@ -511,6 +515,7 @@ fn pump_events(
         match event {
             ScanEvent::NodesAdopted { nodes, .. } => {
                 for node in nodes {
+                    dir_paths.insert(node.key.clone(), node.path.clone());
                     discovered.push(NodeInfo {
                         id: node.key,
                         parent_id: if node.parent_key.is_empty() {
@@ -541,6 +546,7 @@ fn pump_events(
                 }
             }
             ScanEvent::DirectoryListed { dir, .. } => {
+                dir_paths.insert(dir.key.to_string(), dir.path.clone());
                 // The directory itself is known and still filling in.
                 sized.push(SizedInfo {
                     id: dir.key.to_string(),
@@ -554,6 +560,7 @@ fn pump_events(
                     if !entry.is_dir {
                         continue;
                     }
+                    dir_paths.insert(entry.key.to_string(), join_path(&dir.path, &entry.name));
                     let path = join_path(&dir.path, &entry.name);
                     discovered.push(NodeInfo {
                         id: entry.key.to_string(),
@@ -585,6 +592,11 @@ fn pump_events(
                 estimated,
                 ..
             } => {
+                if !pending {
+                    if let Some(path) = dir_paths.get(&key.to_string()) {
+                        crate::size_tree::record_scan_dir(path, new_size.dominant());
+                    }
+                }
                 sized.push(SizedInfo {
                     id: key.to_string(),
                     size: Some(new_size.dominant()),

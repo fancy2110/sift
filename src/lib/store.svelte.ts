@@ -1102,7 +1102,6 @@ class AppStore {
     this.rescanRequested = false;
     if (this.analysedScan) return;
     this.analysedScan = true;
-    void this.ingestScanTree();
     await this.runAnalysis();
   }
 

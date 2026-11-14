@@ -231,6 +231,23 @@ pub fn scan_index_ingest(entries: Vec<ScanEntryDto>) {
     persist(&data);
 }
 
+/// Live update from the scan engine: a directory finished measuring.
+pub fn record_scan_dir(path: &str, size: u64) {
+    if !path.starts_with('/') || size == 0 {
+        return;
+    }
+    if let Some(parent) = std::path::Path::new(path)
+        .parent()
+        .map(|parent| parent.to_string_lossy().into_owned())
+    {
+        if !parent.is_empty() && parent != path {
+            register_child(&parent, path);
+        }
+    }
+    let mut data = tree().lock().unwrap();
+    record(&mut data, path, size, true);
+}
+
 /// Cached totals only (no walking); used to paint instantly.
 #[tauri::command]
 pub fn dir_size_peek(paths: Vec<String>) -> Vec<DirSizeDto> {
