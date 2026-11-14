@@ -51,7 +51,7 @@ pub struct DirSizeDto {
 }
 
 /// Upper bound on entries visited per directory during a size walk.
-const MAX_ENTRIES_PER_WALK: u64 = 200_000;
+pub(crate) const MAX_ENTRIES_PER_WALK: u64 = 200_000;
 
 fn resolve(path: &str) -> Result<PathBuf, String> {
     let trimmed = path.trim();
@@ -87,6 +87,10 @@ fn list_entries(path: &str) -> Result<DirListingDto, String> {
         // could leave the subtree the user is browsing.
         let is_dir = meta.is_dir();
         let size = if is_dir { 0 } else { meta.len() };
+        crate::size_tree::register_child(
+            &dir.to_string_lossy(),
+            &entry_path.to_string_lossy(),
+        );
         let modified_ms = meta
             .modified()
             .ok()

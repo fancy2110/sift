@@ -1,0 +1,205 @@
+//! Authoritative directory-size tree.
+//!
+//! Sizes are computed and propagated here, not in the UI: every listing
+//! registers parent/child edges, every measurement updates the node and
+//! recomputes each ancestor as the sum of its children, and the tree is
+//! persisted so the numbers survive a relaunch. Views only read it.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+
+use serde::{Deserialize, Serialize};
+use tauri::State;
+
+use crate::analyze::AppServices;
+use crate::explorer::{DirSizeDto, MAX_ENTRIES_PER_WALK};
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct TreeData {
+    /// Recursive size in bytes for a path.
+    sizes: HashMap<String, u64>,
+    /// True when `sizes` came from a full walk; false for derived sums.
+    exact: HashMap<String, bool>,
+    /// Direct children of each directory.
+    children: HashMap<String, HashSet<String>>,
+    /// Direct parent of each path.
+    parents: HashMap<String, String>,
+}
+
+static TREE: OnceLock<Mutex<TreeData>> = OnceLock::new();
+
+fn tree_path() -> Option<std::path::PathBuf> {
+    dirs::data_dir().map(|dir| dir.join("Sift").join("size-tree.json"))
+}
+
+fn load_from_disk() -> TreeData {
+    let Some(path) = tree_path() else {
+        return TreeData::default();
+    };
+    std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn tree() -> &'static Mutex<TreeData> {
+    TREE.get_or_init(|| Mutex::new(load_from_disk()))
+}
+
+fn persist(data: &TreeData) {
+    let Some(path) = tree_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(bytes) = serde_json::to_vec(data) {
+        let _ = std::fs::write(&path, bytes);
+    }
+}
+
+/// Record that `parent` contains `child`, so updates can walk upward.
+pub fn register_child(parent: &str, child: &str) {
+    if parent.is_empty() || child.is_empty() || parent == child {
+        return;
+    }
+    let mut data = tree().lock().unwrap();
+    data.parents
+        .insert(child.to_string(), parent.to_string());
+    data.children
+        .entry(parent.to_string())
+        .or_default()
+        .insert(child.to_string());
+}
+
+/// Recompute every ancestor of `path` as the sum of its known children.
+fn recompute_ancestors(data: &mut TreeData, path: &str) {
+    let mut current = path.to_string();
+    for _ in 0..64 {
+        let Some(parent) = data.parents.get(&current).cloned() else {
+            break;
+        };
+        let Some(children) = data.children.get(&parent).cloned() else {
+            break;
+        };
+        let mut sum = 0u64;
+        for child in &children {
+            sum = sum.saturating_add(data.sizes.get(child).copied().unwrap_or(0));
+        }
+        if sum > 0 {
+            data.sizes.insert(parent.clone(), sum);
+            data.exact.insert(parent.clone(), false);
+        }
+        current = parent;
+    }
+}
+
+/// Record a measured size for `path` and update the tree upward.
+fn record(data: &mut TreeData, path: &str, size: u64, exact: bool) {
+    data.sizes.insert(path.to_string(), size);
+    data.exact.insert(path.to_string(), exact);
+    recompute_ancestors(data, path);
+}
+
+fn walk(path: &str) -> (u64, bool) {
+    let mut size = 0u64;
+    let mut visited = 0u64;
+    let mut partial = false;
+    let mut stack = vec![std::path::PathBuf::from(path)];
+    while let Some(dir) = stack.pop() {
+        let Ok(reader) = std::fs::read_dir(&dir) else {
+            partial = true;
+            continue;
+        };
+        for item in reader.flatten() {
+            visited += 1;
+            if visited > MAX_ENTRIES_PER_WALK {
+                partial = true;
+                break;
+            }
+            let Ok(meta) = std::fs::symlink_metadata(item.path()) else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(item.path());
+            } else if meta.is_file() {
+                size = size.saturating_add(meta.len());
+            }
+        }
+    }
+    (size, !partial)
+}
+
+/// Cached totals only (no walking); used to paint instantly.
+#[tauri::command]
+pub fn dir_size_peek(paths: Vec<String>) -> Vec<DirSizeDto> {
+    let data = tree().lock().unwrap();
+    paths
+        .into_iter()
+        .map(|path| {
+            let size = data.sizes.get(&path).copied().unwrap_or(0);
+            let partial = !data.exact.get(&path).copied().unwrap_or(true);
+            DirSizeDto {
+                path,
+                size,
+                partial,
+            }
+        })
+        .collect()
+}
+
+/// Measure missing folders (or all when `force`), updating the tree upward.
+#[tauri::command]
+pub async fn dir_sizes_tree(paths: Vec<String>, force: bool) -> Vec<DirSizeDto> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = Vec::new();
+        let mut measured = Vec::new();
+        {
+            let data = tree().lock().unwrap();
+            for path in &paths {
+                let known = data.sizes.get(path).copied().unwrap_or(0);
+                if known > 0 && !force {
+                    out.push(DirSizeDto {
+                        path: path.clone(),
+                        size: known,
+                        partial: !data.exact.get(path).copied().unwrap_or(false),
+                    });
+                } else {
+                    measured.push(path.clone());
+                }
+            }
+        }
+        let results: Vec<(String, u64, bool)> = measured
+            .into_iter()
+            .map(|path| {
+                let (size, full) = walk(&path);
+                (path, size, full)
+            })
+            .collect();
+        {
+            let mut data = tree().lock().unwrap();
+            for (path, size, full) in &results {
+                record(&mut data, path, *size, *full);
+            }
+            persist(&data);
+            for (path, _, _) in &results {
+                out.push(DirSizeDto {
+                    path: path.clone(),
+                    size: data.sizes.get(path).copied().unwrap_or(0),
+                    partial: !data.exact.get(path).copied().unwrap_or(false),
+                });
+            }
+        }
+        out
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Drop the whole tree (manual rescan).
+#[tauri::command]
+pub fn dir_sizes_clear(_services: State<'_, AppServices>) {
+    let mut data = tree().lock().unwrap();
+    *data = TreeData::default();
+    persist(&data);
+}

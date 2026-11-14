@@ -215,6 +215,18 @@ export function filePreview(path: string): Promise<FilePreview> {
   return call<FilePreview>('file_preview', { path });
 }
 
+export function dirSizesTree(paths: string[], force = false): Promise<DirSize[]> {
+  return call<DirSize[]>('dir_sizes_tree', { paths, force });
+}
+
+export function dirSizePeek(paths: string[]): Promise<DirSize[]> {
+  return call<DirSize[]>('dir_size_peek', { paths });
+}
+
+export function clearSizeTree(): Promise<void> {
+  return call<void>('dir_sizes_clear', {});
+}
+
 export function dirSizes(paths: string[]): Promise<DirSize[]> {
   return call<DirSize[]>('dir_sizes', { paths });
 }
