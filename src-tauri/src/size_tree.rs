@@ -175,6 +175,62 @@ fn walk(path: &str) -> (u64, bool) {
     (size, !partial)
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanEntryDto {
+    pub path: String,
+    pub size: u64,
+    pub is_dir: bool,
+    pub mtime_ms: Option<i64>,
+}
+
+/// Ingest results from the scan engine: every scanned directory contributes
+/// its exact size, so a scan refreshes the shared index for all features.
+#[tauri::command]
+pub fn scan_index_ingest(entries: Vec<ScanEntryDto>) {
+    if entries.is_empty() {
+        return;
+    }
+    let mut data = tree().lock().unwrap();
+    for entry in &entries {
+        if !entry.path.starts_with('/') {
+            continue;
+        }
+        if entry.is_dir {
+            if let Some(parent) = std::path::Path::new(&entry.path)
+                .parent()
+                .map(|parent| parent.to_string_lossy().into_owned())
+            {
+                if !parent.is_empty() && parent != entry.path {
+                    data.parents.insert(entry.path.clone(), parent.clone());
+                    data.children
+                        .entry(parent)
+                        .or_default()
+                        .insert(entry.path.clone());
+                }
+            }
+            if entry.size > 0 {
+                data.sizes.insert(entry.path.clone(), entry.size);
+                data.exact.insert(entry.path.clone(), true);
+            }
+        }
+        data.nodes.insert(
+            entry.path.clone(),
+            NodeMeta {
+                is_dir: entry.is_dir,
+                mtime_ms: entry.mtime_ms,
+            },
+        );
+    }
+    // One upward pass per ingest batch: every touched ancestor becomes the
+    // sum of its children.
+    let paths: Vec<String> = entries.iter().map(|entry| entry.path.clone()).collect();
+    for path in paths {
+        recompute_ancestors(&mut data, &path);
+    }
+    persist(&data);
+}
+
 /// Cached totals only (no walking); used to paint instantly.
 #[tauri::command]
 pub fn dir_size_peek(paths: Vec<String>) -> Vec<DirSizeDto> {

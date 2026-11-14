@@ -223,6 +223,17 @@ export function dirSizePeek(paths: string[]): Promise<DirSize[]> {
   return call<DirSize[]>('dir_size_peek', { paths });
 }
 
+export interface ScanIndexEntry {
+  path: string;
+  size: number;
+  isDir: boolean;
+  mtimeMs: number | null;
+}
+
+export function scanIndexIngest(entries: ScanIndexEntry[]): Promise<void> {
+  return call<void>('scan_index_ingest', { entries });
+}
+
 export function dirSizeDebit(path: string, bytes: number): Promise<void> {
   return call<void>('dir_size_debit', { path, bytes });
 }

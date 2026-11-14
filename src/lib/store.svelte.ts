@@ -39,6 +39,7 @@ import {
   monitorStatus,
   setProtectedPaths,
   dirSizeDebit,
+  scanIndexIngest,
   onFsDeleted,
   onMonitorEvent,
   onScheduledReady,
@@ -1060,6 +1061,26 @@ class AppStore {
     }
   }
 
+  /** Push the finished scan's directory sizes into the shared Rust index. */
+  private async ingestScanTree() {
+    const entries = [...this.nodeRecords.values()]
+      .filter((node) => node.isDir && node.size > 0)
+      .map((node) => ({
+        path: node.path,
+        size: node.size,
+        isDir: true,
+        mtimeMs: node.modifiedMs ?? null
+      }));
+    for (let i = 0; i < entries.length; i += 1000) {
+      try {
+        await scanIndexIngest(entries.slice(i, i + 1000));
+      } catch {
+        // The index is best-effort; the UI still has the scan tree.
+        break;
+      }
+    }
+  }
+
   private async handleScanDone(event: ScanDoneEvent) {
     // This scan was cancelled to make room for a scope switch; release the
     // switch wait without touching the (about-to-be-reset) view state.
@@ -1081,6 +1102,7 @@ class AppStore {
     this.rescanRequested = false;
     if (this.analysedScan) return;
     this.analysedScan = true;
+    void this.ingestScanTree();
     await this.runAnalysis();
   }
 
