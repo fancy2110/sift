@@ -153,6 +153,7 @@ pub fn run() {
             analyze::delete_routine,
             analyze::toggle_routine_mode,
             analyze::set_routine_enabled,
+            analyze::set_protected_paths,
             analyze::run_routine,
             analyze::get_language,
             analyze::set_language,

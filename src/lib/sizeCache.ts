@@ -13,7 +13,6 @@ interface CachedSize {
   exact?: boolean;
 }
 
-const STORAGE_KEY = 'sift.sizeCache.v1';
 /** Totals older than this are recomputed; anything younger is reused. */
 const TTL_MS = 30 * 60_000;
 /** Hard cap on retained folders: the cache is core data, not a leak. */
@@ -25,36 +24,13 @@ let flushTimer: ReturnType<typeof setTimeout> | undefined;
 const inflight = new Map<string, Promise<void>>();
 
 function load(): Map<string, CachedSize> {
-  if (cache) return cache;
-  cache = new Map();
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Record<string, CachedSize>;
-      for (const [path, entry] of Object.entries(parsed)) {
-        if (entry && Number.isFinite(entry.size) && Number.isFinite(entry.at)) {
-          cache.set(path, entry);
-        }
-      }
-    }
-  } catch {
-    // A corrupt cache is just a cold cache.
-  }
+  if (!cache) cache = new Map();
   return cache;
 }
 
 function scheduleFlush(): void {
-  if (flushTimer) return;
-  flushTimer = setTimeout(() => {
-    flushTimer = undefined;
-    try {
-      const entries: Record<string, CachedSize> = {};
-      for (const [path, entry] of load()) entries[path] = entry;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
-    } catch {
-      // Persistence is best-effort; the in-memory cache still works.
-    }
-  }, 500);
+  // Persistence belongs to the Rust index; this map only mirrors the values
+  // needed for synchronous rendering in this session.
 }
 
 /** Fresh cached total for `path`, or null when missing/stale. */
@@ -181,10 +157,5 @@ export function debitSize(path: string, bytes: number): void {
 /** Drop every cached total (manual rescan, or after a cleanup). */
 export function clearSizeCache(): void {
   load().clear();
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // ignore
-  }
   void clearSizeTree();
 }
