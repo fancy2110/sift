@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::analyze::AppServices;
-use crate::explorer::{DirSizeDto, MAX_ENTRIES_PER_WALK};
+use crate::explorer::{DirEntryDto, DirSizeDto, MAX_ENTRIES_PER_WALK};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct TreeData {
@@ -26,6 +26,57 @@ struct TreeData {
     parents: HashMap<String, String>,
     /// Basic metadata seen during listings.
     nodes: HashMap<String, NodeMeta>,
+    /// Cached directory listings, keyed by the requested path.
+    listings: HashMap<String, CachedListing>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedListing {
+    at_ms: i64,
+    resolved: String,
+    entries: Vec<DirEntryDto>,
+}
+
+/// Listings older than this are re-read from disk.
+const LISTING_TTL_MS: i64 = 30_000;
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|age| age.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Serve a listing from the shared index when it is still fresh.
+pub fn cached_listing(path: &str) -> Option<(String, Vec<DirEntryDto>)> {
+    let data = tree().lock().unwrap();
+    let listing = data.listings.get(path)?;
+    if now_ms() - listing.at_ms > LISTING_TTL_MS {
+        return None;
+    }
+    Some((listing.resolved.clone(), listing.entries.clone()))
+}
+
+/// Remember a listing in the shared index.
+pub fn store_listing(requested: &str, resolved: &str, entries: &[DirEntryDto]) {
+    let mut data = tree().lock().unwrap();
+    data.listings.insert(
+        requested.to_string(),
+        CachedListing {
+            at_ms: now_ms(),
+            resolved: resolved.to_string(),
+            entries: entries.to_vec(),
+        },
+    );
+    persist(&data);
+}
+
+/// Drop every cached listing (manual rescan).
+#[tauri::command]
+pub fn dir_listing_clear() {
+    let mut data = tree().lock().unwrap();
+    data.listings.clear();
+    persist(&data);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,7 +139,7 @@ pub fn dir_size_debit(path: String, bytes: u64) {
     if let Some(size) = data.sizes.get_mut(&path) {
         *size = size.saturating_sub(bytes);
     }
-    let mut current = path;
+    let mut current = path.clone();
     for _ in 0..64 {
         let Some(parent) = data.parents.get(&current).cloned() else {
             break;
@@ -99,6 +150,12 @@ pub fn dir_size_debit(path: String, bytes: u64) {
             break;
         }
         current = parent;
+    }
+    // The entry is gone: drop it from every cached parent listing too.
+    for listing in data.listings.values_mut() {
+        listing
+            .entries
+            .retain(|entry| entry.path != path && !entry.path.starts_with(&format!("{path}/")));
     }
     persist(&data);
 }

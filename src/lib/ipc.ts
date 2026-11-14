@@ -195,8 +195,12 @@ export interface DirListing {
 }
 
 /** List one directory (works without any scan). */
-export function listDirEntries(path: string): Promise<DirListing> {
-  return call<DirListing>('list_dir_entries', { path });
+export function listDirEntries(path: string, force = false): Promise<DirListing> {
+  return call<DirListing>('list_dir_entries', { path, force });
+}
+
+export function clearDirListings(): Promise<void> {
+  return call<void>('dir_listing_clear', {});
 }
 
 /** Recursive totals for a batch of directories. */

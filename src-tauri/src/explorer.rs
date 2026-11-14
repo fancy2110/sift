@@ -6,10 +6,10 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Immediate children of one directory.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DirEntryDto {
     pub name: String,
@@ -67,10 +67,26 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub async fn list_dir_entries(path: String) -> Result<DirListingDto, String> {
-    tauri::async_runtime::spawn_blocking(move || list_entries(&path))
-        .await
-        .map_err(|error| error.to_string())?
+pub async fn list_dir_entries(
+    path: String,
+    force: Option<bool>,
+) -> Result<DirListingDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let force = force.unwrap_or(false);
+        if !force {
+            if let Some((resolved, entries)) = crate::size_tree::cached_listing(&path) {
+                return Ok(DirListingDto {
+                    path: resolved,
+                    entries,
+                });
+            }
+        }
+        let listing = list_entries(&path)?;
+        crate::size_tree::store_listing(&path, &listing.path, &listing.entries);
+        Ok(listing)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn list_entries(path: &str) -> Result<DirListingDto, String> {
