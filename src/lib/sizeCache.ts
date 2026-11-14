@@ -143,10 +143,10 @@ function propagate(map: Map<string, CachedSize>, path: string, delta: number): v
  * recursively update cached ancestors, so a parent's number always reflects
  * folders that finished measuring after it did.
  */
-export function setDerivedSize(path: string, size: number): void {
+export function setDerivedSize(path: string, size: number, force = false): void {
   const map = load();
   const previous = map.get(path);
-  if (previous?.exact) return;
+  if (previous?.exact && !force) return;
   const before = previous?.size ?? 0;
   map.set(path, { size, at: Date.now(), exact: false });
   propagate(map, path, size - before);

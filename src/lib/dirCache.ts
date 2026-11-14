@@ -96,6 +96,11 @@ export function applyDeletion(path: string, bytes: number): void {
 }
 
 /** Replace the cached listing after sizes were filled in. */
+/** Cached listing for `path`, or null when it was never read. */
+export function peekListing(path: string): DirListingSnapshot | null {
+  return load().get(path) ?? null;
+}
+
 export function updateListing(path: string, entries: DirEntry[]): void {
   const map = load();
   const snapshot: DirListingSnapshot = { path, entries, at: Date.now() };
