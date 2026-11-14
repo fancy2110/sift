@@ -106,6 +106,7 @@ pub fn run() {
             size_tree::dir_size_peek,
             size_tree::dir_sizes_tree,
             size_tree::dir_sizes_clear,
+            size_tree::dir_size_debit,
             // deletion and filesystem awareness
             watch_fs,
             unwatch_fs,

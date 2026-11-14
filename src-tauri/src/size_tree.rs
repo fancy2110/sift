@@ -24,6 +24,14 @@ struct TreeData {
     children: HashMap<String, HashSet<String>>,
     /// Direct parent of each path.
     parents: HashMap<String, String>,
+    /// Basic metadata seen during listings.
+    nodes: HashMap<String, NodeMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NodeMeta {
+    is_dir: bool,
+    mtime_ms: Option<i64>,
 }
 
 static TREE: OnceLock<Mutex<TreeData>> = OnceLock::new();
@@ -56,6 +64,43 @@ fn persist(data: &TreeData) {
     if let Ok(bytes) = serde_json::to_vec(data) {
         let _ = std::fs::write(&path, bytes);
     }
+}
+
+/// Remember what a listing saw: kind and modification time.
+pub fn register_node(path: &str, is_dir: bool, mtime_ms: Option<i64>) {
+    let mut data = tree().lock().unwrap();
+    data.nodes.insert(
+        path.to_string(),
+        NodeMeta {
+            is_dir,
+            mtime_ms,
+        },
+    );
+}
+
+/// Subtract bytes removed by a cleanup from a path and every ancestor.
+#[tauri::command]
+pub fn dir_size_debit(path: String, bytes: u64) {
+    if bytes == 0 {
+        return;
+    }
+    let mut data = tree().lock().unwrap();
+    if let Some(size) = data.sizes.get_mut(&path) {
+        *size = size.saturating_sub(bytes);
+    }
+    let mut current = path;
+    for _ in 0..64 {
+        let Some(parent) = data.parents.get(&current).cloned() else {
+            break;
+        };
+        if let Some(size) = data.sizes.get_mut(&parent) {
+            *size = size.saturating_sub(bytes);
+        } else {
+            break;
+        }
+        current = parent;
+    }
+    persist(&data);
 }
 
 /// Record that `parent` contains `child`, so updates can walk upward.

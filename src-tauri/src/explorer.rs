@@ -87,9 +87,15 @@ fn list_entries(path: &str) -> Result<DirListingDto, String> {
         // could leave the subtree the user is browsing.
         let is_dir = meta.is_dir();
         let size = if is_dir { 0 } else { meta.len() };
-        crate::size_tree::register_child(
-            &dir.to_string_lossy(),
-            &entry_path.to_string_lossy(),
+        let entry_path_text = entry_path.to_string_lossy().into_owned();
+        crate::size_tree::register_child(&dir.to_string_lossy(), &entry_path_text);
+        crate::size_tree::register_node(
+            &entry_path_text,
+            is_dir,
+            meta.modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|age| age.as_millis() as i64),
         );
         let modified_ms = meta
             .modified()
