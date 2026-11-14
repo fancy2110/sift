@@ -37,6 +37,7 @@ import {
   markPath,
   monitorStatus,
   setProtectedPaths,
+  dirSizeDebit,
   onFsDeleted,
   onMonitorEvent,
   onScheduledReady,
@@ -1248,6 +1249,7 @@ class AppStore {
       for (const item of result.removedPaths ?? []) {
         debitSize(item.path, item.size);
         applyDeletion(item.path, item.size);
+        void dirSizeDebit(item.path, item.size);
       }
       this.sizeRevision += 1;
       void this.runAnalysis();
@@ -1388,6 +1390,7 @@ class AppStore {
         if (!removed.has(target.id)) continue;
         debitSize(target.path, target.size);
         applyDeletion(target.path, target.size);
+        void dirSizeDebit(target.path, target.size);
       }
     }
     const wasCancelled = this.cleanupCancelled || cancelledPaths.size > 0;

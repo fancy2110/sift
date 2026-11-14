@@ -223,6 +223,10 @@ export function dirSizePeek(paths: string[]): Promise<DirSize[]> {
   return call<DirSize[]>('dir_size_peek', { paths });
 }
 
+export function dirSizeDebit(path: string, bytes: number): Promise<void> {
+  return call<void>('dir_size_debit', { path, bytes });
+}
+
 export function clearSizeTree(): Promise<void> {
   return call<void>('dir_sizes_clear', {});
 }
