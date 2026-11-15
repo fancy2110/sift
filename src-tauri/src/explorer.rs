@@ -149,6 +149,18 @@ pub async fn dir_sizes(paths: Vec<String>) -> Vec<DirSizeDto> {
     .unwrap_or_default()
 }
 
+/// Finder reports allocated bytes; APFS compression makes `len()` larger.
+pub(crate) fn size_of(meta: &std::fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    let blocks = meta.blocks();
+    if blocks > 0 {
+        blocks.saturating_mul(512)
+    } else {
+        meta.len()
+    }
+}
+
 fn recursive_size(path: &str) -> DirSizeDto {
     let mut size = 0u64;
     let mut visited = 0u64;

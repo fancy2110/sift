@@ -255,7 +255,7 @@ fn walk(path: &str) -> (u64, bool) {
             if meta.is_dir() {
                 stack.push(item.path());
             } else if meta.is_file() {
-                size = size.saturating_add(meta.len());
+                size = size.saturating_add(crate::explorer::size_of(&meta));
             }
         }
     }
