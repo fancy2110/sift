@@ -883,6 +883,13 @@ class AppStore {
     await this.openExplorer(this.explorerPath);
   }
 
+  /** Warm the cache for the first folders, so opening them is instant. */
+  private prefetchListings(entries: DirEntry[]) {
+    for (const entry of entries.filter((item) => item.isDir).slice(0, 4)) {
+      void listingFor(entry.path).catch(() => undefined);
+    }
+  }
+
   /** Folder row: make it the current directory. */
   /** Open the preview overlay for one file. */
   async openFilePreview(entry: DirEntry) {

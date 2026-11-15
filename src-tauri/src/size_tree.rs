@@ -338,7 +338,17 @@ pub fn record_scan_dir(path: &str, size: u64) {
 /// Cached totals only (no walking); used to paint instantly.
 #[tauri::command]
 pub fn dir_size_peek(paths: Vec<String>) -> Vec<DirSizeDto> {
-    let data = tree().lock().unwrap();
+    // Sync command on the main thread: never block on the index.
+    let Ok(data) = tree().try_lock() else {
+        return paths
+            .into_iter()
+            .map(|path| DirSizeDto {
+                path,
+                size: 0,
+                partial: true,
+            })
+            .collect();
+    };
     paths
         .into_iter()
         .map(|path| {

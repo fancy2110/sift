@@ -569,4 +569,5 @@ export const hi: Record<string, string> = {
   'settings.edit': 'संपादित करें',
   'common.cancel': 'रद्द करें',
   'err.listTimeout': 'फ़ोल्डर पढ़ने में समय समाप्त',
+  'explorer.showMore': 'और दिखाएँ ({0} शेष)',
 };

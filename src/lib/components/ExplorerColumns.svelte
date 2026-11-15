@@ -12,6 +12,12 @@
   import { onMount } from 'svelte';
 
   let pathBar = $state<HTMLElement>();
+  /** Rendered rows; the rest appear on demand so huge folders stay smooth. */
+  let visibleCount = $state(300);
+  $effect(() => {
+    store.explorerPath;
+    visibleCount = 300;
+  });
 
   onMount(() => {
     if (!store.explorerPath) void store.openExplorer();
@@ -63,6 +69,7 @@
       (a, b) => b.size - a.size || Number(b.isDir) - Number(a.isDir)
     )
   );
+  const visibleEntries = $derived(sortedEntries.slice(0, visibleCount));
   const totalBytes = $derived(
     store.explorerRight.reduce((sum: number, entry) => sum + entry.size, 0)
   );
@@ -153,7 +160,7 @@
       {#if store.explorerRightLoading}
         <p class="fx-hint">{t('explorer.loading')}</p>
       {:else}
-        {#each sortedEntries as entry (entry.path)}
+        {#each visibleEntries as entry (entry.path)}
           {@const finding = store.findingForPath(entry.path)}
           {@const isQueued = finding ? store.isSelected(finding.id) : false}
           {@const verdict = store.explorerAi.items[entry.name]}
@@ -217,6 +224,17 @@
         {:else}
           <p class="fx-hint">{t('list.folderEmpty')}</p>
         {/each}
+        {#if sortedEntries.length > visibleCount}
+          <button
+            type="button"
+            class="fx-more"
+            onclick={() => (visibleCount += 300)}
+          >
+            {t('explorer.showMore', [
+              String(sortedEntries.length - visibleCount)
+            ])}
+          </button>
+        {/if}
       {/if}
     </div>
 
@@ -613,6 +631,20 @@
     border-color: color-mix(in oklch, var(--color-violet) 45%, transparent);
   }
   .fx-act:hover {
+    color: var(--color-fg);
+  }
+  .fx-more {
+    display: block;
+    margin: 10px auto 6px;
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-muted);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .fx-more:hover {
     color: var(--color-fg);
   }
   .fx-hint {

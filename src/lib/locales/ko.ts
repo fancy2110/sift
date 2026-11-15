@@ -555,4 +555,5 @@ export const ko: Record<string, string> = {
   'settings.edit': '편집',
   'common.cancel': '취소',
   'err.listTimeout': '폴더 읽기 시간이 초과되었습니다',
+  'explorer.showMore': '더 보기 ({0}개 남음)',
 };

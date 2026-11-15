@@ -582,4 +582,5 @@ export const ru: Record<string, string> = {
   'settings.edit': 'Изменить',
   'common.cancel': 'Отмена',
   'err.listTimeout': 'Время чтения папки истекло',
+  'explorer.showMore': 'Показать ещё (осталось {0})',
 };

@@ -596,6 +596,7 @@ const zh: Record<string, string> = {
   'settings.edit': '编辑',
   'common.cancel': '取消',
   'err.listTimeout': '读取目录超时，请重试',
+  'explorer.showMore': '显示更多（剩余 {0} 项）',
 };
 
 const en: Record<string, string> = {
@@ -1153,6 +1154,7 @@ const en: Record<string, string> = {
   'settings.edit': 'Edit',
   'common.cancel': 'Cancel',
   'err.listTimeout': 'Reading the folder timed out; try again',
+  'explorer.showMore': 'Show more ({0} left)',
 };
 
 type ParamValue = string | number;

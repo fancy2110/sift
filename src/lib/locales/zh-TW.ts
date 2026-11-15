@@ -564,4 +564,5 @@ export const zhTW: Record<string, string> = {
   'settings.edit': '編輯',
   'common.cancel': '取消',
   'err.listTimeout': '讀取目錄逾時，請重試',
+  'explorer.showMore': '顯示更多（剩餘 {0} 項）',
 };

@@ -578,4 +578,5 @@ export const ja: Record<string, string> = {
   'settings.edit': '編集',
   'common.cancel': 'キャンセル',
   'err.listTimeout': 'フォルダの読み込みがタイムアウトしました',
+  'explorer.showMore': 'さらに表示（残り {0} 件）',
 };

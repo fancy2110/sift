@@ -586,4 +586,5 @@ export const id: Record<string, string> = {
   'settings.edit': 'Ubah',
   'common.cancel': 'Batal',
   'err.listTimeout': 'Waktu membaca folder habis',
+  'explorer.showMore': 'Tampilkan lagi ({0} tersisa)',
 };
