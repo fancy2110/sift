@@ -504,7 +504,7 @@
                           class="rt-menu-item"
                           onclick={() => {
                             openMenu = null;
-                            composerRef?.editRule(rule);
+                            store.requestEditRule(rule);
                           }}
                         >
                           <Icon name="sliders" size={11} /> {t('settings.edit')}

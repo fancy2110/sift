@@ -219,6 +219,8 @@ class AppStore {
 
   /** User-defined directory + regex cleanup rules (persisted server-side). */
   cleanupRules = $state<CleanupRule[]>([]);
+  /** Set by any view to open the composer on an existing rule. */
+  editRuleRequest = $state<CleanupRule | null>(null);
 
   /** Analyzed candidates from the backend. */
   findings = $state<Finding[]>([]);
@@ -1223,6 +1225,11 @@ class AppStore {
       this.toastError(tr(String(error)));
       return null;
     }
+  }
+
+  /** Ask the composer to open for editing; the component clears it. */
+  requestEditRule(rule: CleanupRule) {
+    this.editRuleRequest = rule;
   }
 
   async toggleCleanupRule(rule: CleanupRule) {

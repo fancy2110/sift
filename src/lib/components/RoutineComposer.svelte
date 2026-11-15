@@ -58,6 +58,14 @@
     open = true;
   }
 
+  // A store request works even when the menu closes in the same tick.
+  $effect(() => {
+    if (store.editRuleRequest) {
+      editRule(store.editRuleRequest);
+      store.editRuleRequest = null;
+    }
+  });
+
   function openDialog() {
     editingRuleId = '';
     mode = 'manual';
