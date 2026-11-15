@@ -5,6 +5,7 @@
    * approve-before-run routine.
    */
   import Icon from './Icon.svelte';
+  import { onMount } from 'svelte';
   import { store } from '../store.svelte';
   import { t } from '../i18n.svelte';
   import { pickDirectory } from '../dialog';
@@ -58,12 +59,22 @@
     open = true;
   }
 
-  // A store request works even when the menu closes in the same tick.
+  // Two independent entry points: the store request and a direct window
+  // event, so a lost click in one path cannot leave the editor closed.
   $effect(() => {
     if (store.editRuleRequest) {
       editRule(store.editRuleRequest);
       store.editRuleRequest = null;
     }
+  });
+
+  onMount(() => {
+    const handler = (event: Event) => {
+      const rule = (event as CustomEvent<CleanupRule>).detail;
+      if (rule) editRule(rule);
+    };
+    window.addEventListener('sift:edit-rule', handler);
+    return () => window.removeEventListener('sift:edit-rule', handler);
   });
 
   function openDialog() {
@@ -358,7 +369,7 @@
   .rc-overlay {
     position: fixed;
     inset: 0;
-    z-index: 60;
+    z-index: 80;
     display: flex;
     align-items: center;
     justify-content: center;

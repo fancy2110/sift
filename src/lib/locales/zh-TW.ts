@@ -562,4 +562,5 @@ export const zhTW: Record<string, string> = {
   'explorer.previewPath': '路徑',
   'home.rootSize': '根目錄大小',
   'settings.edit': '編輯',
+  'common.cancel': '取消',
 };

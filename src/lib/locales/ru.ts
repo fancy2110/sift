@@ -580,4 +580,5 @@ export const ru: Record<string, string> = {
   'explorer.previewPath': 'Путь',
   'home.rootSize': 'Размер корня',
   'settings.edit': 'Изменить',
+  'common.cancel': 'Отмена',
 };

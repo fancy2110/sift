@@ -553,4 +553,5 @@ export const ko: Record<string, string> = {
   'explorer.previewPath': '경로',
   'home.rootSize': '루트 크기',
   'settings.edit': '편집',
+  'common.cancel': '취소',
 };

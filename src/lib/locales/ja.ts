@@ -576,4 +576,5 @@ export const ja: Record<string, string> = {
   'explorer.previewPath': 'パス',
   'home.rootSize': 'ルートのサイズ',
   'settings.edit': '編集',
+  'common.cancel': 'キャンセル',
 };

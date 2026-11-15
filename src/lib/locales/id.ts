@@ -584,4 +584,5 @@ export const id: Record<string, string> = {
   'explorer.previewPath': 'Lokasi',
   'home.rootSize': 'Ukuran root',
   'settings.edit': 'Ubah',
+  'common.cancel': 'Batal',
 };
