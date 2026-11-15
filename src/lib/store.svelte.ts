@@ -809,6 +809,9 @@ class AppStore {
     this.explorerAi = { loading: false, error: '', summary: '', items: {} };
     this.explorerRightLoading = true;
     this.explorerRight = [];
+    // Drop pending scan tasks for the folder we are leaving; the new one is
+    // prioritized once its listing arrives.
+    this.scanQueue = [];
     // Stop the spinner after a while even if the backend is slow, but let the
     // request finish and fill the list when it does.
     const spinnerWatchdog = setTimeout(() => {
@@ -973,30 +976,39 @@ class AppStore {
    * Lazy child-folder totals for folders the scan did not cover (or whose scan
    * is still pending). The scan tree is always preferred.
    */
-  private fillExplorerSizes(
-    path: string,
-    entries: DirEntry[],
-    apply: () => void
-  ) {
-    const dirs = entries
-      .filter((entry) => entry.isDir && entry.size === 0)
-      .map((entry) => entry.path);
-    if (dirs.length === 0) {
-      this.explorerSizesSettled = true;
-      return;
+  /** Scan scheduler: one task per folder, shared across every view. */
+  private scanQueue: { path: string; priority: number; target: string }[] = [];
+  private scanActive = 0;
+  private static readonly SCAN_CONCURRENCY = 2;
+
+  /** Highest priority: the folder the user just opened. */
+  prioritizeScan(path: string) {
+    for (const task of this.scanQueue) {
+      if (task.path === path) task.priority = 10;
     }
-    // One request per folder so each total lands as soon as it is walked;
-    // a slow folder no longer holds back the others.
-    let left = dirs.length;
-    this.explorerSizesSettled = false;
-    for (const dir of dirs) {
-      void cachedSizes([dir])
+    void this.enqueueSize(path, 10, path);
+  }
+
+  private enqueueSize(path: string, priority: number, target: string) {
+    if (this.scanQueue.some((task) => task.path === path)) return;
+    this.scanQueue.push({ path, priority, target });
+    this.scanQueue.sort((a, b) => b.priority - a.priority);
+    this.pumpSizes();
+  }
+
+  private pumpSizes() {
+    while (
+      this.scanActive < AppStore.SCAN_CONCURRENCY &&
+      this.scanQueue.length > 0
+    ) {
+      const task = this.scanQueue.shift()!;
+      this.scanActive += 1;
+      void cachedSizes([task.path])
         .then((sizes) => {
-          const size = sizes.get(dir);
-          if (!size || this.explorerRightPath !== path) return;
-          const entry = this.explorerRight.find((item) => item.path === dir);
-          if (!entry) return;
-          entry.size = size;
+          const size = sizes.get(task.path);
+          if (!size) return;
+          const entry = this.explorerRight.find((item) => item.path === task.path);
+          if (entry) entry.size = size;
           this.sizeRevision += 1;
           const total = this.explorerRight.reduce((sum, item) => sum + item.size, 0);
           if (this.explorerRightPath === this.explorerPath && total > 0) {
@@ -1005,13 +1017,31 @@ class AppStore {
         })
         .catch(() => undefined)
         .finally(() => {
-          left -= 1;
-          if (left === 0) {
+          this.scanActive -= 1;
+          if (this.scanQueue.length === 0 && this.scanActive === 0) {
             this.explorerSizesSettled = true;
-            apply();
           }
+          this.pumpSizes();
         });
     }
+  }
+
+  private fillExplorerSizes(
+    path: string,
+    entries: DirEntry[],
+    _apply: () => void
+  ) {
+    const dirs = entries
+      .filter((entry) => entry.isDir && entry.size === 0)
+      .map((entry) => entry.path);
+    if (dirs.length === 0) {
+      this.explorerSizesSettled = true;
+      return;
+    }
+    this.explorerSizesSettled = false;
+    for (const dir of dirs) this.enqueueSize(dir, 0, path);
+    // The opened folder itself goes first.
+    this.prioritizeScan(path);
   }
 
   private async refreshCurrentFiles() {
