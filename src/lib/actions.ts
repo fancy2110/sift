@@ -7,14 +7,13 @@ export function clickOutside(node: HTMLElement, onOutside: () => void) {
   const handler = (event: Event) => {
     if (!node.contains(event.target as Node)) onOutside();
   };
-  // Both: pointerdown feels immediate, click covers keyboard/synthetic
-  // activations that never fire a pointer event.
+  // Pointerdown only: closing on capture-phase `click` can remove the menu
+  // before the item's own handler runs (the node may already be detached by a
+  // re-render), which silently swallowed menu actions such as 编辑.
   document.addEventListener('pointerdown', handler, true);
-  document.addEventListener('click', handler, true);
   return {
     destroy() {
       document.removeEventListener('pointerdown', handler, true);
-      document.removeEventListener('click', handler, true);
     }
   };
 }
