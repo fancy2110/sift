@@ -51,7 +51,7 @@ pub struct DirSizeDto {
 }
 
 /// Upper bound on entries visited per directory during a size walk.
-pub(crate) const MAX_ENTRIES_PER_WALK: u64 = 200_000;
+pub(crate) const MAX_ENTRIES_PER_WALK: u64 = 20_000_000;
 
 fn resolve(path: &str) -> Result<PathBuf, String> {
     let trimmed = path.trim();
@@ -290,6 +290,20 @@ mod tests {
         assert!(files.iter().any(|file| file.relative == "a/nested/two.txt"));
         assert!(files.iter().any(|file| file.name == "top.txt"));
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    #[ignore]
+    fn walk_probe() {
+        let path = std::env::var("SIFT_WALK_PATH").expect("SIFT_WALK_PATH");
+        let started = std::time::Instant::now();
+        let dto = recursive_size(&path);
+        println!(
+            "size={} partial={} elapsed_ms={}",
+            dto.size,
+            dto.partial,
+            started.elapsed().as_millis()
+        );
     }
 
     #[test]
