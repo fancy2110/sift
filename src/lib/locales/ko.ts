@@ -552,4 +552,5 @@ export const ko: Record<string, string> = {
   'explorer.previewSize': '크기',
   'explorer.previewPath': '경로',
   'home.rootSize': '루트 크기',
+  'settings.edit': '편집',
 };

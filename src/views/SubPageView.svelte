@@ -442,7 +442,7 @@
             {/each}
 
             {#each store.cleanupRules as rule (rule.id)}
-              <article class="rt-card">
+              <article class="rt-card" class:rt-card-off={!rule.enabled}>
                 <span class="rt-card-icon">
                   <Icon name="filter" size={14} />
                 </span>
@@ -450,9 +450,6 @@
                   <div class="rt-card-top">
                     <p class="rt-card-name">{rule.name}</p>
                     <span class="rt-chip">{t('routines.ruleBadge')}</span>
-                    {#if !rule.enabled}
-                      <span class="rt-chip">{t('routines.disabled')}</span>
-                    {/if}
                   </div>
                   <p class="rt-card-meta" title={`${rule.dir} · ${rule.pattern}`}>
                     {rule.dir} · <code>{rule.pattern}</code>
@@ -464,31 +461,68 @@
                 <div class="rt-card-actions">
                   <button
                     type="button"
-                    class="rt-btn"
-                    title={t('settings.ruleRun')}
-                    aria-label={t('settings.ruleRun')}
-                    onclick={() => store.runCleanupRule(rule)}
+                    class="switch"
+                    class:switch-on={rule.enabled}
+                    role="switch"
+                    aria-checked={rule.enabled}
+                    aria-label={t('routines.toggleAria', [rule.name])}
+                    title={t('routines.toggleAria', [rule.name])}
+                    onclick={() => void store.toggleCleanupRule(rule)}
                   >
-                    <Icon name="play" size={10.5} />
+                    <span class="switch-knob"></span>
                   </button>
-                  <button
-                    type="button"
-                    class="rt-btn"
-                    title={t('settings.aiEditProfile')}
-                    aria-label={t('settings.aiEditProfile')}
-                    onclick={() => composerRef?.editRule(rule)}
-                  >
-                    <Icon name="sliders" size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    class="rt-btn rt-btn-danger"
-                    title={t('settings.delete')}
-                    aria-label={t('settings.delete')}
-                    onclick={() => store.removeCleanupRule(rule.id)}
-                  >
-                    <Icon name="trash" size={12} />
-                  </button>
+                  <div class="rt-more" use:clickOutside={() => (openMenu = null)}>
+                    <button
+                      type="button"
+                      class="rt-btn"
+                      aria-haspopup="menu"
+                      aria-expanded={openMenu === `rule:${rule.id}`}
+                      aria-label={t('routines.moreAria', [rule.name])}
+                      title={t('routines.more')}
+                      onclick={() =>
+                        (openMenu = openMenu === `rule:${rule.id}` ? null : `rule:${rule.id}`)}
+                    >
+                      <Icon name="sliders" size={12} /> {t('routines.more')}
+                    </button>
+                    {#if openMenu === `rule:${rule.id}`}
+                      <div class="rt-menu" role="menu">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          class="rt-menu-item"
+                          disabled={!rule.enabled}
+                          onclick={() => {
+                            openMenu = null;
+                            void store.runCleanupRule(rule);
+                          }}
+                        >
+                          <Icon name="play" size={11} /> {t('routines.runNow')}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          class="rt-menu-item"
+                          onclick={() => {
+                            openMenu = null;
+                            composerRef?.editRule(rule);
+                          }}
+                        >
+                          <Icon name="sliders" size={11} /> {t('settings.edit')}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          class="rt-menu-item rt-menu-danger"
+                          onclick={() => {
+                            openMenu = null;
+                            void store.removeCleanupRule(rule.id);
+                          }}
+                        >
+                          <Icon name="trash" size={11} /> {t('settings.delete')}
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
                 </div>
               </article>
             {/each}
@@ -1196,10 +1230,6 @@
   .rt-btn:hover {
     color: var(--color-fg);
     border-color: var(--color-faint);
-  }
-  .rt-btn-danger:hover {
-    color: var(--color-danger);
-    border-color: color-mix(in oklch, var(--color-danger) 60%, transparent);
   }
   .rt-empty {
     margin: 6px 0 10px;

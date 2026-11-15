@@ -566,4 +566,5 @@ export const hi: Record<string, string> = {
   'explorer.previewSize': 'आकार',
   'explorer.previewPath': 'पथ',
   'home.rootSize': 'रूट आकार',
+  'settings.edit': 'संपादित करें',
 };

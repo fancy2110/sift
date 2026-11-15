@@ -326,7 +326,16 @@ export function createMockBackend(bus: EventBus): MockBackend {
     /** Persisted definitively-cleanable list, keyed by finding id. */
     cleanable: new Map<string, Finding>(),
     /** User-defined cleanup rules (mock keeps them in memory only). */
-    cleanupRules: [] as CleanupRule[],
+    cleanupRules: [
+      {
+        id: 'demo-rule',
+        name: '每周清理下载目录安装包',
+        dir: '/Users/you/Downloads',
+        pattern: '^.*\\.(dmg|pkg|mpkg)$',
+        olderThanDays: 7,
+        enabled: true
+      }
+    ] as CleanupRule[],
     history: [
       {
         id: 'h-2', atMs: NOW - 30 * DAY_MS, bytes: 30 * GB, items: 2,
