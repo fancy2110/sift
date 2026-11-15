@@ -6,6 +6,7 @@
 //! persisted so the numbers survive a relaunch. Views only read it.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
@@ -68,7 +69,7 @@ pub fn store_listing(requested: &str, resolved: &str, entries: &[DirEntryDto]) {
             entries: entries.to_vec(),
         },
     );
-    persist(&data);
+    mark_dirty();
 }
 
 /// Drop every cached listing (manual rescan).
@@ -86,6 +87,26 @@ struct NodeMeta {
 }
 
 static TREE: OnceLock<Mutex<TreeData>> = OnceLock::new();
+/// Writes are debounced: a scan updates thousands of nodes per second and
+/// serializing the whole tree each time would hold the lock and freeze the UI.
+static DIRTY: AtomicBool = AtomicBool::new(false);
+static FLUSHER: OnceLock<()> = OnceLock::new();
+
+fn mark_dirty() {
+    DIRTY.store(true, Ordering::Relaxed);
+    FLUSHER.get_or_init(|| {
+        std::thread::Builder::new()
+            .name("sift-size-flush".into())
+            .spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                if DIRTY.swap(false, Ordering::Relaxed) {
+                    let data = tree().lock().unwrap();
+                    persist(&data);
+                }
+            })
+            .ok();
+    });
+}
 
 fn tree_path() -> Option<std::path::PathBuf> {
     dirs::data_dir().map(|dir| dir.join("Sift").join("size-tree.json"))
@@ -157,7 +178,7 @@ pub fn dir_size_debit(path: String, bytes: u64) {
             .entries
             .retain(|entry| entry.path != path && !entry.path.starts_with(&format!("{path}/")));
     }
-    persist(&data);
+    mark_dirty();
 }
 
 /// Record that `parent` contains `child`, so updates can walk upward.
@@ -172,6 +193,7 @@ pub fn register_child(parent: &str, child: &str) {
         .entry(parent.to_string())
         .or_default()
         .insert(child.to_string());
+    mark_dirty();
 }
 
 /// Recompute every ancestor of `path` as the sum of its known children.
@@ -356,7 +378,7 @@ pub async fn dir_sizes_tree(paths: Vec<String>, force: bool) -> Vec<DirSizeDto> 
             for (path, size, full) in &results {
                 record(&mut data, path, *size, *full);
             }
-            persist(&data);
+            mark_dirty();
             for (path, _, _) in &results {
                 out.push(DirSizeDto {
                     path: path.clone(),
