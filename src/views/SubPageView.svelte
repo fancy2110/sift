@@ -23,6 +23,13 @@
   /** Routine id whose "more" menu is open. */
   let openMenu = $state<string | null>(null);
 
+  /** One entry point for editing a rule, used by the menu and the card. */
+  function openRuleEditor(rule: CleanupRule) {
+    openMenu = null;
+    store.requestEditRule(rule);
+    window.dispatchEvent(new CustomEvent('sift:edit-rule', { detail: rule }));
+  }
+
   function selectAllSmart() {
     store.selectedIds = new Set(store.smartItems.map((i) => i.id));
   }
@@ -442,7 +449,20 @@
             {/each}
 
             {#each store.cleanupRules as rule (rule.id)}
-              <article class="rt-card" class:rt-card-off={!rule.enabled}>
+              <div
+                class="rt-card"
+                class:rt-card-off={!rule.enabled}
+                role="button"
+                tabindex="0"
+                title={t('settings.edit')}
+                onclick={(event) => {
+                  if ((event.target as HTMLElement).closest('.switch, .rt-more')) return;
+                  openRuleEditor(rule);
+                }}
+                onkeydown={(event) => {
+                  if (event.key === 'Enter') openRuleEditor(rule);
+                }}
+              >
                 <span class="rt-card-icon">
                   <Icon name="filter" size={14} />
                 </span>
@@ -503,8 +523,7 @@
                           role="menuitem"
                           class="rt-menu-item"
                           onclick={() => {
-                            openMenu = null;
-                            store.requestEditRule(rule);
+                            openRuleEditor(rule);
                           }}
                         >
                           <Icon name="sliders" size={11} /> {t('settings.edit')}
@@ -524,7 +543,7 @@
                     {/if}
                   </div>
                 </div>
-              </article>
+              </div>
             {/each}
 
             {#if store.routines.length === 0 && store.cleanupRules.length === 0}
