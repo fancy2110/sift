@@ -22,8 +22,6 @@
   let composerRef = $state<{ editRule: (rule: CleanupRule) => void } | null>(null);
   /** Routine id whose "more" menu is open. */
   let openMenu = $state<string | null>(null);
-  /** Rule being edited inline (guaranteed response, no dialog). */
-  let editingRule = $state<CleanupRule | null>(null);
 
   function selectAllSmart() {
     store.selectedIds = new Set(store.smartItems.map((i) => i.id));
@@ -453,58 +451,12 @@
                     <p class="rt-card-name">{rule.name}</p>
                     <span class="rt-chip">{t('routines.ruleBadge')}</span>
                   </div>
-                  {#if editingRule?.id === rule.id}
-                    <div class="rt-inline-form">
-                      <input
-                        class="ai-input"
-                        type="text"
-                        aria-label={t('settings.ruleName')}
-                        bind:value={editingRule.name}
-                      />
-                      <input
-                        class="ai-input"
-                        type="text"
-                        aria-label={t('settings.ruleDir')}
-                        bind:value={editingRule.dir}
-                      />
-                      <input
-                        class="ai-input"
-                        type="text"
-                        aria-label={t('settings.rulePattern')}
-                        bind:value={editingRule.pattern}
-                      />
-                      <input
-                        class="ai-input rt-days"
-                        type="number"
-                        min="0"
-                        aria-label={t('settings.ruleDays', [''])}
-                        bind:value={editingRule.olderThanDays}
-                      />
-                      <div class="rt-inline-actions">
-                        <button
-                          type="button"
-                          class="btn btn-sm"
-                          onclick={async () => {
-                            if (!editingRule) return;
-                            await store.saveCleanupRuleDraft(editingRule);
-                            editingRule = null;
-                          }}
-                        >
-                          {t('settings.save')}
-                        </button>
-                        <button type="button" class="btn btn-sm" onclick={() => (editingRule = null)}>
-                          {t('common.cancel')}
-                        </button>
-                      </div>
-                    </div>
-                  {:else}
                   <p class="rt-card-meta" title={`${rule.dir} · ${rule.pattern}`}>
                     {rule.dir} · <code>{rule.pattern}</code>
                     {#if rule.olderThanDays > 0}
                       · {t('settings.ruleDays', [String(rule.olderThanDays)])}
                     {/if}
                   </p>
-                  {/if}
                 </div>
                 <div class="rt-card-actions">
                   <button
@@ -552,7 +504,7 @@
                           class="rt-menu-item"
                           onclick={() => {
                             openMenu = null;
-                            editingRule = { ...rule };
+                            store.requestEditRule(rule);
                           }}
                         >
                           <Icon name="sliders" size={11} /> {t('settings.edit')}
@@ -1131,25 +1083,6 @@
   }
   .rt-more {
     position: relative;
-  }
-  .rt-inline-form {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 8px;
-  }
-  .rt-inline-form .ai-input {
-    flex: 1 1 160px;
-    height: 30px;
-    margin: 0;
-  }
-  .rt-inline-form .rt-days {
-    flex: 0 0 80px;
-  }
-  .rt-inline-actions {
-    display: flex;
-    gap: 8px;
-    flex-basis: 100%;
   }
   .rt-menu {
     position: absolute;

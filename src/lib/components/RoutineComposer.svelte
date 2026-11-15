@@ -169,7 +169,7 @@
   <Icon name="play" size={10} /> {t('routines.addTask')}
 </button>
 
-{#if open}
+{#if open || store.editRuleRequest}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="rc-overlay" role="presentation" use:portal onclick={close}>
     <div
@@ -181,7 +181,9 @@
       onclick={(event) => event.stopPropagation()}
     >
       <div class="rc-head">
-        <h3 class="rc-title">{t('routines.addTask')}</h3>
+        <h3 class="rc-title">
+          {editingRuleId ? t('settings.edit') : t('routines.addTask')}
+        </h3>
         <button type="button" class="rc-icon" aria-label={t('settings.ruleCancel')} onclick={close}>
           <Icon name="x" size={13} />
         </button>
