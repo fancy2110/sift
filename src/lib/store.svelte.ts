@@ -38,6 +38,7 @@ import {
   markPath,
   monitorStatus,
   setProtectedPaths,
+  setCleanupMethod,
   dirSizeDebit,
   scanIndexIngest,
   onFsDeleted,
@@ -214,6 +215,7 @@ class AppStore {
   scheduledHour = $state(4);
   scheduledAutoExecute = $state(false);
   protectedPaths = $state<string[]>([]);
+  cleanupMethod = $state<'trash' | 'delete'>('trash');
   /** Set by the daily analysis pass; cleared when the user acts on it. */
   scheduledPending = $state<{ pending: number; ruleMatches: number } | null>(null);
 
@@ -1837,6 +1839,7 @@ class AppStore {
       this.scheduledHour = status.scheduledHour;
       this.scheduledAutoExecute = status.scheduledAutoExecute;
       this.protectedPaths = status.protectedPaths ?? [];
+      this.cleanupMethod = status.cleanupMethod === 'delete' ? 'delete' : 'trash';
     } catch {
       // Status is best-effort.
     }
@@ -1847,6 +1850,15 @@ class AppStore {
     try {
       const status = await setProtectedPaths(paths);
       this.protectedPaths = status.protectedPaths;
+    } catch (error) {
+      this.toastError(tr(String(error)));
+    }
+  }
+
+  async saveCleanupMethod(method: 'trash' | 'delete') {
+    try {
+      const status = await setCleanupMethod(method);
+      this.cleanupMethod = status.cleanupMethod === 'delete' ? 'delete' : 'trash';
     } catch (error) {
       this.toastError(tr(String(error)));
     }

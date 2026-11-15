@@ -587,4 +587,8 @@ export const id: Record<string, string> = {
   'common.cancel': 'Batal',
   'err.listTimeout': 'Waktu membaca folder habis',
   'explorer.showMore': 'Tampilkan lagi ({0} tersisa)',
+  'settings.cleanupMethodTitle': 'Metode pembersihan',
+  'settings.cleanupMethodDesc': 'Cara menghapus file; hapus langsung tidak bisa dibatalkan.',
+  'settings.cleanupMethodTrash': 'Pindahkan ke Sampah (bisa dipulihkan)',
+  'settings.cleanupMethodDelete': 'Hapus permanen',
 };

@@ -173,6 +173,8 @@ pub struct MonitorStatusDto {
     pub scheduled_auto_execute: bool,
     /// Directories that must never be cleaned.
     pub protected_paths: Vec<String>,
+    /// `trash` | `delete`
+    pub cleanup_method: String,
 }
 
 // ---- commands --------------------------------------------------------------
@@ -610,8 +612,26 @@ fn perform_cleanup_with(
     }
 
     let as_paths: Vec<PathBuf> = allowed.iter().map(|entry| entry.path.clone()).collect();
-    let trash_results =
-        sift_platform::trash::trash_paths_cancellable(&as_paths, cancel);
+    let permanent = store.settings().monitor.cleanup_method == "delete";
+    let trash_results = if permanent {
+        as_paths
+            .iter()
+            .map(|path| {
+                let result = if path.is_dir() {
+                    std::fs::remove_dir_all(path)
+                } else {
+                    std::fs::remove_file(path)
+                };
+                sift_platform::trash::TrashResult::direct(
+                    path.clone(),
+                    result.is_ok(),
+                    result.err().map(|error| error.to_string()),
+                )
+            })
+            .collect()
+    } else {
+        sift_platform::trash::trash_paths_cancellable(&as_paths, cancel)
+    };
 
     let mut session_bytes: u64 = 0;
     let mut session_titles: Vec<String> = Vec::new();
@@ -696,6 +716,7 @@ pub fn monitor_status(
         scheduled_hour: settings.monitor.scheduled_hour,
         scheduled_auto_execute: settings.monitor.scheduled_auto_execute,
         protected_paths: settings.monitor.protected_paths.clone(),
+        cleanup_method: settings.monitor.cleanup_method.clone(),
     }
 }
 
@@ -1510,6 +1531,23 @@ pub fn seed_default_routines(store: &sift_store::Store) {
         settings.monitor.defaults_seeded = true;
     });
     let _ = store.flush_if_dirty();
+}
+
+/// Choose what cleanup does: move to the Trash (recoverable) or delete for good.
+#[tauri::command]
+pub fn set_cleanup_method(
+    services: State<'_, AppServices>,
+    scans: State<'_, ScanManager>,
+    method: String,
+) -> Result<MonitorStatusDto, String> {
+    if method != "trash" && method != "delete" {
+        return Err("err.cleanupMethod".to_string());
+    }
+    services.store.update_settings(|settings| {
+        settings.monitor.cleanup_method = method.clone();
+    });
+    let _ = services.store.flush_if_dirty();
+    Ok(monitor_status(services, scans))
 }
 
 /// Replace the protected-directory list. Paths must be absolute; the store

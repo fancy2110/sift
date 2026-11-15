@@ -28,6 +28,16 @@ pub struct TrashResult {
 }
 
 impl TrashResult {
+    /// Result for a direct deletion that never involved the Trash.
+    pub fn direct(path: PathBuf, ok: bool, error: Option<String>) -> Self {
+        Self {
+            path,
+            ok,
+            error,
+            cancelled: false,
+        }
+    }
+
     /// A successful removal. Public so a test double or an alternative remover
     /// can report the same shape the platform remover does.
     pub fn success(path: PathBuf) -> Self {

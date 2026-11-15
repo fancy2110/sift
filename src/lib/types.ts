@@ -140,6 +140,7 @@ export interface MonitorStatus {
   scheduledHour: number;
   scheduledAutoExecute: boolean;
   protectedPaths: string[];
+  cleanupMethod: 'trash' | 'delete';
 }
 
 export interface VolumeInfo {

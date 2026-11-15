@@ -597,6 +597,10 @@ const zh: Record<string, string> = {
   'common.cancel': '取消',
   'err.listTimeout': '读取目录超时，请重试',
   'explorer.showMore': '显示更多（剩余 {0} 项）',
+  'settings.cleanupMethodTitle': '清理方式',
+  'settings.cleanupMethodDesc': '选择清理时如何处理文件；直接删除不可恢复。',
+  'settings.cleanupMethodTrash': '移入回收站（可恢复）',
+  'settings.cleanupMethodDelete': '直接删除（不可恢复）',
 };
 
 const en: Record<string, string> = {
@@ -1155,6 +1159,10 @@ const en: Record<string, string> = {
   'common.cancel': 'Cancel',
   'err.listTimeout': 'Reading the folder timed out; try again',
   'explorer.showMore': 'Show more ({0} left)',
+  'settings.cleanupMethodTitle': 'Cleanup method',
+  'settings.cleanupMethodDesc': 'How cleanup removes files; direct deletion cannot be undone.',
+  'settings.cleanupMethodTrash': 'Move to Trash (recoverable)',
+  'settings.cleanupMethodDelete': 'Delete permanently',
 };
 
 type ParamValue = string | number;

@@ -570,4 +570,8 @@ export const hi: Record<string, string> = {
   'common.cancel': 'रद्द करें',
   'err.listTimeout': 'फ़ोल्डर पढ़ने में समय समाप्त',
   'explorer.showMore': 'और दिखाएँ ({0} शेष)',
+  'settings.cleanupMethodTitle': 'सफ़ाई का तरीका',
+  'settings.cleanupMethodDesc': 'सफ़ाई में फ़ाइलें कैसे हटें; सीधा हटाना वापस नहीं होगा।',
+  'settings.cleanupMethodTrash': 'ट्रैश में भेजें (वापसी संभव)',
+  'settings.cleanupMethodDelete': 'स्थायी रूप से हटाएँ',
 };

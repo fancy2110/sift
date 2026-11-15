@@ -124,6 +124,9 @@ pub struct MonitorSettings {
     /// Directories that must never be cleaned, whatever else says otherwise.
     #[serde(default)]
     pub protected_paths: Vec<String>,
+    /// `trash` (recoverable, default) or `delete` (permanent).
+    #[serde(default = "default_cleanup_method")]
+    pub cleanup_method: String,
     /// Whether the built-in default routines (Downloads / screenshots) were
     /// seeded once; deleting them must not bring them back.
     #[serde(default)]
@@ -184,6 +187,7 @@ impl Default for MonitorSettings {
             dismissed_findings: Vec::new(),
             cleanup_rules: Vec::new(),
             protected_paths: Vec::new(),
+            cleanup_method: "trash".to_string(),
             defaults_seeded: false,
             scheduled_hour: 4,
             scheduled_auto_execute: false,
@@ -222,6 +226,9 @@ impl MonitorSettings {
             .collect();
         self.scheduled_catchup_hours = self.scheduled_catchup_hours.clamp(0, 48);
         let mut seen = std::collections::HashSet::new();
+        if self.cleanup_method != "delete" {
+            self.cleanup_method = "trash".to_string();
+        }
         self.protected_paths = std::mem::take(&mut self.protected_paths)
             .into_iter()
             .map(|path| path.trim().to_string())
@@ -231,6 +238,10 @@ impl MonitorSettings {
             .collect();
         self
     }
+}
+
+fn default_cleanup_method() -> String {
+    "trash".to_string()
 }
 
 fn clamp_ratio(value: f64, fallback: f64) -> f64 {

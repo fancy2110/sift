@@ -515,6 +515,25 @@
           </div>
         </div>
 
+        <div class="set-card">
+          <div class="set-card-info">
+            <p class="set-card-title">{t('settings.cleanupMethodTitle')}</p>
+            <p class="set-card-desc">{t('settings.cleanupMethodDesc')}</p>
+          </div>
+          <select
+            class="sched-time"
+            aria-label={t('settings.cleanupMethodTitle')}
+            value={store.cleanupMethod}
+            onchange={(event) =>
+              void store.saveCleanupMethod(
+                event.currentTarget.value === 'delete' ? 'delete' : 'trash'
+              )}
+          >
+            <option value="trash">{t('settings.cleanupMethodTrash')}</option>
+            <option value="delete">{t('settings.cleanupMethodDelete')}</option>
+          </select>
+        </div>
+
         <div class="set-card ai-config-cell">
           <div class="set-card-info">
             <p class="set-card-title">{t('settings.protectTitle')}</p>

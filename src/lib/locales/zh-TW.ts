@@ -565,4 +565,8 @@ export const zhTW: Record<string, string> = {
   'common.cancel': '取消',
   'err.listTimeout': '讀取目錄逾時，請重試',
   'explorer.showMore': '顯示更多（剩餘 {0} 項）',
+  'settings.cleanupMethodTitle': '清理方式',
+  'settings.cleanupMethodDesc': '選擇清理時如何處理檔案；直接刪除不可復原。',
+  'settings.cleanupMethodTrash': '移入資源回收筒（可復原）',
+  'settings.cleanupMethodDelete': '直接刪除（不可復原）',
 };

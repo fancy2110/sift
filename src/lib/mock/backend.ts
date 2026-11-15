@@ -377,6 +377,7 @@ export function createMockBackend(bus: EventBus): MockBackend {
     scheduledHour: 2,
     scheduledAutoExecute: false,
     protectedPaths: [] as string[],
+    cleanupMethod: 'trash' as 'trash' | 'delete',
     timers: [] as Array<ReturnType<typeof setTimeout>>,
     ai: {
       enabled: false,
@@ -969,7 +970,8 @@ export function createMockBackend(bus: EventBus): MockBackend {
             scheduledCleanupEnabled: state.scheduled,
             scheduledHour: state.scheduledHour,
             scheduledAutoExecute: state.scheduledAutoExecute ?? false,
-            protectedPaths: state.protectedPaths ?? []
+            protectedPaths: state.protectedPaths ?? [],
+            cleanupMethod: state.cleanupMethod ?? 'trash'
           };
           resolve(status as unknown as T);
           break;
@@ -1234,6 +1236,25 @@ export function createMockBackend(bus: EventBus): MockBackend {
           resolve(mockAiConfig() as unknown as T);
           break;
         }
+        case 'set_cleanup_method':
+          state.cleanupMethod = args.method === 'delete' ? 'delete' : 'trash';
+          resolve({
+            running: state.monitorRunning,
+            enabled: true,
+            autoMode: state.autoMode,
+            cleanableItems: 0,
+            autoEligibleItems: 0,
+            autoEligibleBytes: 0,
+            lastLevel: 'ok',
+            lastAvailableBytes: VOLUMES[0].availableBytes,
+            lastTotalBytes: VOLUMES[0].totalBytes,
+            scheduledCleanupEnabled: state.scheduled,
+            scheduledHour: state.scheduledHour,
+            scheduledAutoExecute: state.scheduledAutoExecute ?? false,
+            protectedPaths: state.protectedPaths,
+            cleanupMethod: state.cleanupMethod
+          } as unknown as T);
+          break;
         case 'set_protected_paths':
           state.protectedPaths = (args.paths as string[]) ?? [];
           resolve(

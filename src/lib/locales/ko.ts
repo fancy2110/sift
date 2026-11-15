@@ -556,4 +556,8 @@ export const ko: Record<string, string> = {
   'common.cancel': '취소',
   'err.listTimeout': '폴더 읽기 시간이 초과되었습니다',
   'explorer.showMore': '더 보기 ({0}개 남음)',
+  'settings.cleanupMethodTitle': '정리 방식',
+  'settings.cleanupMethodDesc': '정리 시 파일 처리 방법입니다. 직접 삭제는 되돌릴 수 없습니다.',
+  'settings.cleanupMethodTrash': '휴지통으로 이동(복원 가능)',
+  'settings.cleanupMethodDelete': '영구 삭제(복원 불가)',
 };

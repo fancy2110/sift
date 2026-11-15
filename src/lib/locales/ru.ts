@@ -583,4 +583,8 @@ export const ru: Record<string, string> = {
   'common.cancel': 'Отмена',
   'err.listTimeout': 'Время чтения папки истекло',
   'explorer.showMore': 'Показать ещё (осталось {0})',
+  'settings.cleanupMethodTitle': 'Способ очистки',
+  'settings.cleanupMethodDesc': 'Как удалять файлы; прямое удаление необратимо.',
+  'settings.cleanupMethodTrash': 'В Корзину (восстановимо)',
+  'settings.cleanupMethodDelete': 'Удалить навсегда',
 };

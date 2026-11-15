@@ -221,7 +221,26 @@ pub fn run_rule(store: &Store, rule: &CleanupRule) -> Result<RuleRunDto, String>
         .iter()
         .map(|entry| entry.path.clone())
         .collect();
-    let trash_results = sift_platform::trash::trash_paths_cancellable(&paths, None);
+    let permanent = store.settings().monitor.cleanup_method == "delete";
+    let trash_results = if permanent {
+        paths
+            .iter()
+            .map(|path| {
+                let result = if path.is_dir() {
+                    std::fs::remove_dir_all(path)
+                } else {
+                    std::fs::remove_file(path)
+                };
+                sift_platform::trash::TrashResult::direct(
+                    path.clone(),
+                    result.is_ok(),
+                    result.err().map(|error| error.to_string()),
+                )
+            })
+            .collect()
+    } else {
+        sift_platform::trash::trash_paths_cancellable(&paths, None)
+    };
     let results: Vec<DeleteResultItem> = trash_results
         .iter()
         .map(|result| DeleteResultItem {

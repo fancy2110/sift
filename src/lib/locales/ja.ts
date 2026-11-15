@@ -579,4 +579,8 @@ export const ja: Record<string, string> = {
   'common.cancel': 'キャンセル',
   'err.listTimeout': 'フォルダの読み込みがタイムアウトしました',
   'explorer.showMore': 'さらに表示（残り {0} 件）',
+  'settings.cleanupMethodTitle': 'クリーンアップ方法',
+  'settings.cleanupMethodDesc': 'ファイルの处理方法。直接削除は元に戻せません。',
+  'settings.cleanupMethodTrash': 'ゴミ箱へ移動（復元可）',
+  'settings.cleanupMethodDelete': '完全に削除（復元不可）',
 };
