@@ -24,12 +24,9 @@ export async function listingFor(
   const pending = inflight.get(key);
   if (pending) return pending;
   const request = (async () => {
-    const listing = await Promise.race([
-      listDirEntries(path, force),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('err.listTimeout')), 10_000)
-      )
-    ]);
+    // No timeout here: a slow response still carries useful data. The view
+    // stops its spinner on its own without discarding the result.
+    const listing = await listDirEntries(path, force);
     return {
       path: listing.path || path,
       entries: listing.entries.map((entry) =>

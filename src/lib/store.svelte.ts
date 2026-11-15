@@ -174,6 +174,9 @@ class AppStore {
   explorerSelected = $state<DirEntry | null>(null);
   /** Recursive total of the current directory; null while it is computed. */
   explorerTotal = $state<number | null>(null);
+  /** True once every folder total for the current listing has arrived. */
+  explorerSizesSettled = $state(true);
+
   /** Right-half file preview overlay; null when closed. */
   explorerPreview = $state<{
     loading: boolean;
@@ -806,6 +809,11 @@ class AppStore {
     this.explorerAi = { loading: false, error: '', summary: '', items: {} };
     this.explorerRightLoading = true;
     this.explorerRight = [];
+    // Stop the spinner after a while even if the backend is slow, but let the
+    // request finish and fill the list when it does.
+    const spinnerWatchdog = setTimeout(() => {
+      if (this.explorerRightLoading) this.explorerRightLoading = false;
+    }, 6000);
     let resolved = startPath;
     let entries: DirEntry[] = [];
     try {
@@ -819,6 +827,7 @@ class AppStore {
     } finally {
       // The list must leave its loading state even if the read failed; sizes
       // are computed separately and fill in afterwards.
+      clearTimeout(spinnerWatchdog);
       this.explorerRightLoading = false;
     }
     // Apply scan-tree totals before the first paint. This is the common case:
@@ -964,43 +973,44 @@ class AppStore {
    * Lazy child-folder totals for folders the scan did not cover (or whose scan
    * is still pending). The scan tree is always preferred.
    */
-  private async fillExplorerSizes(
+  private fillExplorerSizes(
     path: string,
     entries: DirEntry[],
     apply: () => void
   ) {
-    // Tree totals are instant but may be missing (folder outside the scan).
-    // Request totals for every folder that still lacks one; cachedSizes
-    // reuses anything already known, so this never re-walks for free.
-    const dirs = entries.filter((entry) => entry.isDir && entry.size === 0).map((entry) => entry.path);
-    if (dirs.length === 0) return;
-    try {
-      const byPath = await cachedSizes(dirs);
-      if (this.explorerRightPath !== path) return;
-      for (const entry of this.explorerRight) {
-        const size = byPath.get(entry.path);
-        if (size !== undefined && size > 0) entry.size = size;
-      }
-      apply();
-      this.sizeRevision += 1;
-      if (this.explorerRightPath && this.explorerRight.length > 0) {
-        const total = this.explorerRight.reduce((sum, item) => sum + item.size, 0);
-        // This folder is the sum of its children; the header and every cached
-        // parent are rebuilt from that sum, upward.
-        if (this.explorerRightPath === this.explorerPath && total > 0) {
-          this.explorerTotal = Math.max(this.explorerTotal ?? 0, total);
-        }
-        updateListing(this.explorerRightPath, this.explorerRight);
-        // The Rust index recomputed this folder and every ancestor; read the
-        // authoritative number back instead of deriving it here.
-        const peek = await dirSizePeek([this.explorerRightPath]);
-        const authoritative = peek[0]?.size ?? 0;
-        if (authoritative > 0 && this.explorerRightPath === this.explorerPath) {
-          this.explorerTotal = Math.max(this.explorerTotal ?? 0, authoritative);
-        }
-      }
-    } catch {
-      // Sizes are best-effort.
+    const dirs = entries
+      .filter((entry) => entry.isDir && entry.size === 0)
+      .map((entry) => entry.path);
+    if (dirs.length === 0) {
+      this.explorerSizesSettled = true;
+      return;
+    }
+    // One request per folder so each total lands as soon as it is walked;
+    // a slow folder no longer holds back the others.
+    let left = dirs.length;
+    this.explorerSizesSettled = false;
+    for (const dir of dirs) {
+      void cachedSizes([dir])
+        .then((sizes) => {
+          const size = sizes.get(dir);
+          if (!size || this.explorerRightPath !== path) return;
+          const entry = this.explorerRight.find((item) => item.path === dir);
+          if (!entry) return;
+          entry.size = size;
+          this.sizeRevision += 1;
+          const total = this.explorerRight.reduce((sum, item) => sum + item.size, 0);
+          if (this.explorerRightPath === this.explorerPath && total > 0) {
+            this.explorerTotal = Math.max(this.explorerTotal ?? 0, total);
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          left -= 1;
+          if (left === 0) {
+            this.explorerSizesSettled = true;
+            apply();
+          }
+        });
     }
   }
 
