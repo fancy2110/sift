@@ -676,11 +676,18 @@ fn pump_events(
                 outcome = finished;
                 latest = final_progress;
                 progress_due = false;
+                // A completed scan is 100% by definition: coverage counts
+                // logical bytes against the volume's used space, so it can
+                // stall below 1 even when every reachable directory was walked.
+                let mut final_info = build_progress(&handle, latest, volume_used);
+                if matches!(outcome, ScanOutcome::Completed) {
+                    final_info.percent = 100.0;
+                }
                 flush(
                     &mut discovered,
                     &mut sized,
                     &mut permissions,
-                    Some(build_progress(&handle, latest, volume_used)),
+                    Some(final_info),
                     &mut last_flush,
                 );
                 let _ = app.emit(
