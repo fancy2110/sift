@@ -274,11 +274,14 @@ pub struct ScanEntryDto {
 /// Ingest results from the scan engine: every scanned directory contributes
 /// its exact size, so a scan refreshes the shared index for all features.
 #[tauri::command]
-pub fn scan_index_ingest(entries: Vec<ScanEntryDto>) {
-    if entries.is_empty() {
-        return;
-    }
-    let mut data = tree().lock().unwrap();
+pub async fn scan_index_ingest(entries: Vec<ScanEntryDto>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if entries.is_empty() {
+            return;
+        }
+        let Ok(mut data) = tree().lock() else {
+            return;
+        };
     for entry in &entries {
         if !entry.path.starts_with('/') {
             continue;
@@ -309,13 +312,17 @@ pub fn scan_index_ingest(entries: Vec<ScanEntryDto>) {
             },
         );
     }
-    // One upward pass per ingest batch: every touched ancestor becomes the
-    // sum of its children.
-    let paths: Vec<String> = entries.iter().map(|entry| entry.path.clone()).collect();
-    for path in paths {
-        recompute_ancestors(&mut data, &path);
-    }
-    persist(&data);
+        // One upward pass per ingest batch: every touched ancestor becomes the
+        // sum of its children.
+        let paths: Vec<String> = entries.iter().map(|entry| entry.path.clone()).collect();
+        for path in paths {
+            recompute_ancestors(&mut data, &path);
+        }
+        drop(data);
+        mark_dirty();
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 /// Live update from the scan engine: a directory finished measuring.

@@ -1169,6 +1169,9 @@ class AppStore {
     this.rescanRequested = false;
     if (this.analysedScan) return;
     this.analysedScan = true;
+    // The scan's per-directory sizes are authoritative; publish them to the
+    // shared index so the explorer never re-walks large trees.
+    void this.ingestScanTree();
     await this.runAnalysis();
   }
 
