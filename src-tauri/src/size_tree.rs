@@ -50,7 +50,7 @@ fn now_ms() -> i64 {
 
 /// Serve a listing from the shared index when it is still fresh.
 pub fn cached_listing(path: &str) -> Option<(String, Vec<DirEntryDto>)> {
-    let data = tree().lock().unwrap();
+    let data = tree().try_lock().ok()?;
     let listing = data.listings.get(path)?;
     if now_ms() - listing.at_ms > LISTING_TTL_MS {
         return None;
@@ -60,7 +60,9 @@ pub fn cached_listing(path: &str) -> Option<(String, Vec<DirEntryDto>)> {
 
 /// Remember a listing in the shared index.
 pub fn store_listing(requested: &str, resolved: &str, entries: &[DirEntryDto]) {
-    let mut data = tree().lock().unwrap();
+    let Ok(mut data) = tree().try_lock() else {
+        return;
+    };
     data.listings.insert(
         requested.to_string(),
         CachedListing {
@@ -140,7 +142,11 @@ fn persist(data: &TreeData) {
 
 /// Remember what a listing saw: kind and modification time.
 pub fn register_node(path: &str, is_dir: bool, mtime_ms: Option<i64>) {
-    let mut data = tree().lock().unwrap();
+    // Never block a directory listing on the index: if a scan/flush holds it,
+    // skip the bookkeeping for now.
+    let Ok(mut data) = tree().try_lock() else {
+        return;
+    };
     data.nodes.insert(
         path.to_string(),
         NodeMeta {
@@ -186,7 +192,9 @@ pub fn register_child(parent: &str, child: &str) {
     if parent.is_empty() || child.is_empty() || parent == child {
         return;
     }
-    let mut data = tree().lock().unwrap();
+    let Ok(mut data) = tree().try_lock() else {
+        return;
+    };
     data.parents
         .insert(child.to_string(), parent.to_string());
     data.children

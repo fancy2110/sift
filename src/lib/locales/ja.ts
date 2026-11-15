@@ -577,4 +577,5 @@ export const ja: Record<string, string> = {
   'home.rootSize': 'ルートのサイズ',
   'settings.edit': '編集',
   'common.cancel': 'キャンセル',
+  'err.listTimeout': 'フォルダの読み込みがタイムアウトしました',
 };

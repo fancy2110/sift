@@ -620,6 +620,18 @@ export function createMockBackend(bus: EventBus): MockBackend {
           } as unknown as T);
           break;
         }
+        case 'dir_size_peek':
+        case 'dir_sizes_tree': {
+          const paths = (args.paths as string[]) ?? [];
+          resolve(
+            paths.map((path) => ({
+              path,
+              size: 1_210_000,
+              partial: false
+            })) as unknown as T
+          );
+          break;
+        }
         case 'dir_sizes': {
           const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
           resolve(

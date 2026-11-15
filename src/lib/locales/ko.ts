@@ -554,4 +554,5 @@ export const ko: Record<string, string> = {
   'home.rootSize': '루트 크기',
   'settings.edit': '편집',
   'common.cancel': '취소',
+  'err.listTimeout': '폴더 읽기 시간이 초과되었습니다',
 };

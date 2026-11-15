@@ -24,7 +24,12 @@ export async function listingFor(
   const pending = inflight.get(key);
   if (pending) return pending;
   const request = (async () => {
-    const listing = await listDirEntries(path, force);
+    const listing = await Promise.race([
+      listDirEntries(path, force),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('err.listTimeout')), 10_000)
+      )
+    ]);
     return {
       path: listing.path || path,
       entries: listing.entries.map((entry) =>

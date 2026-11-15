@@ -581,4 +581,5 @@ export const ru: Record<string, string> = {
   'home.rootSize': 'Размер корня',
   'settings.edit': 'Изменить',
   'common.cancel': 'Отмена',
+  'err.listTimeout': 'Время чтения папки истекло',
 };

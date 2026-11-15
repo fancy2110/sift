@@ -563,4 +563,5 @@ export const zhTW: Record<string, string> = {
   'home.rootSize': '根目錄大小',
   'settings.edit': '編輯',
   'common.cancel': '取消',
+  'err.listTimeout': '讀取目錄逾時，請重試',
 };

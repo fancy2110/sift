@@ -585,4 +585,5 @@ export const id: Record<string, string> = {
   'home.rootSize': 'Ukuran root',
   'settings.edit': 'Ubah',
   'common.cancel': 'Batal',
+  'err.listTimeout': 'Waktu membaca folder habis',
 };

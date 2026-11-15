@@ -595,6 +595,7 @@ const zh: Record<string, string> = {
   'home.rootSize': '根目录大小',
   'settings.edit': '编辑',
   'common.cancel': '取消',
+  'err.listTimeout': '读取目录超时，请重试',
 };
 
 const en: Record<string, string> = {
@@ -1151,6 +1152,7 @@ const en: Record<string, string> = {
   'home.rootSize': 'Root size',
   'settings.edit': 'Edit',
   'common.cancel': 'Cancel',
+  'err.listTimeout': 'Reading the folder timed out; try again',
 };
 
 type ParamValue = string | number;

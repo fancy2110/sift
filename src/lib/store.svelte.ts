@@ -810,8 +810,14 @@ class AppStore {
       const listing = await listingFor(startPath);
       resolved = listing.path || startPath;
       entries = listing.entries;
-    } catch {
+    } catch (error) {
       entries = [];
+      const message = error instanceof Error ? error.message : String(error);
+      this.toastError(tr(message));
+    } finally {
+      // The list must leave its loading state even if the read failed; sizes
+      // are computed separately and fill in afterwards.
+      this.explorerRightLoading = false;
     }
     // Apply scan-tree totals before the first paint. This is the common case:
     // the folder is already in the scanned tree, so the numbers are instant and
