@@ -179,11 +179,18 @@ pub struct MonitorStatusDto {
 
 /// Analyze the most recent scan and persist the conclusions.
 #[tauri::command]
-pub fn analyze_current(
-    services: State<'_, AppServices>,
-    manager: State<'_, ScanManager>,
+pub async fn analyze_current(
+    app: tauri::AppHandle,
 ) -> Result<AnalysisSummaryDto, String> {
-    analyze_current_with(&services, &manager)
+    // Analysis walks the scan tree and may probe the environment; keep it off
+    // the main thread so the first screen and cleanups never freeze.
+    tauri::async_runtime::spawn_blocking(move || {
+        let services = app.state::<AppServices>();
+        let manager = app.state::<ScanManager>();
+        analyze_current_with(&services, &manager)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Analyse the last scan with concrete services, callable from non-command code.

@@ -44,20 +44,23 @@ pub fn environment_summary(services: State<'_, AppServices>) -> EnvironmentDto {
 
 /// Rebuild the environment snapshot on demand (also done after each analysis).
 #[tauri::command]
-pub fn refresh_environment(
-    services: State<'_, AppServices>,
-    manager: State<'_, ScanManager>,
-) -> EnvironmentDto {
-    let roots: Vec<std::path::PathBuf> = manager.last_root().into_iter().collect();
-    let context = sift_apps::detect(&roots, dirs::home_dir().as_deref());
-    let hints = sift_apps::hints_for(&context);
-    let now = now_ms();
-    services
-        .environment_dirty
-        .store(false, std::sync::atomic::Ordering::Relaxed);
-    services.store.record_environment(context, hints, now);
-    let _ = services.store.flush_if_dirty();
-    EnvironmentDto::from_doc(services.store.environment())
+pub async fn refresh_environment(app: tauri::AppHandle) -> EnvironmentDto {
+    tauri::async_runtime::spawn_blocking(move || {
+        let services = app.state::<AppServices>();
+        let manager = app.state::<ScanManager>();
+        let roots: Vec<std::path::PathBuf> = manager.last_root().into_iter().collect();
+        let context = sift_apps::detect(&roots, dirs::home_dir().as_deref());
+        let hints = sift_apps::hints_for(&context);
+        let now = now_ms();
+        services
+            .environment_dirty
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        services.store.record_environment(context, hints, now);
+        let _ = services.store.flush_if_dirty();
+        EnvironmentDto::from_doc(services.store.environment())
+    })
+    .await
+    .unwrap_or_else(|_| EnvironmentDto::from_doc(Default::default()))
 }
 
 /// Build a read-only uninstall plan for one detected application.

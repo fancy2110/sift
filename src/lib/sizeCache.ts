@@ -140,16 +140,18 @@ export function setDerivedSize(path: string, size: number, force = false): void 
   scheduleFlush();
 }
 
-/** Subtract bytes of a removed item from every cached ancestor folder. */
-export function debitSize(path: string, bytes: number): void {
-  if (bytes <= 0) return;
+/** Subtract bytes of removed items from every cached ancestor folder, once. */
+export function debitSizes(items: { path: string; bytes: number }[]): void {
+  if (items.length === 0) return;
   const map = load();
   const now = Date.now();
   for (const [dir, entry] of map) {
+    let delta = 0;
     const prefix = dir === '/' ? '/' : dir.endsWith('/') ? dir : `${dir}/`;
-    if (dir === path || path.startsWith(prefix)) {
-      map.set(dir, { size: Math.max(0, entry.size - bytes), at: now });
+    for (const item of items) {
+      if (dir === item.path || item.path.startsWith(prefix)) delta += item.bytes;
     }
+    if (delta > 0) map.set(dir, { size: Math.max(0, entry.size - delta), at: now });
   }
   scheduleFlush();
 }

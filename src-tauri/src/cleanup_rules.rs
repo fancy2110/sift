@@ -319,7 +319,7 @@ pub fn preview_cleanup_rule(rule: CleanupRule) -> Result<RulePreviewDto, String>
 }
 
 #[tauri::command]
-pub fn run_cleanup_rule(
+pub async fn run_cleanup_rule(
     services: State<'_, AppServices>,
     id: String,
 ) -> Result<RuleRunDto, String> {
@@ -331,7 +331,11 @@ pub fn run_cleanup_rule(
         .into_iter()
         .find(|rule| rule.id == id)
         .ok_or_else(|| "err.ruleNotFound".to_string())?;
-    run_rule(&services.store, &rule)
+    let store = services.store();
+    // Trashing files talks to Finder; keep it off the main thread.
+    tauri::async_runtime::spawn_blocking(move || run_rule(&store, &rule))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]

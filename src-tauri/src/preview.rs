@@ -111,10 +111,16 @@ fn base64(bytes: &[u8]) -> String {
 }
 
 #[tauri::command]
-pub fn file_preview(
+pub async fn file_preview(
     _services: State<'_, AppServices>,
     path: String,
 ) -> Result<FilePreviewDto, String> {
+    tauri::async_runtime::spawn_blocking(move || preview_file(&path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn preview_file(path: &str) -> Result<FilePreviewDto, String> {
     let file = Path::new(&path);
     if !path.starts_with('/') {
         return Err("err.previewPath".to_string());
@@ -136,7 +142,7 @@ pub fn file_preview(
     let mut dto = FilePreviewDto {
         kind: "unsupported".to_string(),
         name,
-        path: path.clone(),
+        path: path.to_string(),
         size,
         modified_ms,
         text: None,

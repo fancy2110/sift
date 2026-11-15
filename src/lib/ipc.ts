@@ -238,8 +238,8 @@ export function scanIndexIngest(entries: ScanIndexEntry[]): Promise<void> {
   return call<void>('scan_index_ingest', { entries });
 }
 
-export function dirSizeDebit(path: string, bytes: number): Promise<void> {
-  return call<void>('dir_size_debit', { path, bytes });
+export function dirSizeDebit(items: { path: string; bytes: number }[]): Promise<void> {
+  return call<void>('dir_size_debit', { items });
 }
 
 export function clearSizeTree(): Promise<void> {

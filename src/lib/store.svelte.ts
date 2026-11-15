@@ -90,7 +90,7 @@ import {
   sizesFor as cachedSizes,
   clearSizeCache,
   peekSize,
-  debitSize,
+  debitSizes,
   seedSize,
   setDerivedSize
 } from './sizeCache';
@@ -1281,11 +1281,13 @@ class AppStore {
   async runCleanupRule(rule: CleanupRule) {
     try {
       const result = await apiRunCleanupRule(rule.id);
-      for (const item of result.removedPaths ?? []) {
-        debitSize(item.path, item.size);
-        applyDeletion(item.path, item.size);
-        void dirSizeDebit(item.path, item.size);
-      }
+      const debits = (result.removedPaths ?? []).map((item) => ({
+        path: item.path,
+        bytes: item.size
+      }));
+      debitSizes(debits);
+      for (const item of debits) applyDeletion(item.path, item.bytes);
+      void dirSizeDebit(debits);
       this.sizeRevision += 1;
       void this.runAnalysis();
       this.toast(
@@ -1421,12 +1423,14 @@ class AppStore {
     if (removed.size > 0) {
       // Update the shared scan data in place: subtract each removed item from
       // its cached ancestors instead of throwing the whole cache away.
+      const debits = targets
+        .filter((target) => removed.has(target.id))
+        .map((target) => ({ path: target.path, bytes: target.size }));
+      debitSizes(debits);
       for (const target of targets) {
-        if (!removed.has(target.id)) continue;
-        debitSize(target.path, target.size);
-        applyDeletion(target.path, target.size);
-        void dirSizeDebit(target.path, target.size);
+        if (removed.has(target.id)) applyDeletion(target.path, target.size);
       }
+      void dirSizeDebit(debits);
     }
     const wasCancelled = this.cleanupCancelled || cancelledPaths.size > 0;
     // Keep selection only for items that were not attempted, so pressing
