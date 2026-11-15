@@ -14,6 +14,7 @@
   let pathBar = $state<HTMLElement>();
   /** Rendered rows; the rest appear on demand so huge folders stay smooth. */
   let visibleCount = $state(300);
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     store.explorerPath;
     visibleCount = 300;
@@ -172,10 +173,19 @@
             role="button"
             tabindex="0"
             title={entry.path}
-            onclick={() =>
-              entry.isDir
-                ? void store.enterExplorerFolder(entry)
-                : void store.openFilePreview(entry)}
+            onmouseenter={() => {
+              if (!entry.isDir) return;
+              // Give the pointer a moment, then warm the next folder's cache.
+              hoverTimer = setTimeout(() => store.prefetchDir(entry.path), 120);
+            }}
+            onmouseleave={() => {
+              if (hoverTimer) clearTimeout(hoverTimer);
+            }}
+            onclick={() => {
+              if (hoverTimer) clearTimeout(hoverTimer);
+              if (entry.isDir) void store.enterExplorerFolder(entry);
+              else void store.openFilePreview(entry);
+            }}
             onkeydown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();

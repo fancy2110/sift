@@ -39,7 +39,7 @@ struct CachedListing {
 }
 
 /// Listings older than this are re-read from disk.
-const LISTING_TTL_MS: i64 = 30_000;
+const LISTING_TTL_MS: i64 = 5 * 60_000;
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()

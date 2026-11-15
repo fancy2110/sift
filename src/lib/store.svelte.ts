@@ -885,9 +885,19 @@ class AppStore {
 
   /** Warm the cache for the first folders, so opening them is instant. */
   private prefetchListings(entries: DirEntry[]) {
-    for (const entry of entries.filter((item) => item.isDir).slice(0, 4)) {
+    for (const entry of entries.filter((item) => item.isDir).slice(0, 8)) {
       void listingFor(entry.path).catch(() => undefined);
     }
+  }
+
+  /** Paths already prefetched or visited during this session. */
+  private prefetched = new Set<string>();
+
+  /** Hover prefetch: the click then renders from the Rust cache. */
+  prefetchDir(path: string) {
+    if (this.prefetched.has(path)) return;
+    this.prefetched.add(path);
+    void listingFor(path).catch(() => undefined);
   }
 
   /** Folder row: make it the current directory. */
