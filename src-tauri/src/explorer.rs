@@ -162,9 +162,15 @@ pub(crate) fn size_of(meta: &std::fs::Metadata) -> u64 {
 }
 
 fn recursive_size(path: &str) -> DirSizeDto {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
     let mut size = 0u64;
     let mut visited = 0u64;
     let mut partial = false;
+    // Hardlinked files consume one copy on disk; Finder (and du) counts them
+    // once. Only multi-link files need tracking, which keeps this small.
+    #[cfg(unix)]
+    let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
     let mut stack: Vec<PathBuf> = vec![Path::new(path).to_path_buf()];
 
     while let Some(dir) = stack.pop() {

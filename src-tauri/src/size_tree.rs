@@ -234,9 +234,14 @@ fn record(data: &mut TreeData, path: &str, size: u64, exact: bool) {
 }
 
 fn walk(path: &str) -> (u64, bool) {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
     let mut size = 0u64;
     let mut visited = 0u64;
     let mut partial = false;
+    // Count a hardlinked file once, like Finder and du.
+    #[cfg(unix)]
+    let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
     let mut stack = vec![std::path::PathBuf::from(path)];
     while let Some(dir) = stack.pop() {
         let Ok(reader) = std::fs::read_dir(&dir) else {
@@ -255,6 +260,10 @@ fn walk(path: &str) -> (u64, bool) {
             if meta.is_dir() {
                 stack.push(item.path());
             } else if meta.is_file() {
+                #[cfg(unix)]
+                if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
+                    continue;
+                }
                 size = size.saturating_add(crate::explorer::size_of(&meta));
             }
         }
