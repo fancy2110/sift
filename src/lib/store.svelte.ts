@@ -38,6 +38,7 @@ import {
   markPath,
   monitorStatus,
   setProtectedPaths,
+  dirChildrenSizes,
   setCleanupMethod,
   dirSizeDebit,
   scanIndexIngest,
@@ -1026,22 +1027,37 @@ class AppStore {
     }
   }
 
-  private fillExplorerSizes(
+  private async fillExplorerSizes(
     path: string,
     entries: DirEntry[],
-    _apply: () => void
+    apply: () => void
   ) {
-    const dirs = entries
-      .filter((entry) => entry.isDir && entry.size === 0)
-      .map((entry) => entry.path);
-    if (dirs.length === 0) {
-      this.explorerSizesSettled = true;
-      return;
-    }
+    const dirs = entries.filter((entry) => entry.isDir).map((entry) => entry.path);
+    if (dirs.length === 0) return;
     this.explorerSizesSettled = false;
-    for (const dir of dirs) this.enqueueSize(dir, 0, path);
-    // The opened folder itself goes first.
-    this.prioritizeScan(path);
+    try {
+      // One du pass gives the folder and every immediate child the exact
+      // size Finder shows (hardlinks, clones and compression included).
+      const sizes = await dirChildrenSizes(path);
+      if (this.explorerRightPath !== path) return;
+      const byPath = new Map(sizes.map((size) => [size.path, size.size]));
+      for (const entry of this.explorerRight) {
+        if (!entry.isDir) continue;
+        const size = byPath.get(entry.path);
+        if (size) entry.size = size;
+      }
+      this.sizeRevision += 1;
+      apply();
+      const own = byPath.get(path) ?? byPath.get(this.explorerPath);
+      if (own && this.explorerRightPath === this.explorerPath) {
+        this.explorerTotal = own;
+      }
+      if (this.explorerRightPath) updateListing(this.explorerRightPath, this.explorerRight);
+    } catch {
+      // Sizes are best-effort; the list is already visible.
+    } finally {
+      this.explorerSizesSettled = true;
+    }
   }
 
   private async refreshCurrentFiles() {

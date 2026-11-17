@@ -233,6 +233,68 @@ fn record(data: &mut TreeData, path: &str, size: u64, exact: bool) {
     recompute_ancestors(data, path);
 }
 
+/// Exact disk usage as Finder/du report it (hardlinks, clones and
+/// compression accounted for by the system tool).
+fn du_bytes(arguments: &[&str]) -> Option<Vec<(String, u64)>> {
+    let output = std::process::Command::new("/usr/bin/du")
+        .args(arguments)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let kb: u64 = parts.next()?.trim().parse().ok()?;
+        let path = parts.next()?.to_string();
+        out.push((path, kb.saturating_mul(1024)));
+    }
+    Some(out)
+}
+
+/// Sizes of `dir` and its immediate children in a single du pass.
+#[tauri::command]
+pub async fn dir_children_sizes(dir: String) -> Vec<DirSizeDto> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // macOS du rejects -s together with -d; -k already means KB.
+        let Some(rows) = du_bytes(&["-k", "-d", "1", &dir]) else {
+            return Vec::new();
+        };
+        let mut data = match tree().lock() {
+            Ok(data) => data,
+            Err(_) => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        for (path, size) in rows {
+            data.sizes.insert(path.clone(), size);
+            data.exact.insert(path.clone(), true);
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                let parent = parent.to_string_lossy().into_owned();
+                if !parent.is_empty() && parent != path {
+                    data.parents.insert(path.clone(), parent.clone());
+                    data.children
+                        .entry(parent)
+                        .or_default()
+                        .insert(path.clone());
+                }
+            }
+            out.push(DirSizeDto {
+                path,
+                size,
+                partial: false,
+            });
+        }
+        recompute_ancestors(&mut data, &dir);
+        drop(data);
+        mark_dirty();
+        out
+    })
+    .await
+    .unwrap_or_default()
+}
+
 fn walk(path: &str) -> (u64, bool) {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;

@@ -621,6 +621,15 @@ export function createMockBackend(bus: EventBus): MockBackend {
           } as unknown as T);
           break;
         }
+        case 'dir_children_sizes': {
+          const dir = String(args.dir ?? '');
+          resolve([
+            { path: dir, size: 1_218_000, partial: false },
+            { path: `${dir}/Library`, size: 1_200_000, partial: false },
+            { path: `${dir}/Documents`, size: 1_200_000, partial: false }
+          ] as unknown as T);
+          break;
+        }
         case 'dir_size_peek':
         case 'dir_sizes_tree': {
           const paths = (args.paths as string[]) ?? [];

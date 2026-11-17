@@ -219,6 +219,10 @@ export function filePreview(path: string): Promise<FilePreview> {
   return call<FilePreview>('file_preview', { path });
 }
 
+export function dirChildrenSizes(dir: string): Promise<DirSize[]> {
+  return call<DirSize[]>('dir_children_sizes', { dir });
+}
+
 export function setCleanupMethod(method: 'trash' | 'delete'): Promise<MonitorStatus> {
   return call<MonitorStatus>('set_cleanup_method', { method });
 }
