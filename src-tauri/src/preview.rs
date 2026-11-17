@@ -26,6 +26,45 @@ pub struct FilePreviewDto {
     pub truncated: bool,
 }
 
+/// Detect the real format from the file's first bytes, not its name.
+fn sniff_image(head: &[u8]) -> Option<&'static str> {
+    if head.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return Some("image/png");
+    }
+    if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if head.len() > 12 && &head[0..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if head.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    None
+}
+
+/// Text-like content: mostly printable UTF-8 without NUL bytes.
+fn looks_like_text(bytes: &[u8]) -> bool {
+    if bytes.contains(&0) {
+        return false;
+    }
+    let sample = &bytes[..bytes.len().min(4096)];
+    if sample.is_empty() {
+        return true;
+    }
+    let control = sample
+        .iter()
+        .filter(|byte| **byte < 0x09 || (**byte > 0x0D && **byte < 0x20))
+        .count();
+    if control * 20 > sample.len() {
+        return false;
+    }
+    std::str::from_utf8(sample).is_ok()
+}
+
 fn mime_for(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     Some(match ext.as_str() {
@@ -110,6 +149,33 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_text_without_an_extension() {
+        let path = std::env::temp_dir().join(format!("sift-preview-{}-noext", std::process::id()));
+        std::fs::write(&path, b"#!/bin/sh\necho hello\n").unwrap();
+        let dto = preview_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(dto.kind, "text");
+        assert!(dto.text.unwrap().contains("echo hello"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn detects_png_by_magic_not_extension() {
+        let path = std::env::temp_dir().join(format!("sift-preview-{}-img.bin", std::process::id()));
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        bytes.extend_from_slice(&[0u8; 32]);
+        std::fs::write(&path, &bytes).unwrap();
+        let dto = preview_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(dto.kind, "image");
+        assert!(dto.data_url.unwrap().starts_with("data:image/png;base64,"));
+        std::fs::remove_file(&path).ok();
+    }
+}
+
 #[tauri::command]
 pub async fn file_preview(
     _services: State<'_, AppServices>,
@@ -150,23 +216,43 @@ fn preview_file(path: &str) -> Result<FilePreviewDto, String> {
         truncated: false,
     };
 
-    if let Some(mime) = mime_for(file) {
-        if size > MAX_IMAGE_BYTES {
-            return Ok(dto);
+    // Read the head once: it identifies images and text, whatever the name.
+    let mut head = Vec::new();
+    if let Ok(mut reader) = std::fs::File::open(file) {
+        use std::io::Read;
+        let mut buffer = [0u8; 8192];
+        if let Ok(read) = reader.read(&mut buffer) {
+            head.extend_from_slice(&buffer[..read]);
         }
-        let bytes = std::fs::read(file).map_err(|_| "err.previewRead".to_string())?;
-        dto.kind = "image".to_string();
-        dto.data_url = Some(format!("data:{mime};base64,{}", base64(&bytes)));
+    }
+    if size == 0 {
+        dto.kind = "text".to_string();
+        dto.text = Some(String::new());
         return Ok(dto);
     }
 
-    if is_text_extension(file) && size <= 8 * 1024 * 1024 {
+    let image = sniff_image(&head).or_else(|| mime_for(file));
+    if let Some(mime) = image {
+        if size > MAX_IMAGE_BYTES {
+            return Ok(dto);
+        }
+        if head.len() >= 8 || mime_for(file).is_some() {
+            let bytes = std::fs::read(file).map_err(|_| "err.previewRead".to_string())?;
+            dto.kind = "image".to_string();
+            dto.data_url = Some(format!("data:{mime};base64,{}", base64(&bytes)));
+            return Ok(dto);
+        }
+    }
+
+    let text_sized = size <= 8 * 1024 * 1024;
+    let text_named = is_text_extension(file);
+    if text_sized && (text_named || looks_like_text(&head)) {
         let bytes = std::fs::read(file).map_err(|_| "err.previewRead".to_string())?;
         let truncated = bytes.len() > MAX_TEXT_BYTES;
         let slice = &bytes[..bytes.len().min(MAX_TEXT_BYTES)];
-        if let Ok(text) = std::str::from_utf8(slice) {
+        if looks_like_text(slice) || text_named {
             dto.kind = "text".to_string();
-            dto.text = Some(text.to_string());
+            dto.text = Some(String::from_utf8_lossy(slice).into_owned());
             dto.truncated = truncated;
         }
     }
