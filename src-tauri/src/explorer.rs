@@ -150,7 +150,26 @@ pub async fn dir_sizes(paths: Vec<String>) -> Vec<DirSizeDto> {
 }
 
 /// Finder reports allocated bytes; APFS compression makes `len()` larger.
-pub(crate) fn size_of(meta: &std::fs::Metadata) -> u64 {
+#[cfg(windows)]
+extern "system" {
+    /// Allocated size on the volume, including compression/sparse handling.
+    fn GetCompressedFileSizeW(file: *const u16, high: *mut u32) -> u32;
+}
+
+#[cfg(windows)]
+fn allocated_windows(path: &std::path::Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut high: u32 = 0;
+    let low = unsafe { GetCompressedFileSizeW(wide.as_ptr(), &mut high) };
+    // 0xFFFFFFFF without a high part means INVALID_FILE_SIZE.
+    if low == u32::MAX && high == 0 {
+        return None;
+    }
+    Some(((high as u64) << 32) | low as u64)
+}
+
+pub(crate) fn size_of(path: &std::path::Path, meta: &std::fs::Metadata) -> u64 {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -159,7 +178,10 @@ pub(crate) fn size_of(meta: &std::fs::Metadata) -> u64 {
             return blocks.saturating_mul(512);
         }
     }
-    // Windows has no allocation size in std; logical length is the fallback.
+    #[cfg(windows)]
+    if let Some(size) = allocated_windows(path) {
+        return size;
+    }
     meta.len()
 }
 
@@ -171,7 +193,7 @@ fn recursive_size(path: &str) -> DirSizeDto {
     let mut partial = false;
     // Hardlinked files consume one copy on disk; Finder (and du) counts them
     // once. Only multi-link files need tracking, which keeps this small.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
     let mut stack: Vec<PathBuf> = vec![Path::new(path).to_path_buf()];
 
@@ -199,7 +221,18 @@ fn recursive_size(path: &str) -> DirSizeDto {
                 if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
                     continue;
                 }
-                size = size.saturating_add(size_of(&meta));
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    if let (Some(volume), Some(index)) =
+                        (meta.volume_serial_number(), meta.file_index())
+                    {
+                        if !seen.insert((volume as u64, index)) {
+                            continue;
+                        }
+                    }
+                }
+                size = size.saturating_add(size_of(&item.path(), &meta));
             }
         }
         if partial && visited > MAX_ENTRIES_PER_WALK {
@@ -305,7 +338,7 @@ mod tests {
         // symlink's target must not be counted.
         let expected = [root.join("a/one.txt"), root.join("a/nested/two.txt")]
             .iter()
-            .map(|path| size_of(&std::fs::metadata(path).unwrap()))
+            .map(|path| size_of(path, &std::fs::metadata(path).unwrap()))
             .sum::<u64>();
         assert_eq!(total.size, expected, "symlink skipped");
         assert!(!total.partial);
