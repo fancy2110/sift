@@ -565,7 +565,13 @@
     gap: 22px;
     margin-top: 14px;
   }
+  .env-col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
   .env-row {
+    height: 44px;
     min-height: 44px;
     display: flex;
     align-items: center;

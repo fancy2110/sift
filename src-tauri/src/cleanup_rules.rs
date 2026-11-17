@@ -214,7 +214,18 @@ fn preview(rule: &CleanupRule) -> Result<RulePreviewDto, String> {
 
 /// Scan and trash everything one rule matches. Shared by the "run now" command
 /// and the daily scheduler.
+/// True when `path` is one of the protected folders or sits inside one.
+fn is_protected(protected: &[String], path: &str) -> bool {
+    protected.iter().any(|root| {
+        let root = root.trim_end_matches('/');
+        !root.is_empty() && (path == root || path.starts_with(&format!("{root}/")))
+    })
+}
+
 pub fn run_rule(store: &Store, rule: &CleanupRule) -> Result<RuleRunDto, String> {
+    if is_protected(store.settings().monitor.protected_paths.as_slice(), &rule.dir) {
+        return Err("err.protectedPath".to_string());
+    }
     let outcome = scan_rule(rule, now_ms())?;
     let paths: Vec<PathBuf> = outcome
         .matches
@@ -302,6 +313,10 @@ pub fn save_cleanup_rule(
         .normalized()
         .ok_or_else(|| "err.ruleIncomplete".to_string())?;
     validate_rule(&rule)?;
+    // A protected folder must never be the target of a cleanup rule.
+    if is_protected(services.store.settings().monitor.protected_paths.as_slice(), &rule.dir) {
+        return Err("err.protectedPath".to_string());
+    }
     if rule.id.is_empty() {
         let seed = format!("{}|{}|{}", rule.dir, rule.pattern, now_ms());
         rule.id = sift_core::NodeKey::from_bytes(seed.as_bytes()).to_string();

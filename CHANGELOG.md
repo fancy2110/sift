@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-17
+
+### Fixed
+
+- Cleanup rules can no longer target a protected folder: saving and running a rule both validate against the protected list.
+- Environment panel columns share a fixed row height and a flex column, so apps, package managers and suggestions line up.
+- Removed the unused `dir_children_sizes` command and the leftover per-folder scan queue.
+
+### Added
+
+- File preview detects formats from content: images by magic bytes, any mostly-UTF-8 file as text (scripts, LICENSE, extensionless files).
+
 ## [0.5.2] - 2026-11-17
 
 ### Changed
