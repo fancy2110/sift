@@ -1,0 +1,39 @@
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install NASM (aws-lc-sys C build)
+        run: choco install nasm -y --no-progress
+
+      - name: Frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Rust check and tests
+        run: |
+          cargo check --workspace
+          cargo test --workspace --no-run
