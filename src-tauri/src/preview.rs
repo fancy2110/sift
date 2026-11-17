@@ -188,7 +188,7 @@ pub async fn file_preview(
 
 fn preview_file(path: &str) -> Result<FilePreviewDto, String> {
     let file = Path::new(&path);
-    if !path.starts_with('/') {
+    if !Path::new(&path).is_absolute() {
         return Err("err.previewPath".to_string());
     }
     let meta = std::fs::metadata(file).map_err(|_| "err.previewMissing".to_string())?;

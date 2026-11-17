@@ -303,7 +303,7 @@ pub async fn scan_index_ingest(entries: Vec<ScanEntryDto>) -> Result<(), String>
             return;
         };
     for entry in &entries {
-        if !entry.path.starts_with('/') {
+        if !std::path::Path::new(&entry.path).is_absolute() {
             continue;
         }
         if entry.is_dir {
@@ -347,7 +347,7 @@ pub async fn scan_index_ingest(entries: Vec<ScanEntryDto>) -> Result<(), String>
 
 /// Live update from the scan engine: a directory finished measuring.
 pub fn record_scan_dir(path: &str, size: u64) {
-    if !path.starts_with('/') || size == 0 {
+    if !std::path::Path::new(path).is_absolute() || size == 0 {
         return;
     }
     if let Some(parent) = std::path::Path::new(path)

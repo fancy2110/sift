@@ -216,7 +216,9 @@ fn preview(rule: &CleanupRule) -> Result<RulePreviewDto, String> {
 /// and the daily scheduler.
 /// True when `path` is one of the protected folders or sits inside one.
 fn is_protected(protected: &[String], path: &str) -> bool {
+    let path = path.replace('\\', "/");
     protected.iter().any(|root| {
+        let root = root.replace('\\', "/");
         let root = root.trim_end_matches('/');
         !root.is_empty() && (path == root || path.starts_with(&format!("{root}/")))
     })

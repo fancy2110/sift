@@ -1558,7 +1558,10 @@ pub fn set_protected_paths(
     scans: State<'_, ScanManager>,
     paths: Vec<String>,
 ) -> Result<MonitorStatusDto, String> {
-    if paths.iter().any(|path| !path.trim().starts_with('/')) {
+    if paths
+        .iter()
+        .any(|path| !std::path::Path::new(path.trim()).is_absolute())
+    {
         return Err("err.protectedPathRelative".to_string());
     }
     services.store.update_settings(|settings| {

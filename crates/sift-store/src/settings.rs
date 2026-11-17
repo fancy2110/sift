@@ -232,7 +232,7 @@ impl MonitorSettings {
         self.protected_paths = std::mem::take(&mut self.protected_paths)
             .into_iter()
             .map(|path| path.trim().to_string())
-            .filter(|path| path.starts_with('/') && !path.is_empty())
+            .filter(|path| std::path::Path::new(path).is_absolute() && !path.is_empty())
             .filter(|path| seen.insert(path.clone()))
             .take(50)
             .collect();
