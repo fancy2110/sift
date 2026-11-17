@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-17
+
+### Changed
+
+- Folder sizes now use a cross-platform allocation algorithm instead of the `du` binary: allocated blocks on Unix, `GetCompressedFileSizeW` on Windows, with hardlink dedupe (Unix inode, Windows volume+file index). Verified on macOS: Documents 232.32 GB vs `du` 232.30 GB.
+- Opening a folder returns its size and every immediate child's size from one traversal; results feed the shared Rust index.
+
+### Fixed
+
+- The size walk ignored allocation and summed `len()`; it also truncated at 200,000 entries, which under-reported large folders (Users showed 631 GB against a `du` baseline of 824 GB). Both fixed.
+- A completed scan now reports 100% even when coverage stalls below 1 from compression or denied folders.
+- Explorer listings never wait on the index lock and always leave their loading state; sizes load per folder.
+
 ## [0.5.1] - 2026-11-13
 
 ### Added
