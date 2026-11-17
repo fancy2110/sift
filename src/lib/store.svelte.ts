@@ -1027,36 +1027,37 @@ class AppStore {
     }
   }
 
-  private async fillExplorerSizes(
+  private fillExplorerSizes(
     path: string,
     entries: DirEntry[],
-    apply: () => void
+    _apply: () => void
   ) {
-    const dirs = entries.filter((entry) => entry.isDir).map((entry) => entry.path);
-    if (dirs.length === 0) return;
-    this.explorerSizesSettled = false;
-    try {
-      // One du pass gives the folder and every immediate child the exact
-      // size Finder shows (hardlinks, clones and compression included).
-      const sizes = await dirChildrenSizes(path);
-      if (this.explorerRightPath !== path) return;
-      const byPath = new Map(sizes.map((size) => [size.path, size.size]));
-      for (const entry of this.explorerRight) {
-        if (!entry.isDir) continue;
-        const size = byPath.get(entry.path);
-        if (size) entry.size = size;
-      }
-      this.sizeRevision += 1;
-      apply();
-      const own = byPath.get(path) ?? byPath.get(this.explorerPath);
-      if (own && this.explorerRightPath === this.explorerPath) {
-        this.explorerTotal = own;
-      }
-      if (this.explorerRightPath) updateListing(this.explorerRightPath, this.explorerRight);
-    } catch {
-      // Sizes are best-effort; the list is already visible.
-    } finally {
+    const dirs = entries.filter((entry) => entry.isDir && entry.size === 0).map((entry) => entry.path);
+    if (dirs.length === 0) {
       this.explorerSizesSettled = true;
+      return;
+    }
+    this.explorerSizesSettled = false;
+    let left = dirs.length;
+    // The list is already on screen; each child measures itself and the
+    // parent total is recomputed from the rows as answers arrive.
+    for (const dir of dirs) {
+      void cachedSizes([dir])
+        .then((sizes) => {
+          const size = sizes.get(dir);
+          if (!size || this.explorerRightPath !== path) return;
+          const entry = this.explorerRight.find((item) => item.path === dir);
+          if (!entry) return;
+          entry.size = size;
+          this.sizeRevision += 1;
+          const total = this.explorerRight.reduce((sum, item) => sum + item.size, 0);
+          if (total > 0) this.explorerTotal = total;
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          left -= 1;
+          if (left === 0) this.explorerSizesSettled = true;
+        });
     }
   }
 

@@ -565,6 +565,28 @@
     gap: 22px;
     margin-top: 14px;
   }
+  .env-row {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .env-name,
+  .env-meta {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .env-name {
+    flex: 1;
+  }
+  .env-meta {
+    flex: 0 1 auto;
+    max-width: 46%;
+    text-align: right;
+  }
   .env-head {
     margin: 0 0 8px;
     font-size: 11px;
