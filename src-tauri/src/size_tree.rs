@@ -233,58 +233,61 @@ fn record(data: &mut TreeData, path: &str, size: u64, exact: bool) {
     recompute_ancestors(data, path);
 }
 
-/// Exact disk usage as Finder/du report it (hardlinks, clones and
-/// compression accounted for by the system tool).
-fn du_bytes(arguments: &[&str]) -> Option<Vec<(String, u64)>> {
-    let output = std::process::Command::new("/usr/bin/du")
-        .args(arguments)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let mut parts = line.splitn(2, '\t');
-        let kb: u64 = parts.next()?.trim().parse().ok()?;
-        let path = parts.next()?.to_string();
-        out.push((path, kb.saturating_mul(1024)));
-    }
-    Some(out)
-}
-
-/// Sizes of `dir` and its immediate children in a single du pass.
+/// Sizes of `dir` and its immediate children in one traversal pass.
+/// Cross-platform: allocated bytes on Unix (blocks), logical size on
+/// Windows (no allocation API available without extra crates).
 #[tauri::command]
 pub async fn dir_children_sizes(dir: String) -> Vec<DirSizeDto> {
     tauri::async_runtime::spawn_blocking(move || {
-        // macOS du rejects -s together with -d; -k already means KB.
-        let Some(rows) = du_bytes(&["-k", "-d", "1", &dir]) else {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        let Ok(reader) = std::fs::read_dir(&dir) else {
             return Vec::new();
         };
-        let mut data = match tree().lock() {
-            Ok(data) => data,
-            Err(_) => return Vec::new(),
+        let mut out: Vec<DirSizeDto> = Vec::new();
+        let mut own_files = 0u64;
+        for entry in reader.flatten() {
+            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            let path = entry.path().to_string_lossy().into_owned();
+            if meta.is_dir() {
+                let (size, _) = walk(&path);
+                out.push(DirSizeDto {
+                    path,
+                    size,
+                    partial: false,
+                });
+            } else {
+                own_files = own_files.saturating_add(crate::explorer::size_of(&meta));
+            }
+        }
+        let total = own_files.saturating_add(out.iter().map(|row| row.size).sum::<u64>());
+        out.push(DirSizeDto {
+            path: dir.clone(),
+            size: total,
+            partial: false,
+        });
+
+        let Ok(mut data) = tree().lock() else {
+            return out;
         };
-        let mut out = Vec::new();
-        for (path, size) in rows {
-            data.sizes.insert(path.clone(), size);
-            data.exact.insert(path.clone(), true);
-            if let Some(parent) = std::path::Path::new(&path).parent() {
+        for row in &out {
+            data.sizes.insert(row.path.clone(), row.size);
+            data.exact.insert(row.path.clone(), true);
+            if let Some(parent) = std::path::Path::new(&row.path).parent() {
                 let parent = parent.to_string_lossy().into_owned();
-                if !parent.is_empty() && parent != path {
-                    data.parents.insert(path.clone(), parent.clone());
+                if !parent.is_empty() && parent != row.path {
+                    data.parents.insert(row.path.clone(), parent.clone());
                     data.children
                         .entry(parent)
                         .or_default()
-                        .insert(path.clone());
+                        .insert(row.path.clone());
                 }
             }
-            out.push(DirSizeDto {
-                path,
-                size,
-                partial: false,
-            });
         }
         recompute_ancestors(&mut data, &dir);
         drop(data);

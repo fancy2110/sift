@@ -152,13 +152,15 @@ pub async fn dir_sizes(paths: Vec<String>) -> Vec<DirSizeDto> {
 /// Finder reports allocated bytes; APFS compression makes `len()` larger.
 pub(crate) fn size_of(meta: &std::fs::Metadata) -> u64 {
     #[cfg(unix)]
-    use std::os::unix::fs::MetadataExt;
-    let blocks = meta.blocks();
-    if blocks > 0 {
-        blocks.saturating_mul(512)
-    } else {
-        meta.len()
+    {
+        use std::os::unix::fs::MetadataExt;
+        let blocks = meta.blocks();
+        if blocks > 0 {
+            return blocks.saturating_mul(512);
+        }
     }
+    // Windows has no allocation size in std; logical length is the fallback.
+    meta.len()
 }
 
 fn recursive_size(path: &str) -> DirSizeDto {
@@ -193,7 +195,11 @@ fn recursive_size(path: &str) -> DirSizeDto {
             if meta.is_dir() {
                 stack.push(item.path());
             } else {
-                size = size.saturating_add(meta.len());
+                #[cfg(unix)]
+                if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
+                    continue;
+                }
+                size = size.saturating_add(size_of(&meta));
             }
         }
         if partial && visited > MAX_ENTRIES_PER_WALK {
@@ -295,7 +301,13 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("b"), root.join("a/link")).unwrap();
         let total = recursive_size(root.join("a").to_str().unwrap());
-        assert_eq!(total.size, 8, "5 + 3 bytes, symlink skipped");
+        // Physical allocation per file (blocks), not logical bytes; the
+        // symlink's target must not be counted.
+        let expected = [root.join("a/one.txt"), root.join("a/nested/two.txt")]
+            .iter()
+            .map(|path| size_of(&std::fs::metadata(path).unwrap()))
+            .sum::<u64>();
+        assert_eq!(total.size, expected, "symlink skipped");
         assert!(!total.partial);
         std::fs::remove_dir_all(&root).ok();
     }
