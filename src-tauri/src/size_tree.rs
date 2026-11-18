@@ -226,10 +226,33 @@ fn recompute_ancestors(data: &mut TreeData, path: &str) {
     }
 }
 
+/// Keep the parent's cached listing row in sync with a child's new size, so
+/// reopening the parent does not show a stale number.
+fn sync_parent_listing(data: &mut TreeData, path: &str, size: u64) {
+    let parent = data
+        .parents
+        .get(path)
+        .cloned()
+        .or_else(|| {
+            std::path::Path::new(path)
+                .parent()
+                .map(|parent| parent.to_string_lossy().into_owned())
+        });
+    let Some(parent) = parent else {
+        return;
+    };
+    if let Some(listing) = data.listings.get_mut(&parent) {
+        if let Some(entry) = listing.entries.iter_mut().find(|entry| entry.path == path) {
+            entry.size = size;
+        }
+    }
+}
+
 /// Record a measured size for `path` and update the tree upward.
 fn record(data: &mut TreeData, path: &str, size: u64, exact: bool) {
     data.sizes.insert(path.to_string(), size);
     data.exact.insert(path.to_string(), exact);
+    sync_parent_listing(data, path, size);
     recompute_ancestors(data, path);
 }
 
@@ -311,6 +334,7 @@ pub async fn scan_index_ingest(entries: Vec<ScanEntryDto>) -> Result<(), String>
             if entry.size > 0 {
                 data.sizes.insert(entry.path.clone(), entry.size);
                 data.exact.insert(entry.path.clone(), true);
+                sync_parent_listing(&mut data, &entry.path, entry.size);
             }
         }
         data.nodes.insert(
@@ -389,7 +413,10 @@ pub async fn dir_sizes_tree(paths: Vec<String>, force: bool) -> Vec<DirSizeDto> 
             let data = tree().lock().unwrap();
             for path in &paths {
                 let known = data.sizes.get(path).copied().unwrap_or(0);
-                if known > 0 && !force {
+                let is_exact = data.exact.get(path).copied().unwrap_or(false);
+                // A partial walk (permissions) must not freeze the value: only
+                // exact totals are reused without re-measuring.
+                if known > 0 && is_exact && !force {
                     out.push(DirSizeDto {
                         path: path.clone(),
                         size: known,
