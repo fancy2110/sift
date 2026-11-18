@@ -391,5 +391,5 @@ html[data-platform='macos'] {
 }
 
 html[data-platform='macos'] {
-  --window-titlebar-height: 26px;
+  --window-titlebar-height: 0px;
 }
