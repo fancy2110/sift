@@ -162,11 +162,19 @@
 
 <div class="hub">
   <!-- corner meta -->
-  <div class="hub-meta hub-meta-l" in:fly={intro({ y: -8, duration: 420, delay: 60 })}>
+  <div
+    class="hub-meta hub-meta-l"
+    data-tauri-drag-region
+    in:fly={intro({ y: -8, duration: 420, delay: 60 })}
+  >
     <span class="hub-mark"><Icon name="spark" size={13} /></span>
     {t('home.siftAi')}
   </div>
-  <div class="hub-meta hub-meta-r" in:fly={intro({ y: -8, duration: 420, delay: 60 })}>
+  <div
+    class="hub-meta hub-meta-r"
+    data-tauri-drag-region
+    in:fly={intro({ y: -8, duration: 420, delay: 60 })}
+  >
     <span class="engine-dot"></span>
     {t('home.engineActive')}
     <button
@@ -427,7 +435,7 @@
 
   .hub-meta {
     position: absolute;
-    top: 22px;
+    top: calc(22px + var(--titlebar-inset-y, 0px));
     display: inline-flex;
     align-items: center;
     gap: 8px;

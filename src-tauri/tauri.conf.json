@@ -13,6 +13,8 @@
     "windows": [
       {
         "title": "Sift",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "width": 1280,
         "height": 832,
         "minWidth": 980,

@@ -378,3 +378,18 @@ body::before {
     font-variant-numeric: tabular-nums;
   }
 }
+
+/* macOS: the native traffic lights are overlaid on the app; keep the top
+   row clear of them. Other platforms keep the native title bar. */
+html[data-platform='macos'] {
+  --titlebar-inset-x: 72px;
+  --titlebar-inset-y: 0px;
+}
+
+.app-shell {
+  padding-top: var(--window-titlebar-height, 0px);
+}
+
+html[data-platform='macos'] {
+  --window-titlebar-height: 26px;
+}

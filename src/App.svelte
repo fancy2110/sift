@@ -38,6 +38,14 @@
   });
 
   startupMark('webview:app-script');
+
+  // The title bar is overlaid on the content (macOS). Expose the platform so
+  // the top row can leave room for the traffic lights and act as a drag area.
+  if (typeof document !== 'undefined') {
+    document.documentElement.dataset.platform = navigator.userAgent.includes('Mac')
+      ? 'macos'
+      : 'other';
+  }
   // i18n and store bootstrap are independent: run them concurrently instead
   // of serializing two IPC round trips. The default dictionary is already zh,
   // so the first frame is correct without waiting for `get_language`.
@@ -45,7 +53,7 @@
   store.init().then(() => startupMark('webview:init-done'));
 </script>
 
-<div class="flex h-full flex-col">
+<div class="app-shell flex h-full flex-col">
   <main class="relative min-h-0 flex-1">
     {#if store.view === 'home'}
       <!-- No in:fade on the home screen: its own intro transition (skipped on
