@@ -193,7 +193,7 @@ fn recursive_size(path: &str) -> DirSizeDto {
     let mut partial = false;
     // Hardlinked files consume one copy on disk; Finder (and du) counts them
     // once. Only multi-link files need tracking, which keeps this small.
-    #[cfg(any(unix, windows))]
+    #[cfg(unix)]
     let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
     let mut stack: Vec<PathBuf> = vec![Path::new(path).to_path_buf()];
 
@@ -220,17 +220,6 @@ fn recursive_size(path: &str) -> DirSizeDto {
                 #[cfg(unix)]
                 if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
                     continue;
-                }
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    if let (Some(volume), Some(index)) =
-                        (meta.volume_serial_number(), meta.file_index())
-                    {
-                        if !seen.insert((volume as u64, index)) {
-                            continue;
-                        }
-                    }
                 }
                 size = size.saturating_add(size_of(&item.path(), &meta));
             }

@@ -240,7 +240,7 @@ fn walk(path: &str) -> (u64, bool) {
     let mut visited = 0u64;
     let mut partial = false;
     // Count a hardlinked file once, like Finder and du.
-    #[cfg(any(unix, windows))]
+    #[cfg(unix)]
     let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
     let mut stack = vec![std::path::PathBuf::from(path)];
     while let Some(dir) = stack.pop() {
@@ -263,17 +263,6 @@ fn walk(path: &str) -> (u64, bool) {
                 #[cfg(unix)]
                 if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
                     continue;
-                }
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    if let (Some(volume), Some(index)) =
-                        (meta.volume_serial_number(), meta.file_index())
-                    {
-                        if !seen.insert((volume as u64, index)) {
-                            continue;
-                        }
-                    }
                 }
                 size = size.saturating_add(crate::explorer::size_of(item.path().as_path(), &meta));
             }
