@@ -11,6 +11,7 @@ import type { DirEntry } from './ipc';
 export interface DirListingSnapshot {
   path: string;
   entries: DirEntry[];
+  pending: boolean;
   at: number;
 }
 
@@ -32,6 +33,7 @@ export async function listingFor(
       entries: listing.entries.map((entry) =>
         entry.isDir ? { ...entry, size: 0 } : entry
       ),
+      pending: Boolean(listing.pending),
       at: Date.now()
     };
   })();

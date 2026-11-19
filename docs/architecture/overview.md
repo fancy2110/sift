@@ -190,3 +190,4 @@ macOS 快路径的解析器严格按 `ATTR_CMN_RETURNED_ATTRS` 的**升序位**�
 - [扫描时环境上下文与维护知识沉淀](scan-context.md)——每次扫描刷新应用/包管理器/项目上下文、模型增量判定、context_hash 缓存、MaintenanceHint 生命周期。
 - [核心数据模型与数据流](core-data-flow.md)——扫描树、尺寸索引、分析结论、清理、环境数据的产生/缓存/更新/失效规则与已知缺口。
 - [核心架构地图（可视化）](architecture-atlas.html)——分层、五条数据流、事实源、缓存矩阵与已知缺口的单页视图。
+- [Store 中心架构](store-centric.md)——列表读模型、抓取队列、订阅与尚未对齐的边界。

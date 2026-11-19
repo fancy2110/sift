@@ -7,6 +7,10 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use tauri::State;
+
+use crate::analyze::AppServices;
+use crate::fetch_queue::FetchQueue;
 
 /// Immediate children of one directory.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -38,6 +42,10 @@ pub struct FileEntryDto {
 pub struct DirListingDto {
     pub path: String,
     pub entries: Vec<DirEntryDto>,
+    /// True when the Store has no fresh listing yet; the fetch queue is
+    /// filling it and will publish `store://folders-changed`.
+    #[serde(default)]
+    pub pending: bool,
 }
 
 /// Recursive total for one directory (or one file).
@@ -68,28 +76,53 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
 
 #[tauri::command]
 pub async fn list_dir_entries(
+    services: State<'_, AppServices>,
+    queue: State<'_, FetchQueue>,
     path: String,
     force: Option<bool>,
 ) -> Result<DirListingDto, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let force = force.unwrap_or(false);
-        if !force {
-            if let Some((resolved, entries)) = crate::size_tree::cached_listing(&path) {
-                return Ok(DirListingDto {
-                    path: resolved,
-                    entries,
-                });
-            }
+    // Store is the read model: never read the filesystem here. A miss/stale
+    // listing is queued and an empty (or stale) view is returned immediately.
+    let requested = resolve(&path)?.to_string_lossy().into_owned();
+    let folders = services.store.folders();
+    if force.unwrap_or(false) {
+        folders.invalidate(&requested);
+    }
+    let view = folders.list(&requested);
+    let pending = match view.state {
+        sift_store::ListingState::Fresh => false,
+        sift_store::ListingState::Stale | sift_store::ListingState::Missing => {
+            queue.enqueue(&requested);
+            true
         }
-        let listing = list_entries(&path)?;
-        crate::size_tree::store_listing(&path, &listing.path, &listing.entries);
-        Ok(listing)
+    };
+    let entries = view
+        .entries
+        .into_iter()
+        .map(|entry| DirEntryDto {
+            name: entry.name,
+            path: entry.path,
+            is_dir: entry.is_dir,
+            size: entry.size,
+            modified_ms: entry.modified_ms,
+        })
+        .collect();
+    Ok(DirListingDto {
+        path: view.resolved,
+        entries,
+        pending,
     })
-    .await
-    .map_err(|error| error.to_string())?
 }
 
-fn list_entries(path: &str) -> Result<DirListingDto, String> {
+/// Drop every folder listing so the next read is a miss (manual rescan).
+#[tauri::command]
+pub fn folders_clear(services: State<'_, AppServices>) {
+    services.store.folders().clear();
+}
+
+/// Raw OS read for the fetch queue. Deliberately not a Tauri command: only the
+/// queue may call it, so the Store remains the only read surface for views.
+pub(crate) fn read_entries(path: &str) -> Result<DirListingDto, String> {
     let dir = resolve(path)?;
     let reader = std::fs::read_dir(&dir).map_err(|error| error.to_string())?;
     let mut entries = Vec::new();
@@ -103,16 +136,8 @@ fn list_entries(path: &str) -> Result<DirListingDto, String> {
         // could leave the subtree the user is browsing.
         let is_dir = meta.is_dir();
         let size = if is_dir { 0 } else { meta.len() };
-        let entry_path_text = entry_path.to_string_lossy().into_owned();
-        crate::size_tree::register_child(&dir.to_string_lossy(), &entry_path_text);
-        crate::size_tree::register_node(
-            &entry_path_text,
-            is_dir,
-            meta.modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|age| age.as_millis() as i64),
-        );
+        // Folder listings belong to the Store. The size index is updated by
+        // its own scan/measure paths, not by a listing read.
         let modified_ms = meta
             .modified()
             .ok()
@@ -134,6 +159,7 @@ fn list_entries(path: &str) -> Result<DirListingDto, String> {
     Ok(DirListingDto {
         path: dir.to_string_lossy().into_owned(),
         entries,
+        pending: false,
     })
 }
 
@@ -172,6 +198,7 @@ fn allocated_windows(path: &std::path::Path) -> Option<u64> {
 pub(crate) fn size_of(path: &std::path::Path, meta: &std::fs::Metadata) -> u64 {
     #[cfg(unix)]
     {
+        let _ = path;
         use std::os::unix::fs::MetadataExt;
         let blocks = meta.blocks();
         if blocks > 0 {
@@ -275,7 +302,10 @@ fn list_files(path: &str, limit: usize) -> Result<Vec<FileEntryDto>, String> {
             let path = item.path();
             let relative = path
                 .strip_prefix(&root)
-                .map(|rest| rest.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
+                .map(|rest| {
+                    rest.to_string_lossy()
+                        .replace(std::path::MAIN_SEPARATOR, "/")
+                })
                 .unwrap_or_else(|_| path.to_string_lossy().into_owned());
             files.push(FileEntryDto {
                 relative,
@@ -285,7 +315,11 @@ fn list_files(path: &str, limit: usize) -> Result<Vec<FileEntryDto>, String> {
             });
         }
     }
-    files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.relative.cmp(&b.relative)));
+    files.sort_by(|a, b| {
+        b.size
+            .cmp(&a.size)
+            .then_with(|| a.relative.cmp(&b.relative))
+    });
     Ok(files)
 }
 
@@ -308,11 +342,14 @@ mod tests {
     #[test]
     fn lists_directories_first_and_sizes_files() {
         let root = fixture("list");
-        let listing = list_entries(root.to_str().unwrap()).unwrap();
+        let listing = read_entries(root.to_str().unwrap()).unwrap();
         let entries = &listing.entries;
         assert_eq!(entries[0].name, "a");
         assert!(entries[0].is_dir);
-        let top = entries.iter().find(|entry| entry.name == "top.txt").unwrap();
+        let top = entries
+            .iter()
+            .find(|entry| entry.name == "top.txt")
+            .unwrap();
         assert_eq!(top.size, 1);
         std::fs::remove_dir_all(&root).ok();
     }
@@ -359,7 +396,30 @@ mod tests {
     }
 
     #[test]
+    fn a_raw_listing_can_fill_the_store_index() {
+        let root = fixture("store-fill");
+        let listing = read_entries(root.to_str().unwrap()).unwrap();
+        let index = sift_store::FolderIndex::default();
+        let entries = listing
+            .entries
+            .into_iter()
+            .map(|entry| sift_store::FolderEntry {
+                name: entry.name,
+                path: entry.path,
+                is_dir: entry.is_dir,
+                size: entry.size,
+                modified_ms: entry.modified_ms,
+            })
+            .collect();
+        let change = index.apply(root.to_str().unwrap(), &listing.path, entries);
+        assert_eq!(change.revision, 1);
+        let view = index.list(root.to_str().unwrap());
+        assert_eq!(view.state, sift_store::ListingState::Fresh);
+        assert!(!view.entries.is_empty());
+    }
+
+    #[test]
     fn relative_paths_are_rejected() {
-        assert!(list_entries("relative/dir").is_err());
+        assert!(read_entries("relative/dir").is_err());
     }
 }
