@@ -649,7 +649,7 @@
       <div class="mini-stack">
         <div class="mini-row hot"><span class="idx">L4</span><span class="name">Svelte 前端</span><span class="tag">projection</span></div>
         <div class="mini-row"><span class="idx">L3</span><span class="name">Store</span><span class="tag">verdicts · cleanable</span></div>
-        <div class="mini-row"><span class="idx">L2</span><span class="name">Size tree</span><span class="tag">sizes · listings</span></div>
+        <div class="mini-row"><span class="idx">L2</span><span class="name">Size tree</span><span class="tag">sizes</span></div>
         <div class="mini-row"><span class="idx">L1</span><span class="name">ScanTree</span><span class="tag">session</span></div>
         <div class="mini-row"><span class="idx">L0</span><span class="name">Disk</span><span class="tag">truth</span></div>
       </div>
@@ -763,9 +763,9 @@
             <p>扫描树优先；未覆盖才懒加载，绝不重复走盘。</p>
           </div>
           <div class="track">
-            <div class="node"><b>list_dir_entries</b><small>5m listing cache</small></div>
+            <div class="node"><b>Store.folders</b><small>fresh · stale · missing</small></div>
             <span class="arrow">→</span>
-            <div class="node hot"><b>treeSize</b><small>non-pending scan node</small></div>
+            <div class="node hot"><b>FetchQueue</b><small>OS read · dedupe</small></div>
             <span class="arrow">→</span>
             <div class="node"><b>sizeCache</b><small>30m · 800 entries</small></div>
             <span class="arrow">→</span>
@@ -897,9 +897,9 @@
           <code>ScanManager.last_tree</code>
         </article>
         <article class="cache" style="--c: var(--accent)">
-          <div class="cache-top"><span class="cache-name">Listing cache</span><span class="cache-ttl">5 min</span></div>
-          <p>目录列表与 resolved path；手动 rescan 清空。</p>
-          <code>size-tree.json / listings</code>
+          <div class="cache-top"><span class="cache-name">Folder index</span><span class="cache-ttl">5 min + queue</span></div>
+          <p>Store 持有目录列表；miss 进入 FetchQueue，回填后广播 revision。</p>
+          <code>sift-store :: FolderIndex</code>
         </article>
         <article class="cache" style="--c: var(--ok)">
           <div class="cache-top"><span class="cache-name">Size mirror</span><span class="cache-ttl">30 min</span></div>
@@ -952,7 +952,7 @@
           <ul class="note-list">
             <li><span>01</span><div><b>外部删除</b>只剪前端树，不同步 size-tree / listing。</div></li>
             <li><span>02</span><div><b>清理后 ScanTree 仍是旧快照</b>；立即分析可能看到已删路径。</div></li>
-            <li><span>03</span><div><b>size-tree.json 无 schema 版本</b>，且非原子写。</div></li>
+            <li><span>03</span><div><b>size-tree.json 无 schema 版本</b>，非原子写；超过 64 MB 会移到 <code>.oversized</code> 后重建。</div></li>
             <li><span>04</span><div><b>空目录不进尺寸树</b>；peek 返回 partial，触发走盘。</div></li>
             <li><span>05</span><div><b>listing 5m / size 30m</b> 的 TTL 不一致，外部变化时可能不同步。</div></li>
             <li><span>06</span><div><b>前端尺寸缓存不持久</b>；冷启动依赖后端索引。</div></li>

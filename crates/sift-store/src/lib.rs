@@ -29,6 +29,7 @@
 pub mod atomic;
 pub mod cleanable;
 pub mod environment;
+pub mod folders;
 pub mod history;
 pub mod journal_sqlite;
 pub mod paths;
@@ -42,6 +43,7 @@ pub use atomic::{
     SCHEMA_VERSION,
 };
 pub use environment::{EnvironmentDoc, ENVIRONMENT_SCHEMA_VERSION};
+pub use folders::{FolderChange, FolderEntry, FolderIndex, ListingState, ListingView, LISTING_TTL_MS};
 pub use cleanable::{CleanableEntry, CleanableList, RecordSummary, Upsert, DEFAULT_CLEANABLE_CAP};
 pub use history::{CleanupHistory, HistoryEntry, DEFAULT_HISTORY_CAP};
 pub use journal_sqlite::SqliteScanJournal;

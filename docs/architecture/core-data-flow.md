@@ -55,7 +55,7 @@ flowchart TD
 |---|---|---|---|
 | L0 | 磁盘 | 最终事实 | 任何缓存都可能在它之后过期 |
 | L1 | `ScanTree` / 扫描事件 | 会话事实 | 一次扫描的目录结构、汇总大小、状态 |
-| L2 | `size-tree.json` + listing cache | 跨会话共享事实 | 目录大小与目录列表，供浏览/分析复用 |
+| L2 | `Store` 文件夹索引 + `size-tree.json` | 跨会话共享事实 | 目录列表由 Store 持有；目录大小由尺寸索引复用 |
 | L3 | `sift-store` 文档 | 结论/配置事实 | 判定、可清理清单、设置、历史、环境 |
 | L4 | 前端 `store.svelte.ts` 状态 | 投影 | 为提高交互速度而存在的副本，可被重建 |
 
@@ -93,8 +93,9 @@ flowchart TD
 | `ScanTree` | 进程内存（`ScanManager.last_tree`） | `sift-scan` 引擎 | 分析、扫描事件 | 扫描时增量建树 | 新扫描替换；会话结束丢失 |
 | 节点批次 `BatchUpdate` | Tauri 事件 `scan://batch` | `pump_events` | 前端 `handleBatch` | 每 64ms | `epoch` 不匹配即丢弃 |
 | 前端节点索引 | `nodeRecords` / `pathToId` / `childIds` | `handleBatch` | Explorer、treemap、分析列表 | 扫描批次、剪枝 | 新扫描重置；删除时剪枝 |
-| 尺寸树 | `size-tree.json` + 进程 `TREE` | 扫描 ingest、懒加载 walk、清理扣减 | `dir_size_peek`、`dir_sizes_tree`、listing | 扫描完成、目录浏览、清理 | 手动 rescan、清理扣减、TTL 不适用（持久） |
-| 目录列表缓存 | `size-tree.json` 的 `listings` | `list_dir_entries` | Explorer | 列目录时 | 5 分钟 TTL；手动 rescan 清空 |
+| 尺寸树 | `size-tree.json` + 进程 `TREE` | 扫描 ingest、懒加载 walk、清理扣减 | `dir_size_peek`、`dir_sizes_tree` | 扫描完成、目录浏览、清理 | 手动 rescan、清理扣减、TTL 不适用（持久）；超过 64 MB 的 JSON 移到 `.oversized` 并重建 |
+| 文件夹索引 | `sift-store::FolderIndex` 进程内存 | `list_dir_entries` 读取、fetch 队列回填 | Explorer、Store 事件订阅者 | 列目录时 | 5 分钟 TTL；手动 rescan 清空；重启丢失（后续持久化） |
+| 目录抓取队列 | `FetchQueue` 进程内存 | Store miss/stale | 2 个 OS 读取 worker | 列目录 miss 时 | 按路径去重；worker 完成后回填 Store 并广播 |
 | 前端尺寸镜像 | `src/lib/sizeCache.ts` 内存 Map | `sizesFor` / `seedSize` | Explorer、其他页面 | 读尺寸、扫描种子、清理扣减 | 30 分钟 TTL；800 条上限；重启丢失 |
 | 判定缓存 | `verdicts.json` | `Store::record_analysis` | 下次分析 | 每次分析 | 指纹变化；容量 20k |
 | 可清理清单 | `cleanable.json` | `Store::record_analysis` | 自动清理、监控、UI | 每次分析 | 仅 `Safe`；指纹变化；容量 5k |
@@ -178,7 +179,7 @@ sequenceDiagram
 
 `watch_fs` 监听浏览根；`FsEvent::Deleted` 变成 `fs://deleted { id, path }`，前端 `pruneIds` 剪掉节点并重算祖先大小。
 
-**已知缺口**：这条路径只剪前端树，不会同步后端 `size-tree` 的 `sizes` / `listings`。外部删除后，重新列目录若命中 5 分钟 listing 缓存，可能仍看到旧条目；`dir_size_peek` 也可能返回旧值。见第 13 节。
+**已知缺口**：这条路径只剪前端树，不会同步 Store 文件夹索引 / `size-tree` 的 `sizes`。外部删除后，重新列目录若命中 5 分钟 Store listing，仍可能看到旧条目；`dir_size_peek` 也可能返回旧值。见第 13 节。
 
 ## 4. 尺寸与目录索引数据流
 
@@ -189,8 +190,10 @@ sequenceDiagram
 - `sizes: path -> bytes`
 - `exact: path -> bool`（完整走盘为 true；由子目录汇总为 false）
 - `parents` / `children`：向上重算
-- `nodes`：`is_dir` / `mtime`
-- `listings`：目录列表缓存（5 分钟）
+
+目录列表不在尺寸树里。`FolderIndex` 由 `Store` 持有，`list_dir_entries` 只读 Store；
+缺失/过期的目录交给 `FetchQueue`，OS 读取完成后写回 Store、递增 revision 并发出
+`store://folders-changed`。
 
 更新入口：
 
@@ -202,19 +205,23 @@ sequenceDiagram
 | `dir_size_debit` | 清理后扣减 | 保持原 exact/derived |
 | `dir_sizes_clear` | 手动重扫 | 清空整棵树 |
 
-`record` 写入大小后：
+`record` 写入大小后，`recompute_ancestors` 用子目录之和更新祖先。
+**精确父目录不会被覆盖**（防止父目录直接文件的字节被丢掉）。
 
-1. `sync_parent_listing` 更新父目录缓存列表里的该子项大小；
-2. `recompute_ancestors` 用子目录之和更新祖先。**精确父目录不会被覆盖**（防止父目录直接文件的字节被丢掉）。
+### 4.2 Store 文件夹索引与抓取队列
 
-### 4.2 目录列表缓存
+`list_dir_entries` 不再直接 `read_dir`，而是：
 
-`list_dir_entries` 先查 `cached_listing(path)`：
-
-- 命中且未超过 5 分钟 → 直接返回；
-- 否则 `read_dir`，排序，登记 `register_child` / `register_node`，写入 `listings`，返回。
+1. 向 `Store::folders().list(path)` 查询；
+2. `Fresh` → 直接返回；`Stale` → 返回旧列表并标记 `pending`；
+3. `Missing` → 返回空列表并标记 `pending`；
+4. `Stale` / `Missing` 都调用 `FetchQueue.enqueue(path)`；队列按路径去重；
+5. worker 执行 OS 读取，`FolderIndex::apply` 写入并递增 revision；
+6. Tauri 广播 `store://folders-changed { revision, path, resolved }`；
+7. 前端刷新当前目录，下一次查询命中 `Fresh`。
 
 前端 `dirCache.listingFor` 只做并发去重；返回时把目录 `size` 归零，交给尺寸解析层填充。
+`dir_listing_clear` 已删除；手动刷新调用 `folders_clear` 清空 Store 索引。
 
 ```mermaid
 flowchart LR
@@ -251,7 +258,7 @@ dir_sizes_tree 懒加载（走盘，写回后端 + 前端）
 - `sizeCache.sizesFor` 先读前端缓存；miss 时 `dirSizePeek` 的 derived 值也接受（`exact=false`），避免每次返回父目录都重新走盘；未知/0 才 `dirSizesTree`。
 - `openExplorer` 把扫描得到的大小 `seedSize` 到共享缓存，返回父目录时不再依赖扫描节点仍然存在。
 - 清理时前端 `debitSizes` 扣减镜像，后端 `dir_size_debit` 扣减权威树；两边都更新。
-- 手动 `refreshExplorer(true)` 清空前端 + 后端列表缓存，强制走盘。
+- 手动 `refreshExplorer(true)` 清空前端 + Store 文件夹索引，下一次查询变成 miss 并进入抓取队列。
 
 ### 4.4 为什么分 exact / derived
 
@@ -366,7 +373,7 @@ flowchart TD
 ### 6.4 已知缺口
 
 - 后端 `ScanTree` 不随清理更新（清理只更新前端树、`size-tree` 和 `Store`）。如果清理后立即调用 `analyze_current`，它仍可能看到已删除路径，直到重新扫描或刷新。
-- 外部删除只剪前端树，不同步后端尺寸索引/列表缓存。
+- 外部删除只剪前端树，不同步后端尺寸索引 / Store 文件夹索引。
 
 ## 7. 环境、应用与包管理器数据流
 
@@ -408,7 +415,7 @@ ScanContext { apps, package_managers, projects, ... }
 ├── routines.json         例行任务
 ├── environment.json      应用/包管理器/项目 + 维护建议
 ├── scan-journal.sqlite   可恢复扫描日志（WAL）
-├── size-tree.json        目录大小 + 列表缓存
+├── size-tree.json        目录大小（不再存目录列表）
 ├── Quarantine/<id>/      卸载隔离区（manifest + payload）
 └── *.corrupt / *.bak     损坏文档归档
 ```
@@ -449,7 +456,7 @@ ScanContext { apps, package_managers, projects, ... }
 | 扫描树 | session | 会话 | 新扫描替换 |
 | 前端节点索引 | NodeKey/path | 会话 | 批次 upsert、`pruneIds` |
 | 后端尺寸树 | path | 持久 | 扫描 ingest、走盘、扣减、手动 clear |
-| 目录列表 | requested path | 5 分钟 | 手动 refresh、`dir_listing_clear` |
+| Store 文件夹索引 | requested path | 5 分钟 | 手动 refresh / `folders_clear`；miss 交给 FetchQueue |
 | 前端尺寸镜像 | path | 30 分钟 | `sizesFor`、`seedSize`、`debitSizes`、`clearSizeCache` |
 | 判定缓存 | fingerprint | 持久 | 指纹变化、容量淘汰 |
 | 可清理清单 | NodeKey | 持久 | 每次分析 upsert、审批、删除 |
@@ -470,7 +477,7 @@ ScanContext { apps, package_managers, projects, ... }
 
 ### 11.1 为什么尺寸树用 `try_lock`
 
-目录列表是 UI 热路径；扫描/flush 可能长期持有尺寸树锁。`dir_size_peek` 和 `cached_listing` 用 `try_lock`，拿不到就返回 miss/partial，让调用方走磁盘或稍后重试，避免阻塞界面。
+目录列表是 UI 热路径；Store 的 `FolderIndex` 用独立短锁，只有读写列表时持有，不参与扫描/flush 的尺寸树锁。`dir_size_peek` 对尺寸树用 `try_lock`，拿不到就返回 miss/partial；列表 miss 则进入 FetchQueue，不在 Tauri 命令里阻塞走盘。
 
 ## 12. 失败与降级
 
@@ -491,11 +498,11 @@ ScanContext { apps, package_managers, projects, ... }
 
 以下是当前实现里**尚未闭环**的数据一致性点，按优先级排列：
 
-1. **外部删除不同步尺寸索引**：`fs://deleted` 只调用 `pruneIds`，不更新 `size-tree` 的 `sizes`/`listings`。建议增加 `size_tree_remove(path)` 命令，或让 `pruneIds` 对后端发 `dir_size_debit` + 删除 listing 条目。
+1. **外部删除不同步尺寸索引 / 文件夹索引**：`fs://deleted` 只调用 `pruneIds`，不更新 `size-tree` 的 `sizes` 或 Store 的文件夹索引。建议增加 `size_tree_remove(path)` 与 `folders_invalidate(path)`，或让 `pruneIds` 对后端发 `dir_size_debit` 并失效对应 Store 列表。
 2. **清理后 `ScanTree` 仍是旧快照**：`clean_paths` 不修改 `ScanManager.last_tree`。若清理后立即 `analyze_current`，可能重新看到已删除路径。建议在清理成功后对树做 prune，或让前端在清理后触发一次轻量重扫。
 3. **`dir_size_debit` 签名已修复**：前端发 `{ items }`，后端现在接收批量 `SizeDebitItem`；此前单参数版本会让扣减静默失败。建议加一个 IPC 集成测试。
 4. **`Store` 文档注释过时**：`sift-store/src/lib.rs` 仍写“四份文档”，实际有 verdicts/cleanable/decisions/settings/history/routines/environment。应更新注释或生成数据字典。
-5. **`size-tree.json` 无 schema 版本、非原子写**：崩溃可能丢失最近 1.5s 的尺寸更新；建议加版本字段和原子写。
+5. **`size-tree.json` 无 schema 版本、非原子写**：崩溃可能丢失最近 1.5s 的尺寸更新；当前超过 64 MB 会移到 `.oversized` 并重建，避免启动阻塞。长期应换成 SQLite/分片索引。
 6. **空目录不进入尺寸树**：`scan_index_ingest`/`record_scan_dir` 只记录 `size>0`；空目录在 `peek` 返回 partial，触发走盘。建议记录 `exact=true,size=0`。
 7. **前端尺寸缓存不持久**：`sizeCache` 重启后清空，冷启动依赖后端 `size-tree`；目前可接受，但可考虑启动时 hydrate 常用路径。
 8. **listing TTL 与尺寸 TTL 不一致**：列表 5 分钟、尺寸 30 分钟；外部变化后两者可能不同步。建议统一失效策略或让 listing 命中时校验 mtime。
@@ -520,6 +527,7 @@ ScanContext { apps, package_managers, projects, ... }
 ## 15. 相关文档
 
 - [架构地图（可视化）](architecture-atlas.html)——分层栈、五条数据流、事实源与缓存矩阵的单页视图
+- [Store 中心架构：已落地部分与剩余边界](store-centric.md)——列表读模型、抓取队列、订阅与下一步
 - [架构总览](overview.md)
 - [应用卸载与数据沉淀](app-uninstall.md)
 - [包管理器知识沉淀](package-manager-knowledge.md)

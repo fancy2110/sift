@@ -192,6 +192,8 @@ export function setProtectedPaths(paths: string[]): Promise<MonitorStatus> {
 export interface DirListing {
   path: string;
   entries: DirEntry[];
+  /** Store has no fresh listing yet; the fetch queue is filling it. */
+  pending?: boolean;
 }
 
 /** List one directory (works without any scan). */
@@ -199,8 +201,24 @@ export function listDirEntries(path: string, force = false): Promise<DirListing>
   return call<DirListing>('list_dir_entries', { path, force });
 }
 
+export interface FolderChange {
+  revision: number;
+  path: string;
+  resolved: string;
+}
+
+export function onFoldersChanged(cb: (change: FolderChange) => void): Promise<UnlistenFn> {
+  return subscribe<FolderChange>('store://folders-changed', cb);
+}
+
+export function onFoldersFailed(
+  cb: (event: { path: string; error: string }) => void
+): Promise<UnlistenFn> {
+  return subscribe<{ path: string; error: string }>('store://folders-failed', cb);
+}
+
 export function clearDirListings(): Promise<void> {
-  return call<void>('dir_listing_clear', {});
+  return call<void>('folders_clear', {});
 }
 
 /** Recursive totals for a batch of directories. */

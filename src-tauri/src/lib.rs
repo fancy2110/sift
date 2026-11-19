@@ -9,6 +9,7 @@ mod ai_explain;
 mod ai_routine;
 mod apps;
 mod explorer;
+mod fetch_queue;
 mod preview;
 mod size_tree;
 mod analyze;
@@ -23,6 +24,7 @@ mod tray;
 mod watcher;
 
 use analyze::AppServices;
+use fetch_queue::FetchQueue;
 use disks::{home_dir, list_volumes};
 use scanner::{
     cancel_scan, list_dir_files, pause_scan, resolve_permission, resume_scan, scan_running,
@@ -81,6 +83,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_dialog::init())
         .manage(ScanManager::new())
+        .manage(FetchQueue::default())
         .manage(services)
         .manage(FsWatcherState::default())
         .invoke_handler(tauri::generate_handler![
@@ -99,6 +102,7 @@ pub fn run() {
             resolve_permission,
             list_dir_files,
             explorer::list_dir_entries,
+            explorer::folders_clear,
             explorer::list_files_under,
             ai_explain::ai_explain_dir,
             explorer::dir_sizes,
@@ -108,7 +112,6 @@ pub fn run() {
             size_tree::dir_sizes_clear,
             size_tree::dir_size_debit,
             size_tree::scan_index_ingest,
-            size_tree::dir_listing_clear,
             // deletion and filesystem awareness
             watch_fs,
             unwatch_fs,
@@ -170,6 +173,7 @@ pub fn run() {
             startup_trace::mark("setup:enter");
             schedule::start(app.handle());
             apps::start_environment_watch(app.handle().clone());
+            fetch_queue::start_workers(app.handle().clone(), 2);
 
             // Closing the window keeps the app in the tray; the tray menu's
             // quit is the real exit.

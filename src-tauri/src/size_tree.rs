@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::analyze::AppServices;
-use crate::explorer::{DirEntryDto, DirSizeDto, MAX_ENTRIES_PER_WALK};
+use crate::explorer::{DirSizeDto, MAX_ENTRIES_PER_WALK};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct TreeData {
@@ -25,67 +25,6 @@ struct TreeData {
     children: HashMap<String, HashSet<String>>,
     /// Direct parent of each path.
     parents: HashMap<String, String>,
-    /// Basic metadata seen during listings.
-    nodes: HashMap<String, NodeMeta>,
-    /// Cached directory listings, keyed by the requested path.
-    listings: HashMap<String, CachedListing>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CachedListing {
-    at_ms: i64,
-    resolved: String,
-    entries: Vec<DirEntryDto>,
-}
-
-/// Listings older than this are re-read from disk.
-const LISTING_TTL_MS: i64 = 5 * 60_000;
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|age| age.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-/// Serve a listing from the shared index when it is still fresh.
-pub fn cached_listing(path: &str) -> Option<(String, Vec<DirEntryDto>)> {
-    let data = tree().try_lock().ok()?;
-    let listing = data.listings.get(path)?;
-    if now_ms() - listing.at_ms > LISTING_TTL_MS {
-        return None;
-    }
-    Some((listing.resolved.clone(), listing.entries.clone()))
-}
-
-/// Remember a listing in the shared index.
-pub fn store_listing(requested: &str, resolved: &str, entries: &[DirEntryDto]) {
-    let Ok(mut data) = tree().try_lock() else {
-        return;
-    };
-    data.listings.insert(
-        requested.to_string(),
-        CachedListing {
-            at_ms: now_ms(),
-            resolved: resolved.to_string(),
-            entries: entries.to_vec(),
-        },
-    );
-    mark_dirty();
-}
-
-/// Drop every cached listing (manual rescan).
-#[tauri::command]
-pub fn dir_listing_clear() {
-    let mut data = tree().lock().unwrap();
-    data.listings.clear();
-    persist(&data);
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct NodeMeta {
-    is_dir: bool,
-    mtime_ms: Option<i64>,
 }
 
 static TREE: OnceLock<Mutex<TreeData>> = OnceLock::new();
@@ -114,10 +53,23 @@ fn tree_path() -> Option<std::path::PathBuf> {
     dirs::data_dir().map(|dir| dir.join("Sift").join("size-tree.json"))
 }
 
+/// A monolithic JSON index above this size is not worth a blocking parse on
+/// startup; it is moved aside and rebuilt incrementally.
+const MAX_LOAD_BYTES: u64 = 64 * 1024 * 1024;
+
 fn load_from_disk() -> TreeData {
     let Some(path) = tree_path() else {
         return TreeData::default();
     };
+    match std::fs::metadata(&path) {
+        Ok(meta) if meta.len() > MAX_LOAD_BYTES => {
+            let oversized = path.with_extension("json.oversized");
+            let _ = std::fs::rename(&path, &oversized);
+            return TreeData::default();
+        }
+        Ok(_) => {}
+        Err(_) => return TreeData::default(),
+    }
     std::fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -136,24 +88,13 @@ fn persist(data: &TreeData) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(bytes) = serde_json::to_vec(data) {
+        // Keep persistence bounded: an unbounded JSON rewrite blocks the
+        // writer thread and grows into hundreds of megabytes.
+        if bytes.len() as u64 > MAX_LOAD_BYTES {
+            return;
+        }
         let _ = std::fs::write(&path, bytes);
     }
-}
-
-/// Remember what a listing saw: kind and modification time.
-pub fn register_node(path: &str, is_dir: bool, mtime_ms: Option<i64>) {
-    // Never block a directory listing on the index: if a scan/flush holds it,
-    // skip the bookkeeping for now.
-    let Ok(mut data) = tree().try_lock() else {
-        return;
-    };
-    data.nodes.insert(
-        path.to_string(),
-        NodeMeta {
-            is_dir,
-            mtime_ms,
-        },
-    );
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -198,12 +139,6 @@ fn debit_one(data: &mut TreeData, path: &str, bytes: u64) {
         }
         current = parent;
     }
-    // The entry is gone: drop it from every cached parent listing too.
-    for listing in data.listings.values_mut() {
-        listing
-            .entries
-            .retain(|entry| entry.path != path && !entry.path.starts_with(&format!("{path}/")));
-    }
 }
 
 /// Record that `parent` contains `child`, so updates can walk upward.
@@ -214,8 +149,7 @@ pub fn register_child(parent: &str, child: &str) {
     let Ok(mut data) = tree().try_lock() else {
         return;
     };
-    data.parents
-        .insert(child.to_string(), parent.to_string());
+    data.parents.insert(child.to_string(), parent.to_string());
     data.children
         .entry(parent.to_string())
         .or_default()
@@ -247,33 +181,10 @@ fn recompute_ancestors(data: &mut TreeData, path: &str) {
     }
 }
 
-/// Keep the parent's cached listing row in sync with a child's new size, so
-/// reopening the parent does not show a stale number.
-fn sync_parent_listing(data: &mut TreeData, path: &str, size: u64) {
-    let parent = data
-        .parents
-        .get(path)
-        .cloned()
-        .or_else(|| {
-            std::path::Path::new(path)
-                .parent()
-                .map(|parent| parent.to_string_lossy().into_owned())
-        });
-    let Some(parent) = parent else {
-        return;
-    };
-    if let Some(listing) = data.listings.get_mut(&parent) {
-        if let Some(entry) = listing.entries.iter_mut().find(|entry| entry.path == path) {
-            entry.size = size;
-        }
-    }
-}
-
 /// Record a measured size for `path` and update the tree upward.
 fn record(data: &mut TreeData, path: &str, size: u64, exact: bool) {
     data.sizes.insert(path.to_string(), size);
     data.exact.insert(path.to_string(), exact);
-    sync_parent_listing(data, path, size);
     recompute_ancestors(data, path);
 }
 
@@ -321,7 +232,6 @@ pub struct ScanEntryDto {
     pub path: String,
     pub size: u64,
     pub is_dir: bool,
-    pub mtime_ms: Option<i64>,
 }
 
 /// Ingest results from the scan engine: every scanned directory contributes
@@ -335,37 +245,29 @@ pub async fn scan_index_ingest(entries: Vec<ScanEntryDto>) -> Result<(), String>
         let Ok(mut data) = tree().lock() else {
             return;
         };
-    for entry in &entries {
-        if !std::path::Path::new(&entry.path).is_absolute() {
-            continue;
-        }
-        if entry.is_dir {
-            if let Some(parent) = std::path::Path::new(&entry.path)
-                .parent()
-                .map(|parent| parent.to_string_lossy().into_owned())
-            {
-                if !parent.is_empty() && parent != entry.path {
-                    data.parents.insert(entry.path.clone(), parent.clone());
-                    data.children
-                        .entry(parent)
-                        .or_default()
-                        .insert(entry.path.clone());
+        for entry in &entries {
+            if !std::path::Path::new(&entry.path).is_absolute() {
+                continue;
+            }
+            if entry.is_dir {
+                if let Some(parent) = std::path::Path::new(&entry.path)
+                    .parent()
+                    .map(|parent| parent.to_string_lossy().into_owned())
+                {
+                    if !parent.is_empty() && parent != entry.path {
+                        data.parents.insert(entry.path.clone(), parent.clone());
+                        data.children
+                            .entry(parent)
+                            .or_default()
+                            .insert(entry.path.clone());
+                    }
+                }
+                if entry.size > 0 {
+                    data.sizes.insert(entry.path.clone(), entry.size);
+                    data.exact.insert(entry.path.clone(), true);
                 }
             }
-            if entry.size > 0 {
-                data.sizes.insert(entry.path.clone(), entry.size);
-                data.exact.insert(entry.path.clone(), true);
-                sync_parent_listing(&mut data, &entry.path, entry.size);
-            }
         }
-        data.nodes.insert(
-            entry.path.clone(),
-            NodeMeta {
-                is_dir: entry.is_dir,
-                mtime_ms: entry.mtime_ms,
-            },
-        );
-    }
         // One upward pass per ingest batch: every touched ancestor becomes the
         // sum of its children.
         let paths: Vec<String> = entries.iter().map(|entry| entry.path.clone()).collect();

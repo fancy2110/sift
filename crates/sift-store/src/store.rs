@@ -1,7 +1,7 @@
 //! The store facade: one place that owns every piece of durable local state.
 //!
 //! Callers get a single `Store` and never think about files. Internally there is
-//! one lock, because the four documents describe one consistent picture — a
+//! one lock, because the durable documents describe one consistent picture — a
 //! verdict, the cleanable list derived from it, and the decision that resolved it
 //! should not be able to drift apart mid-update.
 //!
@@ -10,7 +10,7 @@
 //! a half-written file either (writes are atomic — see [`crate::atomic`]).
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use sift_analyze::{
     AnalysisReport, AnalyzedItem, Decision, DecisionLog, DecisionOutcome, PathFingerprint, Verdict,
@@ -21,6 +21,7 @@ use sift_core::NodeKey;
 use crate::atomic::{read_document, write_document};
 use crate::cleanable::{CleanableEntry, CleanableList, RecordSummary, DEFAULT_CLEANABLE_CAP};
 use crate::environment::EnvironmentDoc;
+use crate::folders::FolderIndex;
 use crate::history::{CleanupHistory, HistoryEntry, DEFAULT_HISTORY_CAP};
 use crate::paths::StorePaths;
 use crate::routines::{RoutineEntry, RoutineList, DEFAULT_ROUTINE_CAP};
@@ -47,6 +48,7 @@ pub struct Store {
     inner: Mutex<Inner>,
     dirty: AtomicBool,
     decision_cap: usize,
+    folders: Arc<FolderIndex>,
 }
 
 impl std::fmt::Debug for Store {
@@ -170,6 +172,7 @@ impl Store {
                 }),
                 dirty: AtomicBool::new(false),
                 decision_cap: DEFAULT_DECISION_CAP,
+                folders: Arc::new(FolderIndex::default()),
             },
             warnings,
         )
@@ -191,6 +194,7 @@ impl Store {
             }),
             dirty: AtomicBool::new(false),
             decision_cap: DEFAULT_DECISION_CAP,
+            folders: Arc::new(FolderIndex::default()),
         }
     }
 
@@ -201,6 +205,12 @@ impl Store {
 
     pub fn root(&self) -> Option<&std::path::Path> {
         self.paths.as_ref().map(|paths| paths.root())
+    }
+
+    /// The Store-owned folder read model. Views query this instead of calling
+    /// the filesystem directly; the fetch queue fills it on a miss.
+    pub fn folders(&self) -> Arc<FolderIndex> {
+        Arc::clone(&self.folders)
     }
 
     // ---- settings ----------------------------------------------------------
@@ -855,5 +865,4 @@ mod tests {
         store.set_finding_dismissed(key, false);
         assert!(store.dismissed_findings().is_empty());
     }
-
 }

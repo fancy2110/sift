@@ -42,6 +42,8 @@ import {
   dirSizeDebit,
   scanIndexIngest,
   onFsDeleted,
+  onFoldersChanged,
+  onFoldersFailed,
   onMonitorEvent,
   onScheduledReady,
   onScanBatch,
@@ -171,6 +173,8 @@ class AppStore {
   explorerRight = $state<DirEntry[]>([]);
   explorerRightPath = $state('');
   explorerRightLoading = $state(false);
+  /** A Store folder revision arrived while the listing request was in flight. */
+  private folderChangedDuringLoad = false;
   explorerSelected = $state<DirEntry | null>(null);
   /** Recursive total of the current directory; null while it is computed. */
   explorerTotal = $state<number | null>(null);
@@ -435,6 +439,8 @@ class AppStore {
       onScanDone((event) => this.handleScanDone(event)),
       onScanRefreshed((event) => this.handleRefreshed(event)),
       onFsDeleted((event) => this.pruneIds(new Set([event.id]))),
+      onFoldersChanged((change) => this.handleFoldersChanged(change)),
+      onFoldersFailed((event) => this.handleFoldersFailed(event)),
       onMonitorEvent((event) => this.handleMonitorEvent(event)),
       onScheduledReady((event) => this.handleScheduledReady(event))
     ]);
@@ -729,6 +735,36 @@ class AppStore {
     }
   }
 
+  private handleFoldersChanged(change: { path: string; resolved: string }) {
+    if (!this.explorerPath) {
+      // The first open used the implicit home path; the Store resolved it.
+      this.explorerPath = change.resolved || change.path;
+      this.explorerRightPath = this.explorerPath;
+      void this.openExplorer(this.explorerPath);
+      return;
+    }
+    if (change.path !== this.explorerPath && change.resolved !== this.explorerPath) return;
+    if (this.explorerRightLoading) {
+      // The Store filled while the command was still pending. The first call
+      // has already returned its `pending` snapshot; retry shortly so the
+      // fresh revision is actually read.
+      this.folderChangedDuringLoad = true;
+      setTimeout(() => {
+        if (!this.folderChangedDuringLoad || !this.explorerPath) return;
+        this.folderChangedDuringLoad = false;
+        void this.openExplorer(this.explorerPath);
+      }, 60);
+      return;
+    }
+    void this.openExplorer(this.explorerPath);
+  }
+
+  private handleFoldersFailed(event: { path: string; error: string }) {
+    if (event.path !== this.explorerPath) return;
+    this.explorerRightLoading = false;
+    this.toastError(tr(event.error));
+  }
+
   private handleBatch(batch: BatchUpdate) {
     // Late batch from a cancelled/replaced scan: the new tree must not see it.
     if (batch.epoch !== this.scanEpoch) return;
@@ -822,6 +858,10 @@ class AppStore {
     this.explorerAi = { loading: false, error: '', summary: '', items: {} };
     this.explorerRightLoading = true;
     this.explorerRight = [];
+    // The Store fetch may finish before the pending listing response returns;
+    // publish the provisional path so the change listener can match it.
+    this.explorerPath = startPath;
+    this.explorerRightPath = startPath;
     // Stop the spinner after a while even if the backend is slow, but let the
     // request finish and fill the list when it does.
     const spinnerWatchdog = setTimeout(() => {
@@ -829,19 +869,18 @@ class AppStore {
     }, 6000);
     let resolved = startPath;
     let entries: DirEntry[] = [];
+    let pending = false;
     try {
       const listing = await listingFor(startPath);
       resolved = listing.path || startPath;
       entries = listing.entries;
+      pending = listing.pending;
     } catch (error) {
       entries = [];
       const message = error instanceof Error ? error.message : String(error);
       this.toastError(tr(message));
     } finally {
-      // The list must leave its loading state even if the read failed; sizes
-      // are computed separately and fill in afterwards.
       clearTimeout(spinnerWatchdog);
-      this.explorerRightLoading = false;
     }
     // Apply scan-tree totals before the first paint. This is the common case:
     // the folder is already in the scanned tree, so the numbers are instant and
@@ -859,7 +898,9 @@ class AppStore {
     this.explorerPath = resolved;
     this.explorerRightPath = resolved;
     this.explorerRight = entries;
-    this.explorerRightLoading = false;
+    // A pending listing is filled by the fetch queue; keep the spinner until
+    // `store://folders-changed` arrives (the watchdog still bounds it).
+    this.explorerRightLoading = pending;
 
     // Prefer the best known total; keep the previous value (instead of
     // showing "no size") while a fresh measurement is in flight.
