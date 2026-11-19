@@ -179,7 +179,7 @@ sequenceDiagram
 
 `watch_fs` 监听浏览根；`FsEvent::Deleted` 变成 `fs://deleted { id, path }`，前端 `pruneIds` 剪掉节点并重算祖先大小。
 
-**已知缺口**：这条路径只剪前端树，不会同步 Store 文件夹索引 / `size-tree` 的 `sizes`。外部删除后，重新列目录若命中 5 分钟 Store listing，仍可能看到旧条目；`dir_size_peek` 也可能返回旧值。见第 13 节。
+**已对齐部分**：`fs://deleted` 会 invalidate 被删路径及其父目录的 Store 文件夹索引，下一次列目录会重新抓取。**已知缺口**：`size-tree` 的 `sizes` 仍未同步；`dir_size_peek` 可能返回旧值。见第 13 节。
 
 ## 4. 尺寸与目录索引数据流
 
@@ -373,7 +373,7 @@ flowchart TD
 ### 6.4 已知缺口
 
 - 后端 `ScanTree` 不随清理更新（清理只更新前端树、`size-tree` 和 `Store`）。如果清理后立即调用 `analyze_current`，它仍可能看到已删除路径，直到重新扫描或刷新。
-- 外部删除只剪前端树，不同步后端尺寸索引 / Store 文件夹索引。
+- 外部删除会失效 Store 文件夹索引，但不同步 `size-tree` 的尺寸。
 
 ## 7. 环境、应用与包管理器数据流
 
@@ -498,7 +498,7 @@ ScanContext { apps, package_managers, projects, ... }
 
 以下是当前实现里**尚未闭环**的数据一致性点，按优先级排列：
 
-1. **外部删除不同步尺寸索引 / 文件夹索引**：`fs://deleted` 只调用 `pruneIds`，不更新 `size-tree` 的 `sizes` 或 Store 的文件夹索引。建议增加 `size_tree_remove(path)` 与 `folders_invalidate(path)`，或让 `pruneIds` 对后端发 `dir_size_debit` 并失效对应 Store 列表。
+1. **外部删除不同步尺寸索引**：`fs://deleted` 现在会 invalidate Store 文件夹索引，但 `size-tree` 的 `sizes` 仍未更新。建议增加 `size_tree_remove(path)`，或让 `pruneIds` 对后端发 `dir_size_debit`。
 2. **清理后 `ScanTree` 仍是旧快照**：`clean_paths` 不修改 `ScanManager.last_tree`。若清理后立即 `analyze_current`，可能重新看到已删除路径。建议在清理成功后对树做 prune，或让前端在清理后触发一次轻量重扫。
 3. **`dir_size_debit` 签名已修复**：前端发 `{ items }`，后端现在接收批量 `SizeDebitItem`；此前单参数版本会让扣减静默失败。建议加一个 IPC 集成测试。
 4. **`Store` 文档注释过时**：`sift-store/src/lib.rs` 仍写“四份文档”，实际有 verdicts/cleanable/decisions/settings/history/routines/environment。应更新注释或生成数据字典。

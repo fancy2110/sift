@@ -48,7 +48,7 @@ flowchart LR
 3. **尺寸索引仍是独立 `size_tree`**：目标 Store 应统一 `sizes/exact/listings`；当前只是把列表搬进 Store。
 4. **业务数据没有统一订阅**：`verdicts/cleanable/settings/history` 仍在 `Store` 内，但没有 revision/event bus；只有文件夹索引有 `FolderChange`。
 5. **文件夹索引不持久化**：重启后为空，靠重新抓取；目标应持久化快照/增量。
-6. **外部删除不失效文件夹索引**：`fs://deleted` 仍只剪前端树；需要在删除路径失效 Store 列表并广播。
+6. **外部删除只失效了文件夹索引**：`fs://deleted` 现在会 invalidate Store 的对应目录列表，但 `size-tree` 的 `sizes` 仍未同步。
 7. **大 `size-tree.json` 的边界**：超过 64 MB 会移到 `.oversized` 并重建，避免 677 MB JSON 在首屏阻塞；长期应迁移到 SQLite/分片索引。
 
 ## 4. 验收基线
