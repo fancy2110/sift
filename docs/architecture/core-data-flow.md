@@ -32,6 +32,23 @@ sift-core     （arena 树、字节记账、NodeKey、策略、事件类型）
 
 `src-tauri` 不写产品逻辑，只做命令注册、事件翻译和 Tauri 状态。
 
+```mermaid
+flowchart TD
+  UI["Svelte 前端<br/>store.svelte.ts"] --> Tauri["Tauri 适配层<br/>命令 + 事件"]
+  Tauri --> Monitor["sift-monitor<br/>采样 + 策略"]
+  Tauri --> Store["sift-store<br/>结论/配置/历史"]
+  Tauri --> Analyze["sift-analyze<br/>候选 + 判定"]
+  Tauri --> Apps["sift-apps<br/>应用/PM/项目"]
+  Analyze --> Scan["sift-scan<br/>调度 + 预算"]
+  Apps --> Scan
+  Monitor --> Store
+  Scan --> Platform["sift-platform<br/>卷/目录/回收站"]
+  Store --> Core["sift-core<br/>树/NodeKey/策略"]
+  Platform --> Core
+```
+
+箭头表示依赖方向：上层可以调用下层，下层不认识上层。
+
 ### 1.2 事实源分级
 
 | 级别 | 事实源 | 可信度 | 说明 |
@@ -114,6 +131,25 @@ scan://done
   └─ runAnalysis()：分析当前树
 ```
 
+```mermaid
+sequenceDiagram
+  participant E as ScanEngine
+  participant P as pump_events
+  participant S as Svelte store
+  participant Z as size-tree
+  participant A as Analyzer
+
+  E->>P: Discovered / DirectorySized / Closed
+  P->>P: 64ms 合并，打上 epoch
+  P->>S: scan://batch { discovered, sized, progress }
+  S->>S: 校验 epoch，upsert nodeRecords
+  E->>P: Finished
+  P->>S: scan://done
+  S->>Z: scan_index_ingest（1000/批）
+  S->>A: analyze_current()
+  A->>S: AnalysisSummary
+```
+
 ### 3.1 启动与恢复
 
 `ScanManager` 持有当前扫描控制、最后一次的 `ScanTree` 和 root。`start_scan_with` 选择卷、构造 `ScanPolicy`，用 `SqliteScanJournal` 支持中断恢复；`NodesAdopted` 把恢复节点作为 `discovered` 发出，`pending` 表示目录尚未闭合。
@@ -179,6 +215,18 @@ scan://done
 - 否则 `read_dir`，排序，登记 `register_child` / `register_node`，写入 `listings`，返回。
 
 前端 `dirCache.listingFor` 只做并发去重；返回时把目录 `size` 归零，交给尺寸解析层填充。
+
+```mermaid
+flowchart LR
+  Q["需要目录大小"] --> T{"ScanTree 有<br/>非 pending 节点?"}
+  T -- 有 --> T1["直接用 node.size"]
+  T -- 没有 --> C{"sizeCache 命中?"}
+  C -- 命中 --> C1["直接用缓存值"]
+  C -- 没命中 --> P{"dir_size_peek 有<br/>精确/derived 值?"}
+  P -- 有 --> P1["立即显示<br/>exact=false 可再修正"]
+  P -- 没有 --> W["dir_sizes_tree 走盘"]
+  W --> W1["写回 size-tree + sizeCache"]
+```
 
 ### 4.3 前端尺寸解析优先级
 
@@ -283,6 +331,18 @@ per-item results
   ├─ Store.note_removed / record_decision / note_cleanup_session
   ├─ 前端：findings 移除、pruneIds、祖先大小扣减
   └─ 前端 + 后端尺寸索引扣减
+```
+
+```mermaid
+flowchart TD
+  Sel["用户选择 / 自动策略"] --> Guard{"last_report 命中?<br/>指纹仍匹配?"}
+  Guard -- 否 --> Skip["跳过并报告"]
+  Guard -- 是 --> Trash["平台回收站"]
+  Trash --> Ok{"成功?"}
+  Ok -- 是 --> Store["note_removed / decision / history"]
+  Ok -- 否 --> Fail["逐项失败报告"]
+  Store --> UI["前端移除 findings + pruneIds"]
+  UI --> Debit["前端 debitSizes<br/>后端 dir_size_debit"]
 ```
 
 ### 6.1 交互式清理
@@ -459,6 +519,7 @@ ScanContext { apps, package_managers, projects, ... }
 
 ## 15. 相关文档
 
+- [架构地图（可视化）](architecture-atlas.html)——分层栈、五条数据流、事实源与缓存矩阵的单页视图
 - [架构总览](overview.md)
 - [应用卸载与数据沉淀](app-uninstall.md)
 - [包管理器知识沉淀](package-manager-knowledge.md)
