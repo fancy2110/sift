@@ -435,7 +435,7 @@
 
   .hub-meta {
     position: absolute;
-    top: calc(22px + var(--titlebar-inset-y, 16px));
+    top: calc(22px + var(--titlebar-inset-y, 22px));
     display: inline-flex;
     align-items: center;
     gap: 8px;
