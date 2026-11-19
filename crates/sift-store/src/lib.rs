@@ -1,6 +1,6 @@
 //! Sift durable local state.
 //!
-//! Four documents, one owner:
+//! One facade, several documents:
 //!
 //! | Document | Holds | Purpose |
 //! | --- | --- | --- |
@@ -8,6 +8,13 @@
 //! | `cleanable.json` | the known-cleanable list | the standing answer to "what may be deleted?" |
 //! | `decisions.json` | what the user chose | habit mining and suppressed suggestions |
 //! | `settings.json` | preferences and thresholds | the monitor's trigger policy |
+//! | `history.json` | one row per cleanup session | the user-facing timeline |
+//! | `routines.json` | accepted routines + dismissed suggestions | scheduled work definitions |
+//! | `environment.json` | apps, package managers, projects, maintenance hints | environment-aware analysis |
+//!
+//! The scan journal (`scan-journal.sqlite`) and the size tree
+//! (`size-tree.json`) live beside these documents but are owned by their own
+//! modules; see `docs/architecture/core-data-flow.md`.
 //!
 //! Two rules shape the implementation:
 //!
