@@ -156,17 +156,37 @@ pub fn register_node(path: &str, is_dir: bool, mtime_ms: Option<i64>) {
     );
 }
 
-/// Subtract bytes removed by a cleanup from a path and every ancestor.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SizeDebitItem {
+    pub path: String,
+    pub bytes: u64,
+}
+
+/// Subtract bytes removed by a cleanup from paths and every ancestor.
+///
+/// Batched because one interactive cleanup can remove hundreds of items, and
+/// each item must update the same in-memory tree.
 #[tauri::command]
-pub fn dir_size_debit(path: String, bytes: u64) {
-    if bytes == 0 {
+pub fn dir_size_debit(items: Vec<SizeDebitItem>) {
+    if items.is_empty() {
         return;
     }
     let mut data = tree().lock().unwrap();
-    if let Some(size) = data.sizes.get_mut(&path) {
+    for item in items {
+        debit_one(&mut data, &item.path, item.bytes);
+    }
+    mark_dirty();
+}
+
+fn debit_one(data: &mut TreeData, path: &str, bytes: u64) {
+    if bytes == 0 {
+        return;
+    }
+    if let Some(size) = data.sizes.get_mut(path) {
         *size = size.saturating_sub(bytes);
     }
-    let mut current = path.clone();
+    let mut current = path.to_string();
     for _ in 0..64 {
         let Some(parent) = data.parents.get(&current).cloned() else {
             break;
@@ -184,7 +204,6 @@ pub fn dir_size_debit(path: String, bytes: u64) {
             .entries
             .retain(|entry| entry.path != path && !entry.path.starts_with(&format!("{path}/")));
     }
-    mark_dirty();
 }
 
 /// Record that `parent` contains `child`, so updates can walk upward.
@@ -498,6 +517,16 @@ mod tests {
         record(&mut data, "/a/b", 10, true);
         assert_eq!(data.sizes.get("/a"), Some(&1_000));
         assert_eq!(data.exact.get("/a"), Some(&true));
+    }
+
+    #[test]
+    fn debiting_a_child_updates_its_ancestors() {
+        let mut data = sample();
+        record(&mut data, "/a/b", 100, true);
+        record(&mut data, "/a", 100, true);
+        debit_one(&mut data, "/a/b", 40);
+        assert_eq!(data.sizes.get("/a/b"), Some(&60));
+        assert_eq!(data.sizes.get("/a"), Some(&60));
     }
 
     #[test]
