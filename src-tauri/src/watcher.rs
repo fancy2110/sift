@@ -9,8 +9,9 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use sift_platform::watch::{FsEvent, FsWatcherHandle};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::analyze::AppServices;
 use crate::scanner::node_id;
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +47,14 @@ pub fn watch_fs(
                 // picked up by the next scan.
                 if let FsEvent::Deleted(path) = event {
                     let text = path.to_string_lossy().into_owned();
+                    // Invalidate the Store read model, not just the frontend
+                    // tree: the next Explorer query must miss and re-fetch.
+                    let services = app_for_pump.state::<AppServices>();
+                    let folders = services.store.folders();
+                    folders.invalidate(&text);
+                    if let Some(parent) = path.parent() {
+                        folders.invalidate(&parent.to_string_lossy());
+                    }
                     let _ = app_for_pump.emit(
                         "fs://deleted",
                         DeletedEvent {
