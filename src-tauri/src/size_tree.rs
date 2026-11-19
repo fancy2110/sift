@@ -218,7 +218,9 @@ fn recompute_ancestors(data: &mut TreeData, path: &str) {
         for child in &children {
             sum = sum.saturating_add(data.sizes.get(child).copied().unwrap_or(0));
         }
-        if sum > 0 {
+        // Never let a child-only sum replace a total measured by a full walk:
+        // the parent may have direct files that are not child directories.
+        if sum > 0 && !data.exact.get(&parent).copied().unwrap_or(false) {
             data.sizes.insert(parent.clone(), sum);
             data.exact.insert(parent.clone(), false);
         }
@@ -487,6 +489,15 @@ mod tests {
         assert_eq!(data.sizes.get("/a"), Some(&150));
         assert_eq!(data.sizes.get("/"), Some(&150));
         assert_eq!(data.exact.get("/"), Some(&false));
+    }
+
+    #[test]
+    fn an_exact_parent_is_not_shrunk_by_child_sums() {
+        let mut data = sample();
+        record(&mut data, "/a", 1_000, true);
+        record(&mut data, "/a/b", 10, true);
+        assert_eq!(data.sizes.get("/a"), Some(&1_000));
+        assert_eq!(data.exact.get("/a"), Some(&true));
     }
 
     #[test]
