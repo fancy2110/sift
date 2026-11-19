@@ -1,0 +1,977 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="dsh-design" content="web">
+<title>核心架构 · Sift</title>
+<style>
+  :root {
+    --bg: oklch(0.145 0.012 255);
+    --surface: oklch(0.185 0.013 255);
+    --surface-2: oklch(0.225 0.014 255);
+    --surface-3: oklch(0.27 0.015 255);
+    --line: oklch(0.31 0.014 255);
+    --line-soft: oklch(0.255 0.012 255);
+    --fg: oklch(0.94 0.005 255);
+    --muted: oklch(0.72 0.012 255);
+    --faint: oklch(0.56 0.014 255);
+    --accent: oklch(0.7 0.15 250);
+    --accent-soft: oklch(0.7 0.15 250 / 0.14);
+    --ok: oklch(0.78 0.15 155);
+    --warn: oklch(0.8 0.13 78);
+    --danger: oklch(0.72 0.17 25);
+    --violet: oklch(0.72 0.13 300);
+    --cyan: oklch(0.78 0.11 200);
+    --radius: 14px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC",
+      "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { background: var(--bg); }
+
+  body {
+    margin: 0;
+    color: var(--fg);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    background:
+      radial-gradient(900px 520px at 82% -12%, oklch(0.7 0.15 250 / 0.12), transparent 62%),
+      radial-gradient(700px 420px at -10% 42%, oklch(0.78 0.11 200 / 0.05), transparent 60%),
+      var(--bg);
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(to right, oklch(0.55 0.02 255 / 0.09) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(0.55 0.02 255 / 0.09) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: linear-gradient(to bottom, black, transparent 85%);
+  }
+
+  a { color: inherit; }
+
+  .page {
+    position: relative;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 34px 44px 80px;
+  }
+
+  .topline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line-soft);
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .brand-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--fg);
+    letter-spacing: 0.16em;
+  }
+  .brand-mark i {
+    width: 9px; height: 9px;
+    border-radius: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 14px oklch(0.7 0.15 250 / 0.7);
+  }
+  .topline .right { display: flex; gap: 22px; }
+
+  .hero {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 40px;
+    align-items: end;
+    padding: 54px 0 46px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .eyebrow {
+    margin: 0 0 18px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(44px, 6.2vw, 72px);
+    line-height: 1.02;
+    letter-spacing: -0.045em;
+    font-weight: 620;
+  }
+  h1 span { color: var(--muted); }
+
+  .lede {
+    max-width: 34em;
+    margin: 22px 0 0;
+    font-size: 15px;
+    line-height: 1.75;
+    color: var(--muted);
+    text-wrap: pretty;
+  }
+  .lede strong { color: var(--fg); font-weight: 550; }
+
+  .hero-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 26px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    background: oklch(0.2 0.012 255 / 0.55);
+  }
+  .pill b { color: var(--fg); font-weight: 500; }
+  .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); }
+
+  /* ---- hero diagram ---- */
+  .hero-diagram {
+    position: relative;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background:
+      linear-gradient(180deg, oklch(0.21 0.014 255 / 0.86), oklch(0.17 0.012 255 / 0.86));
+    padding: 20px;
+    overflow: hidden;
+  }
+  .hero-diagram::after {
+    content: "READ PATH →";
+    position: absolute;
+    top: 14px; right: 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    color: var(--faint);
+  }
+  .mini-stack { display: grid; gap: 7px; margin-top: 20px; }
+  .mini-row {
+    display: grid;
+    grid-template-columns: 52px 1fr auto;
+    align-items: center;
+    gap: 11px;
+    padding: 10px 11px;
+    border: 1px solid var(--line-soft);
+    border-radius: 9px;
+    background: oklch(0.2 0.013 255 / 0.72);
+    font-size: 12px;
+  }
+  .mini-row .idx {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+  }
+  .mini-row .name { font-weight: 540; }
+  .mini-row .tag {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .mini-row.hot { border-color: oklch(0.7 0.15 250 / 0.55); background: var(--accent-soft); }
+  .mini-row.hot .tag { color: var(--accent); }
+  .mini-note {
+    margin: 14px 2px 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--faint);
+  }
+
+  /* ---- toc ---- */
+  .toc {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 13px 0;
+    border-bottom: 1px solid var(--line-soft);
+    background: color-mix(in oklch, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+  }
+  .toc a {
+    text-decoration: none;
+    padding: 6px 10px;
+    border-radius: 7px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+  }
+  .toc a:hover, .toc a:focus-visible {
+    color: var(--fg);
+    background: var(--surface-2);
+    outline: none;
+  }
+  .toc a .n { color: var(--faint); margin-right: 6px; }
+
+  section { padding-top: 58px; }
+
+  .section-head {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    gap: 18px;
+    align-items: start;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .section-no {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    letter-spacing: 0.1em;
+    padding-top: 6px;
+  }
+  h2 {
+    margin: 0;
+    text-wrap: balance;
+    font-size: 28px;
+    line-height: 1.2;
+    letter-spacing: -0.025em;
+    font-weight: 600;
+  }
+  .section-sub {
+    margin: 7px 0 0;
+    max-width: 52em;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .section-note {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    text-align: right;
+    line-height: 1.7;
+    padding-top: 6px;
+  }
+
+  /* ---- layers ---- */
+  .layer-stack {
+    margin-top: 22px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .layer {
+    display: grid;
+    grid-template-columns: 64px 210px minmax(0, 1fr) 250px;
+    gap: 18px;
+    align-items: center;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line-soft);
+    background: oklch(0.18 0.012 255 / 0.55);
+    transition: background 160ms ease;
+  }
+  .layer:last-child { border-bottom: 0; }
+  .layer:hover { background: oklch(0.22 0.014 255 / 0.7); }
+  .layer .lno {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    letter-spacing: 0.08em;
+  }
+  .layer .lname {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .layer .lname i {
+    width: 7px; height: 7px;
+    border-radius: 2px;
+    background: var(--c, var(--accent));
+  }
+  .layer .lrole {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+  .layer code {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ---- flows ---- */
+  .flow-list { display: grid; gap: 12px; margin-top: 22px; }
+  .flow {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr);
+    gap: 20px;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: linear-gradient(180deg, oklch(0.2 0.013 255 / 0.72), oklch(0.175 0.012 255 / 0.72));
+  }
+  .flow-head .kicker {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    color: var(--c, var(--accent));
+  }
+  .flow-head h3 {
+    margin: 7px 0 5px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .flow-head p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--faint);
+  }
+  .track {
+    display: flex;
+    align-items: stretch;
+    gap: 7px;
+    flex-wrap: wrap;
+  }
+  .node {
+    flex: 1 1 120px;
+    min-width: 0;
+    padding: 10px 11px;
+    border: 1px solid var(--line-soft);
+    border-radius: 9px;
+    background: oklch(0.23 0.014 255 / 0.6);
+  }
+  .node b {
+    display: block;
+    font-size: 12px;
+    font-weight: 560;
+    line-height: 1.35;
+  }
+  .node small {
+    display: block;
+    margin-top: 4px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    line-height: 1.45;
+  }
+  .node.hot { border-color: color-mix(in oklch, var(--c, var(--accent)) 55%, var(--line)); }
+  .arrow {
+    align-self: center;
+    flex: none;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  /* ---- fact stack ---- */
+  .fact-layout {
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 18px;
+    margin-top: 22px;
+  }
+  .fact-stack { display: grid; gap: 7px; align-content: start; }
+  .fact {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 13px 15px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: oklch(0.2 0.013 255 / 0.66);
+  }
+  .fact .fname { font-size: 13px; font-weight: 560; }
+  .fact .fdesc { font-size: 12px; color: var(--faint); margin-top: 3px; }
+  .fact .flevel {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--c, var(--accent));
+    border: 1px solid color-mix(in oklch, var(--c, var(--accent)) 45%, var(--line));
+    border-radius: 999px;
+    padding: 3px 7px;
+    flex: none;
+  }
+  .fact.l0 { width: 100%; }
+  .fact.l1 { width: 94%; }
+  .fact.l2 { width: 88%; }
+  .fact.l3 { width: 82%; }
+  .fact.l4 { width: 76%; }
+  .fact-stack .caption {
+    margin: 4px 0 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    line-height: 1.6;
+  }
+
+  .fingerprint {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: linear-gradient(180deg, oklch(0.21 0.014 255 / 0.8), oklch(0.17 0.012 255 / 0.8));
+    padding: 18px;
+  }
+  .fingerprint h3 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .fingerprint p {
+    margin: 0 0 15px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--faint);
+  }
+  .fp-formula {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    padding: 12px;
+    border: 1px solid var(--line-soft);
+    border-radius: 9px;
+    background: oklch(0.16 0.011 255 / 0.8);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .fp-formula b { color: var(--fg); font-weight: 500; }
+  .fp-arrow { color: var(--faint); }
+  .fp-steps {
+    display: grid;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .fp-step {
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    gap: 9px;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+  .fp-step i {
+    width: 6px; height: 6px;
+    margin-top: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .fp-step b { color: var(--fg); font-weight: 550; }
+
+  /* ---- cache grid ---- */
+  .cache-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .cache {
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: oklch(0.2 0.013 255 / 0.62);
+  }
+  .cache-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding-bottom: 9px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .cache-name { font-size: 13px; font-weight: 560; }
+  .cache-ttl {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--c, var(--accent));
+    white-space: nowrap;
+  }
+  .cache p {
+    margin: 9px 0 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--faint);
+  }
+  .cache code {
+    display: block;
+    margin-top: 9px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  /* ---- two column notes ---- */
+  .notes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    margin-top: 22px;
+  }
+  .note-card {
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: oklch(0.2 0.013 255 / 0.6);
+  }
+  .note-card h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .note-card h3 i {
+    width: 7px; height: 7px;
+    border-radius: 2px;
+    background: var(--c, var(--ok));
+  }
+  .note-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 9px; }
+  .note-list li {
+    display: grid;
+    grid-template-columns: 20px 1fr;
+    gap: 8px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+  .note-list li span {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    padding-top: 2px;
+  }
+  .note-list li b { color: var(--fg); font-weight: 550; }
+
+  /* ---- footer ---- */
+  footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 64px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+  }
+  .doc-links { display: flex; flex-wrap: wrap; gap: 7px; }
+  .doc-links a {
+    text-decoration: none;
+    padding: 5px 8px;
+    border: 1px solid var(--line-soft);
+    border-radius: 6px;
+    color: var(--muted);
+  }
+  .doc-links a:hover { color: var(--fg); border-color: var(--line); }
+
+  @media (max-width: 980px) {
+    .page { padding: 26px 22px 60px; }
+    .hero { grid-template-columns: 1fr; gap: 26px; padding-top: 38px; }
+    .section-head { grid-template-columns: 42px minmax(0, 1fr); }
+    .section-note { display: none; }
+    .layer { grid-template-columns: 46px 1fr; gap: 8px 14px; }
+    .layer .lrole { grid-column: 2; }
+    .layer code { grid-column: 2; text-align: left; }
+    .flow { grid-template-columns: 1fr; }
+    .fact-layout, .notes { grid-template-columns: 1fr; }
+    .cache-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 620px) {
+    h1 { font-size: 72px; }
+    h2 { font-size: 28px; }
+    .cache-grid { grid-template-columns: 1fr; }
+    .toc { position: static; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="topline">
+    <span class="brand-mark"><i></i>SIFT</span>
+    <span class="right">
+      <span>ARCHITECTURE ATLAS</span>
+      <span>v0.4.0</span>
+    </span>
+  </div>
+
+  <header class="hero">
+    <div>
+      <p class="eyebrow">CORE FRAMEWORK / DATA FLOW</p>
+      <h1>一次扫描，<br><span>处处复用。</span></h1>
+      <p class="lede">
+        Sift 把磁盘事实拆成 <strong>扫描树、尺寸索引、结论仓库、前端投影</strong> 四层。
+        低层可以修正高层，高层不能反向覆盖低层；所有删除都回到指纹与守卫重新验证。
+      </p>
+      <div class="hero-meta">
+        <span class="pill"><b>7</b> 个 Rust crate</span>
+        <span class="pill"><b>12</b> 类持久/共享数据</span>
+        <span class="pill"><span class="dot"></span><b>1</b> 次扫描 · 多处读取</span>
+      </div>
+    </div>
+
+    <aside class="hero-diagram" aria-label="数据层级示意">
+      <div class="mini-stack">
+        <div class="mini-row hot"><span class="idx">L4</span><span class="name">Svelte 前端</span><span class="tag">projection</span></div>
+        <div class="mini-row"><span class="idx">L3</span><span class="name">Store</span><span class="tag">verdicts · cleanable</span></div>
+        <div class="mini-row"><span class="idx">L2</span><span class="name">Size tree</span><span class="tag">sizes · listings</span></div>
+        <div class="mini-row"><span class="idx">L1</span><span class="name">ScanTree</span><span class="tag">session</span></div>
+        <div class="mini-row"><span class="idx">L0</span><span class="name">Disk</span><span class="tag">truth</span></div>
+      </div>
+      <p class="mini-note">读路径向上取最近缓存；写路径向下回到磁盘与守卫。</p>
+    </aside>
+  </header>
+
+  <nav class="toc" aria-label="目录">
+    <a href="#layers"><span class="n">01</span>分层</a>
+    <a href="#flows"><span class="n">02</span>五条数据流</a>
+    <a href="#facts"><span class="n">03</span>事实源与指纹</a>
+    <a href="#caches"><span class="n">04</span>缓存与失效</a>
+    <a href="#rules"><span class="n">05</span>不变量与缺口</a>
+  </nav>
+
+  <main>
+    <section id="layers">
+      <div class="section-head">
+        <span class="section-no">01</span>
+        <div>
+          <h2>分层：能力向下，适配向上</h2>
+          <p class="section-sub">每层只依赖下一层；产品逻辑在共享 crate，Tauri 只做命令与事件翻译。</p>
+        </div>
+        <span class="section-note">Cargo = 可审查的<br>所有权声明</span>
+      </div>
+
+      <div class="layer-stack">
+        <div class="layer" style="--c: var(--accent)">
+          <span class="lno">L7</span>
+          <span class="lname"><i></i>Svelte 前端</span>
+          <span class="lrole">事件驱动的节点图、Explorer、分析列表、环境面板；所有状态都是投影。</span>
+          <code>src/lib/store.svelte.ts</code>
+        </div>
+        <div class="layer" style="--c: var(--cyan)">
+          <span class="lno">L6</span>
+          <span class="lname"><i></i>Tauri 适配层</span>
+          <span class="lrole">命令注册、批量事件翻译、扫描/清理/尺寸/环境状态。</span>
+          <code>src-tauri/src/*.rs</code>
+        </div>
+        <div class="layer" style="--c: var(--ok)">
+          <span class="lno">L5</span>
+          <span class="lname"><i></i>Monitor</span>
+          <span class="lrole">采样剩余空间 → 纯策略函数 → 只清理 Safe 且已批准的条目。</span>
+          <code>sift-monitor</code>
+        </div>
+        <div class="layer" style="--c: var(--warn)">
+          <span class="lno">L4</span>
+          <span class="lname"><i></i>Store</span>
+          <span class="lrole">判定、可清理清单、决策、设置、历史、例行、环境；原子写入。</span>
+          <code>sift-store</code>
+        </div>
+        <div class="layer" style="--c: var(--violet)">
+          <span class="lno">L3</span>
+          <span class="lname"><i></i>Analyze + Apps</span>
+          <span class="lrole">规则提名、模型护栏、环境清单、卸载计划、维护建议。</span>
+          <code>sift-analyze · sift-apps</code>
+        </div>
+        <div class="layer" style="--c: var(--danger)">
+          <span class="lno">L2</span>
+          <span class="lname"><i></i>Scan</span>
+          <span class="lrole">优先级调度、预算、焦点确定性、事件流；协调者独占树。</span>
+          <code>sift-scan</code>
+        </div>
+        <div class="layer" style="--c: var(--cyan)">
+          <span class="lno">L1</span>
+          <span class="lname"><i></i>Platform</span>
+          <span class="lrole">卷、目录批量读、回收站、文件监听；macOS 快路径与可移植回退。</span>
+          <code>sift-platform</code>
+        </div>
+        <div class="layer" style="--c: var(--accent)">
+          <span class="lno">L0</span>
+          <span class="lname"><i></i>Core</span>
+          <span class="lrole">arena 树、名称 interner、字节记账、NodeKey、策略与事件类型。</span>
+          <code>sift-core</code>
+        </div>
+      </div>
+    </section>
+
+    <section id="flows">
+      <div class="section-head">
+        <span class="section-no">02</span>
+        <div>
+          <h2>五条主数据流</h2>
+          <p class="section-sub">扫描、浏览、分析、清理、环境：每条流都从磁盘事实出发，最终回到可审计的结论或可恢复的动作。</p>
+        </div>
+        <span class="section-note">实线 = 正常路径<br>小字 = 缓存/守卫</span>
+      </div>
+
+      <div class="flow-list">
+        <article class="flow" style="--c: var(--cyan)">
+          <div class="flow-head">
+            <span class="kicker">01 / SCAN</span>
+            <h3>扫描 → 会话树</h3>
+            <p>64ms 批量、epoch 防串、目录节点增量建树。</p>
+          </div>
+          <div class="track">
+            <div class="node"><b>ScanEngine</b><small>协调者 + 工作线程</small></div>
+            <span class="arrow">→</span>
+            <div class="node hot"><b>scan://batch</b><small>discovered · sized · progress</small></div>
+            <span class="arrow">→</span>
+            <div class="node"><b>nodeRecords</b><small>pathToId · childIds</small></div>
+            <span class="arrow">→</span>
+            <div class="node"><b>scan://done</b><small>ingest + analyze</small></div>
+          </div>
+        </article>
+
+        <article class="flow" style="--c: var(--accent)">
+          <div class="flow-head">
+            <span class="kicker">02 / BROWSE</span>
+            <h3>浏览 → 尺寸</h3>
+            <p>扫描树优先；未覆盖才懒加载，绝不重复走盘。</p>
+          </div>
+          <div class="track">
+            <div class="node"><b>list_dir_entries</b><small>5m listing cache</small></div>
+            <span class="arrow">→</span>
+            <div class="node hot"><b>treeSize</b><small>non-pending scan node</small></div>
+            <span class="arrow">→</span>
+            <div class="node"><b>sizeCache</b><small>30m · 800 entries</small></div>
+            <span class="arrow">→</span>
+            <div class="node"><b>dir_sizes_tree</b><small>walk + record</small></div>
+          </div>
+        </article>
+
+        <article class="flow" style="--c: var(--violet)">
+          <div class="flow-head">
+            <span class="kicker">03 / ANALYZE</span>
+            <h3>分析 → 结论</h3>
+            <p>规则提名全量；模型只处理可送家族的歧义。</p>
+          </div>
+          <div class="track">
+            <div class="node"><b>Candidate</b><small>kind · evidence · fingerprint</small></div>
+            <span class="arrow">→</span>
+            <div class="node hot"><b>Verdict</b><small>safe · review · keep</small></div>
+            <span class="arrow">→</span>
+            <div class="node"><b>verdicts.json</b><small>fingerprint cache</small></div>
+            <span class="arrow">→</span>
+            <div class="node"><b>cleanable.json</b><small>only Safe</small></div>
+          </div>
+        </article>
+
+        <article class="flow" style="--c: var(--danger)">
+          <div class="flow-head">
+            <span class="kicker">04 / CLEAN</span>
+            <h3>清理 → 回收站</h3>
+            <p>last_report + 指纹重验；前后端各扣一次尺寸。</p>
+          </div>
+          <div class="track">
+            <div class="node"><b>clean_paths</b><small>selected paths</small></div>
+            <span class="arrow">→</span>
+            <div class="node hot"><b>guard</b><small>last_report + re-stat</small></div>
+            <span class="arrow">→</span>
+            <div class="node"><b>trash</b><small>per-item result</small></div>
+            <span class="arrow">→</span>
+            <div class="node"><b>debit + history</b><small>UI prune · size tree</small></div>
+          </div>
+        </article>
+
+        <article class="flow" style="--c: var(--warn)">
+          <div class="flow-head">
+            <span class="kicker">05 / CONTEXT</span>
+            <h3>环境 → 维护知识</h3>
+            <p>5 分钟快照 + 应用目录 dirty flag；模型只看到脱敏事实。</p>
+          </div>
+          <div class="track">
+            <div class="node"><b>inventory</b><small>apps · PMs · projects</small></div>
+            <span class="arrow">→</span>
+            <div class="node hot"><b>ScanContext</b><small>redacted · fingerprint</small></div>
+            <span class="arrow">→</span>
+            <div class="node"><b>prompt</b><small>environment summary</small></div>
+            <span class="arrow">→</span>
+            <div class="node"><b>MaintenanceHint</b><small>Proposed → Validated</small></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="facts">
+      <div class="section-head">
+        <span class="section-no">03</span>
+        <div>
+          <h2>事实源与指纹</h2>
+          <p class="section-sub">越往下越接近磁盘；越往上越接近交互。缓存可以加速，但不能成为删除的唯一理由。</p>
+        </div>
+        <span class="section-note">L0 最终事实<br>L4 可重建投影</span>
+      </div>
+
+      <div class="fact-layout">
+        <div>
+          <div class="fact-stack">
+            <div class="fact l0" style="--c: var(--accent)">
+              <div><div class="fname">磁盘</div><div class="fdesc">文件内容、大小、mtime、链接关系</div></div>
+              <span class="flevel">L0 · truth</span>
+            </div>
+            <div class="fact l1" style="--c: var(--cyan)">
+              <div><div class="fname">ScanTree</div><div class="fdesc">目录结构、汇总大小、pending/status</div></div>
+              <span class="flevel">L1 · session</span>
+            </div>
+            <div class="fact l2" style="--c: var(--ok)">
+              <div><div class="fname">Size tree</div><div class="fdesc">精确/derived 大小、listing 缓存、跨会话持久</div></div>
+              <span class="flevel">L2 · shared</span>
+            </div>
+            <div class="fact l3" style="--c: var(--warn)">
+              <div><div class="fname">Store</div><div class="fdesc">判定、可清理清单、设置、历史、环境</div></div>
+              <span class="flevel">L3 · durable</span>
+            </div>
+            <div class="fact l4" style="--c: var(--violet)">
+              <div><div class="fname">前端状态</div><div class="fdesc">节点索引、findings、selection、explorer</div></div>
+              <span class="flevel">L4 · projection</span>
+            </div>
+            <p class="caption">读路径向上找最近缓存；写路径向下回到磁盘、索引与 Store。</p>
+          </div>
+        </div>
+
+        <aside class="fingerprint">
+          <h3>判定指纹：结论的边界</h3>
+          <p>同一个路径在不同时间可能是不同对象；指纹是缓存复用与删除守卫的共同键。</p>
+          <div class="fp-formula">
+            <b>key</b><span class="fp-arrow">+</span><b>size</b><span class="fp-arrow">+</span><b>mtime</b><span class="fp-arrow">+</span><b>is_dir</b>
+            <span class="fp-arrow">→</span><b>fingerprint</b>
+          </div>
+          <div class="fp-steps">
+            <div class="fp-step"><i></i><span><b>分析时</b>写入 verdict：这是一个 4GB 缓存，不是一个路径。</span></div>
+            <div class="fp-step"><i></i><span><b>复用时</b>四项完全匹配才命中；任一变化即重判。</span></div>
+            <div class="fp-step"><i></i><span><b>删除前</b>重新 stat；不匹配就拒绝，哪怕用户刚点过确认。</span></div>
+            <div class="fp-step"><i></i><span><b>清理后</b>结论离开 cleanable；历史与决策仍然保留。</span></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="caches">
+      <div class="section-head">
+        <span class="section-no">04</span>
+        <div>
+          <h2>缓存与失效矩阵</h2>
+          <p class="section-sub">每类缓存都有明确的键、时效和失效动作；没有“永久有效”的推断。</p>
+        </div>
+        <span class="section-note">TTL 不是正确性<br>只是性能预算</span>
+      </div>
+
+      <div class="cache-grid">
+        <article class="cache" style="--c: var(--cyan)">
+          <div class="cache-top"><span class="cache-name">ScanTree</span><span class="cache-ttl">session</span></div>
+          <p>一次扫描的目录结构；新扫描替换，会话结束丢失。</p>
+          <code>ScanManager.last_tree</code>
+        </article>
+        <article class="cache" style="--c: var(--accent)">
+          <div class="cache-top"><span class="cache-name">Listing cache</span><span class="cache-ttl">5 min</span></div>
+          <p>目录列表与 resolved path；手动 rescan 清空。</p>
+          <code>size-tree.json / listings</code>
+        </article>
+        <article class="cache" style="--c: var(--ok)">
+          <div class="cache-top"><span class="cache-name">Size mirror</span><span class="cache-ttl">30 min</span></div>
+          <p>前端同步读取的目录大小；seed / debit / clear。</p>
+          <code>sizeCache · 800 entries</code>
+        </article>
+        <article class="cache" style="--c: var(--violet)">
+          <div class="cache-top"><span class="cache-name">Verdicts</span><span class="cache-ttl">fingerprint</span></div>
+          <p>判定缓存；四项指纹变化即失效，容量 20k。</p>
+          <code>verdicts.json</code>
+        </article>
+        <article class="cache" style="--c: var(--warn)">
+          <div class="cache-top"><span class="cache-name">Environment</span><span class="cache-ttl">5 min + dirty</span></div>
+          <p>应用/包管理器/项目快照；目录 watcher 或手动刷新。</p>
+          <code>environment.json</code>
+        </article>
+        <article class="cache" style="--c: var(--danger)">
+          <div class="cache-top"><span class="cache-name">Cleanable</span><span class="cache-ttl">durable</span></div>
+          <p>仅 Safe 的长期清单；指纹变化或被降级即移出。</p>
+          <code>cleanable.json</code>
+        </article>
+      </div>
+    </section>
+
+    <section id="rules">
+      <div class="section-head">
+        <span class="section-no">05</span>
+        <div>
+          <h2>不变量与已知缺口</h2>
+          <p class="section-sub">左边是必须永远成立的规则；右边是当前实现仍需要补齐的一致性点。</p>
+        </div>
+        <span class="section-note">安全规则优先于<br>性能与便利</span>
+      </div>
+
+      <div class="notes">
+        <article class="note-card" style="--c: var(--ok)">
+          <h3><i></i>不变量</h3>
+          <ul class="note-list">
+            <li><span>01</span><div><b>只有 Safe 进入 cleanable</b>；Review 是问题，不是长期许可。</div></li>
+            <li><span>02</span><div><b>删除前重验指纹</b>；last_report + stat + 置信度，缺一不可。</div></li>
+            <li><span>03</span><div><b>epoch 单调</b>；旧扫描的迟到批次不能重建新树。</div></li>
+            <li><span>04</span><div><b>精确值不被 derived 覆盖</b>；父目录的直接文件不能被丢掉。</div></li>
+            <li><span>05</span><div><b>前后端各扣一次</b>；目录子树与文件不重复扣。</div></li>
+            <li><span>06</span><div><b>模型不能单独授权删除</b>；sanitize 是唯一入口。</div></li>
+          </ul>
+        </article>
+
+        <article class="note-card" style="--c: var(--danger)">
+          <h3><i></i>仍待闭环</h3>
+          <ul class="note-list">
+            <li><span>01</span><div><b>外部删除</b>只剪前端树，不同步 size-tree / listing。</div></li>
+            <li><span>02</span><div><b>清理后 ScanTree 仍是旧快照</b>；立即分析可能看到已删路径。</div></li>
+            <li><span>03</span><div><b>size-tree.json 无 schema 版本</b>，且非原子写。</div></li>
+            <li><span>04</span><div><b>空目录不进尺寸树</b>；peek 返回 partial，触发走盘。</div></li>
+            <li><span>05</span><div><b>listing 5m / size 30m</b> 的 TTL 不一致，外部变化时可能不同步。</div></li>
+            <li><span>06</span><div><b>前端尺寸缓存不持久</b>；冷启动依赖后端索引。</div></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>SIFT / ARCHITECTURE ATLAS · 2026-11</span>
+    <div class="doc-links">
+      <a href="core-data-flow.md">数据流文档</a>
+      <a href="overview.md">架构总览</a>
+      <a href="app-uninstall.md">卸载设计</a>
+      <a href="package-manager-knowledge.md">包管理器</a>
+      <a href="scan-context.md">扫描上下文</a>
+    </div>
+  </footer>
+</div>
+</body>
+</html>
