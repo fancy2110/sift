@@ -382,8 +382,8 @@ body::before {
 /* macOS: the native traffic lights are overlaid on the app; keep the top
    row clear of them. Other platforms keep the native title bar. */
 html[data-platform='macos'] {
-  --titlebar-inset-x: 44px;
-  --titlebar-inset-y: -10px;
+  --titlebar-inset-x: 0px;
+  --titlebar-inset-y: 18px;
 }
 
 .app-shell {
