@@ -66,9 +66,11 @@ export async function sizesFor(
   if (misses.length > 0) {
     const peeked = await dirSizePeek(misses);
     for (const size of peeked) {
-      // Partial walks are re-measured; only exact totals are trusted.
-      if (size.size > 0 && !size.partial) {
-        map.set(size.path, { size: size.size, at: now, exact: false });
+      // The backend's derived totals (sum of measured children) are good
+      // enough to render immediately; exact=false lets a later walk improve
+      // them without discarding an already known number.
+      if (size.size > 0 || !size.partial) {
+        map.set(size.path, { size: size.size, at: now, exact: !size.partial });
         out.set(size.path, size.size);
       }
     }

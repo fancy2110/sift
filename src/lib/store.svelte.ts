@@ -801,6 +801,19 @@ class AppStore {
     return node.size;
   }
 
+  /**
+   * Best known total for a directory, combining the scan tree and the shared
+   * size cache. A scan node with size 0 can mean "not measured yet", so it is
+   * not trusted unless the cache confirms 0 from an actual walk.
+   */
+  private knownSize(path: string): number | undefined {
+    const tree = this.treeSize(path);
+    const cached = this.dirSize(path);
+    if (tree !== undefined && tree > 0) return tree;
+    if (cached !== null) return cached;
+    return undefined;
+  }
+
   /** Open a directory without requiring a scan (home when no path is given). */
   async openExplorer(path?: string) {
     const startPath = path ?? this.currentNode?.path ?? '';
@@ -835,21 +848,25 @@ class AppStore {
     // no recursive walk is needed.
     for (const entry of entries) {
       if (!entry.isDir) continue;
-      const size = this.treeSize(entry.path);
-      if (size !== undefined) entry.size = size;
+      const size = this.knownSize(entry.path);
+      if (size !== undefined) {
+        entry.size = size;
+        // Mirror the scan value into the shared cache so a later navigation
+        // does not depend on the scan node still being present.
+        seedSize(entry.path, size);
+      }
     }
     this.explorerPath = resolved;
     this.explorerRightPath = resolved;
     this.explorerRight = entries;
     this.explorerRightLoading = false;
 
-    // Prefer the larger of the scan tree and the cached tree sum: a partial
-    // walk (permissions) must not shrink a folder below its children.
-    const treeTotal = this.treeSize(resolved);
-    const cachedTotal = this.dirSize(resolved) ?? 0;
-    const best = Math.max(treeTotal ?? 0, cachedTotal);
-    this.explorerTotal = best > 0 ? best : null;
-    if (treeTotal === undefined) void this.loadExplorerTotal(resolved);
+    // Prefer the best known total; keep the previous value (instead of
+    // showing "no size") while a fresh measurement is in flight.
+    const knownTotal = this.knownSize(resolved);
+    if (knownTotal !== undefined) seedSize(resolved, knownTotal);
+    this.explorerTotal = knownTotal ?? null;
+    if (knownTotal === undefined) void this.loadExplorerTotal(resolved);
 
     this.fillExplorerSizes(resolved, entries, () => {
       if (this.explorerRightPath === resolved) this.explorerRight = [...this.explorerRight];
@@ -861,10 +878,13 @@ class AppStore {
     try {
       const sizes = await cachedSizes([path]);
       if (this.explorerPath === path) {
-        this.explorerTotal = Math.max(this.explorerTotal ?? 0, sizes.get(path) ?? 0);
+        const size = sizes.get(path);
+        if (size !== undefined) {
+          this.explorerTotal = Math.max(this.explorerTotal ?? 0, size);
+        }
       }
     } catch {
-      if (this.explorerPath === path) this.explorerTotal = 0;
+      // Keep the last known total rather than replacing it with 0.
     }
   }
 
