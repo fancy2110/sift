@@ -44,7 +44,7 @@ pub use atomic::{
 };
 pub use environment::{EnvironmentDoc, ENVIRONMENT_SCHEMA_VERSION};
 pub use folders::{
-    FolderChange, FolderEntry, FolderIndex, ListingState, ListingView, NodeView, SizeChange,
+    FolderChange, FolderEntry, FolderIndex, ListingState, ListingView, NodeView, ScanNode, SizeChange,
     SizeView, LISTING_TTL_MS, SIZE_TTL_MS,
 };
 pub use cleanable::{CleanableEntry, CleanableList, RecordSummary, Upsert, DEFAULT_CLEANABLE_CAP};
@@ -58,5 +58,5 @@ pub use settings::{
     AiProfile, AiSettings, AnalysisSettings, AutoCleanMode, CleanupRule, MonitorSettings, Settings,
     MAX_AI_PROFILES,
 };
-pub use store::Store;
+pub use store::{Store, StoreChange};
 pub use verdicts::{VerdictRecord, VerdictTable, DEFAULT_VERDICT_CAP};

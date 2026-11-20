@@ -54,6 +54,17 @@ pub struct ListingView {
     pub revision: u64,
 }
 
+/// One directory announced by the scan engine. Scan ingestion feeds these
+/// into the same tree as listing-derived nodes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanNode {
+    pub path: String,
+    pub parent: Option<String>,
+    pub is_dir: bool,
+    pub size: Option<u64>,
+    pub exact: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeView {
@@ -200,6 +211,34 @@ impl FolderIndex {
             );
         }
         self.register_listing(requested, &entries);
+        // A parent's total is the sum of its direct children (including
+        // direct files). Recompute it as soon as the listing supplies edges.
+        let exact_parent = self
+            .sizes
+            .lock()
+            .unwrap()
+            .get(requested)
+            .map(|record| record.exact)
+            .unwrap_or(false);
+        if !exact_parent {
+            let children = self
+                .children
+                .lock()
+                .unwrap()
+                .get(requested)
+                .cloned()
+                .unwrap_or_default();
+            let sizes = self.sizes.lock().unwrap();
+            let known = children
+                .iter()
+                .filter_map(|child| sizes.get(child).map(|record| record.size))
+                .sum::<u64>();
+            let has_known = children.iter().any(|child| sizes.contains_key(child));
+            drop(sizes);
+            if has_known {
+                self.apply_size(requested, known, false);
+            }
+        }
         let revision = self.revision.fetch_add(1, Ordering::AcqRel) + 1;
         let change = FolderChange {
             revision,
@@ -238,6 +277,60 @@ impl FolderIndex {
             requested.to_string(),
             entries.iter().map(|entry| entry.path.clone()).collect(),
         );
+        drop(children);
+        let mut sizes = self.sizes.lock().unwrap();
+        for entry in entries {
+            if !entry.is_dir {
+                sizes.insert(
+                    entry.path.clone(),
+                    SizeRecord {
+                        size: entry.size,
+                        exact: true,
+                        at_ms: now_ms(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Apply directories discovered/sized by the scan engine. This is the
+    /// write path that makes the Store, not the scan tree, the shared result.
+    pub fn apply_scan_nodes(&self, nodes: &[ScanNode]) {
+        if nodes.is_empty() {
+            return;
+        }
+        {
+            let mut tree = self.nodes.lock().unwrap();
+            let mut children = self.children.lock().unwrap();
+            let mut sizes = self.sizes.lock().unwrap();
+            for node in nodes {
+                tree.entry(node.path.clone())
+                    .and_modify(|record| record.is_dir = node.is_dir)
+                    .or_insert(NodeRecord {
+                        parent: node.parent.clone(),
+                        is_dir: node.is_dir,
+                        purpose: None,
+                    });
+                if let Some(parent) = &node.parent {
+                    children
+                        .entry(parent.clone())
+                        .or_default()
+                        .insert(node.path.clone());
+                }
+                if let Some(size) = node.size {
+                    sizes.insert(
+                        node.path.clone(),
+                        SizeRecord {
+                            size,
+                            exact: node.exact,
+                            at_ms: now_ms(),
+                        },
+                    );
+                }
+            }
+        }
+        self.revision.fetch_add(1, Ordering::AcqRel);
+        self.size_revision.fetch_add(1, Ordering::AcqRel);
     }
 
     /// One node from the Store tree, including its latest known size.
@@ -358,8 +451,10 @@ impl FolderIndex {
         }
     }
 
-    /// Apply a measured folder total and publish the new revision.
-    pub fn apply_size(&self, path: &str, size: u64, exact: bool) -> SizeChange {
+    /// Fast path for the scan pump: record the directory's own size without
+    /// walking ancestors. A full scan reports every directory, so parent totals
+    /// arrive from the engine; this keeps the hot path O(1) per directory.
+    pub fn apply_measured_size(&self, path: &str, size: u64, exact: bool) -> SizeChange {
         self.sizes.lock().unwrap().insert(
             path.to_string(),
             SizeRecord {
@@ -378,6 +473,82 @@ impl FolderIndex {
         let mut subscribers = self.size_subscribers.lock().unwrap();
         subscribers.retain(|sender| sender.send(change.clone()).is_ok());
         change
+    }
+
+    /// Apply a measured folder total and publish the new revision. Ancestors
+    /// are recomputed from their direct children so `/Users` reflects
+    /// `/Users/xiaocy` even when only the child was measured.
+    pub fn apply_size(&self, path: &str, size: u64, exact: bool) -> SizeChange {
+        self.sizes.lock().unwrap().insert(
+            path.to_string(),
+            SizeRecord {
+                size,
+                exact,
+                at_ms: now_ms(),
+            },
+        );
+        let revision = self.size_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        let change = SizeChange {
+            revision,
+            path: path.to_string(),
+            size,
+            exact,
+        };
+        let mut changes = vec![change.clone()];
+        changes.extend(self.recompute_size_ancestors(path, revision));
+        let mut subscribers = self.size_subscribers.lock().unwrap();
+        for change in changes {
+            subscribers.retain(|sender| sender.send(change.clone()).is_ok());
+        }
+        change
+    }
+
+    /// Walk upward from a changed child. An exact ancestor already includes
+    /// its children and is left untouched; a missing/derived ancestor becomes
+    /// the sum of all currently known direct children.
+    fn recompute_size_ancestors(&self, path: &str, revision: u64) -> Vec<SizeChange> {
+        let children = self.children.lock().unwrap().clone();
+        let mut sizes = self.sizes.lock().unwrap();
+        let mut out = Vec::new();
+        let mut current = path.to_string();
+        while let Some(parent) = std::path::Path::new(&current)
+            .parent()
+            .map(|parent| parent.to_string_lossy().into_owned())
+        {
+            if parent.is_empty() || parent == current {
+                break;
+            }
+            if sizes
+                .get(&parent)
+                .map(|record| record.exact)
+                .unwrap_or(false)
+            {
+                break;
+            }
+            let Some(kids) = children.get(&parent) else {
+                break;
+            };
+            let total: u64 = kids
+                .iter()
+                .filter_map(|child| sizes.get(child).map(|record| record.size))
+                .sum();
+            sizes.insert(
+                parent.clone(),
+                SizeRecord {
+                    size: total,
+                    exact: false,
+                    at_ms: now_ms(),
+                },
+            );
+            out.push(SizeChange {
+                revision,
+                path: parent.clone(),
+                size: total,
+                exact: false,
+            });
+            current = parent;
+        }
+        out
     }
 
     pub fn subscribe_sizes(&self) -> Receiver<SizeChange> {
@@ -463,6 +634,83 @@ mod tests {
         assert_eq!(node.parent.as_deref(), Some("/x"));
         index.remove_path("/x");
         assert!(index.node("/x/a").is_none());
+    }
+
+    #[test]
+    fn scan_nodes_fill_the_same_tree_without_a_listing() {
+        let index = FolderIndex::default();
+        index.apply_scan_nodes(&[
+            ScanNode {
+                path: "/scan".into(),
+                parent: None,
+                is_dir: true,
+                size: Some(10),
+                exact: true,
+            },
+            ScanNode {
+                path: "/scan/child".into(),
+                parent: Some("/scan".into()),
+                is_dir: true,
+                size: Some(10),
+                exact: true,
+            },
+        ]);
+        let child = index.node("/scan/child").unwrap();
+        assert_eq!(child.parent.as_deref(), Some("/scan"));
+        assert_eq!(child.size, Some(10));
+        assert!(child.exact);
+        assert_eq!(index.children("/scan").len(), 1);
+    }
+
+    #[test]
+    fn a_child_size_updates_its_parent() {
+        let index = FolderIndex::default();
+        index.apply(
+            "/Users",
+            "/Users",
+            vec![
+                FolderEntry {
+                    name: "xiaocy".into(),
+                    path: "/Users/xiaocy".into(),
+                    is_dir: true,
+                    size: 0,
+                    modified_ms: None,
+                },
+                FolderEntry {
+                    name: "Shared".into(),
+                    path: "/Users/Shared".into(),
+                    is_dir: true,
+                    size: 0,
+                    modified_ms: None,
+                },
+            ],
+        );
+        let receiver = index.subscribe_sizes();
+        index.apply_size("/Users/xiaocy", 100, true);
+        let parent = index.size("/Users");
+        assert_eq!(parent.size, Some(100));
+        assert!(!parent.exact);
+        assert!(receiver.try_recv().is_ok());
+        assert!(receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn a_parent_listing_uses_a_child_size_that_arrived_first() {
+        let index = FolderIndex::default();
+        index.apply_size("/Users/xiaocy", 653_000, true);
+        index.apply(
+            "/Users",
+            "/Users",
+            vec![FolderEntry {
+                name: "xiaocy".into(),
+                path: "/Users/xiaocy".into(),
+                is_dir: true,
+                size: 0,
+                modified_ms: None,
+            }],
+        );
+        assert_eq!(index.size("/Users").size, Some(653_000));
+        assert_eq!(index.node("/Users/xiaocy").unwrap().size, Some(653_000));
     }
 
     #[test]

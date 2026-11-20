@@ -9,7 +9,8 @@
 //! crash cannot lose a session's conclusions but an unexpected exit cannot leave
 //! a half-written file either (writes are atomic — see [`crate::atomic`]).
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use sift_analyze::{
@@ -42,6 +43,15 @@ struct Inner {
     environment: EnvironmentDoc,
 }
 
+/// A coarse-grained Store revision. Subscribers can refetch the document they
+/// care about after any business mutation; the topic is reserved for finer
+/// routing later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreChange {
+    pub revision: u64,
+    pub topic: String,
+}
+
 /// One place for every piece of durable local state.
 pub struct Store {
     paths: Option<StorePaths>,
@@ -49,6 +59,8 @@ pub struct Store {
     dirty: AtomicBool,
     decision_cap: usize,
     folders: Arc<FolderIndex>,
+    change_revision: AtomicU64,
+    change_subscribers: Mutex<Vec<Sender<StoreChange>>>,
 }
 
 impl std::fmt::Debug for Store {
@@ -173,6 +185,8 @@ impl Store {
                 dirty: AtomicBool::new(false),
                 decision_cap: DEFAULT_DECISION_CAP,
                 folders: Arc::new(FolderIndex::default()),
+                change_revision: AtomicU64::new(0),
+                change_subscribers: Mutex::new(Vec::new()),
             },
             warnings,
         )
@@ -195,6 +209,8 @@ impl Store {
             dirty: AtomicBool::new(false),
             decision_cap: DEFAULT_DECISION_CAP,
             folders: Arc::new(FolderIndex::default()),
+            change_revision: AtomicU64::new(0),
+            change_subscribers: Mutex::new(Vec::new()),
         }
     }
 
@@ -213,6 +229,33 @@ impl Store {
         Arc::clone(&self.folders)
     }
 
+    /// Subscribe to business-data revisions. The receiver gets one event per
+    /// mutation, after the write has completed.
+    pub fn subscribe_changes(&self) -> Receiver<StoreChange> {
+        let (sender, receiver) = channel();
+        self.change_subscribers.lock().unwrap().push(sender);
+        receiver
+    }
+
+    pub fn change_revision(&self) -> u64 {
+        self.change_revision.load(Ordering::Acquire)
+    }
+
+    fn publish_change(&self, topic: &str) {
+        let revision = self.change_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        let change = StoreChange {
+            revision,
+            topic: topic.to_string(),
+        };
+        let mut subscribers = self.change_subscribers.lock().unwrap();
+        subscribers.retain(|sender| sender.send(change.clone()).is_ok());
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.store(true, Ordering::Relaxed);
+        self.publish_change("store");
+    }
+
     // ---- settings ----------------------------------------------------------
 
     pub fn settings(&self) -> Settings {
@@ -226,7 +269,7 @@ impl Store {
             update(&mut inner.settings);
             inner.settings = inner.settings.clone().normalized();
         }
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty();
     }
 
     // ---- verdict cache -----------------------------------------------------
@@ -245,7 +288,7 @@ impl Store {
             .unwrap()
             .verdicts
             .store(*fingerprint, verdict, now_ms);
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty();
     }
 
     pub fn verdict_count(&self) -> usize {
@@ -269,7 +312,7 @@ impl Store {
             }
             inner.cleanable.record_report(report, now_ms)
         };
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty();
         summary
     }
 
@@ -291,7 +334,7 @@ impl Store {
             .cleanable
             .set_auto_approval(key, approved);
         if changed {
-            self.dirty.store(true, Ordering::Relaxed);
+            self.mark_dirty();
         }
         changed
     }
@@ -305,7 +348,7 @@ impl Store {
             .cleanable
             .approve_all_structural();
         if approved > 0 {
-            self.dirty.store(true, Ordering::Relaxed);
+            self.mark_dirty();
         }
         approved
     }
@@ -314,7 +357,7 @@ impl Store {
     pub fn forget_cleanable(&self, key: NodeKey) -> bool {
         let removed = self.inner.lock().unwrap().cleanable.remove(key).is_some();
         if removed {
-            self.dirty.store(true, Ordering::Relaxed);
+            self.mark_dirty();
         }
         removed
     }
@@ -358,7 +401,7 @@ impl Store {
             pruned
         };
         if pruned > 0 {
-            self.dirty.store(true, Ordering::Relaxed);
+            self.mark_dirty();
         }
         pruned
     }
@@ -377,7 +420,7 @@ impl Store {
             inner.environment.set_status(id, status)
         };
         if changed {
-            self.dirty.store(true, Ordering::Relaxed);
+            self.mark_dirty();
         }
         changed
     }
@@ -393,7 +436,7 @@ impl Store {
             let mut inner = self.inner.lock().unwrap();
             inner.environment.record(context, hints, now_ms);
         }
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty();
     }
 
     // ---- decisions ---------------------------------------------------------
@@ -408,7 +451,7 @@ impl Store {
                 inner.decisions.entries.drain(..excess);
             }
         }
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty();
     }
 
     /// Record that an entry was successfully sent to the trash: it leaves the
@@ -433,7 +476,7 @@ impl Store {
                 inner.decisions.entries.drain(..excess);
             }
         }
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty();
     }
 
     /// Record that the user explicitly kept something, which suppresses future
@@ -467,7 +510,7 @@ impl Store {
             let mut inner = self.inner.lock().unwrap();
             inner.history.record(entry);
         }
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty();
     }
 
     /// Record a finished cleanup session from short labels and totals.
@@ -501,7 +544,7 @@ impl Store {
             let mut inner = self.inner.lock().unwrap();
             inner.routines.upsert(entry);
         }
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty();
     }
 
     /// Delete one saved routine; returns whether it existed.
@@ -511,7 +554,7 @@ impl Store {
             inner.routines.remove(id)
         };
         if removed {
-            self.dirty.store(true, Ordering::Relaxed);
+            self.mark_dirty();
         }
         removed
     }
@@ -522,7 +565,7 @@ impl Store {
             let mut inner = self.inner.lock().unwrap();
             inner.routines.ignore_suggestion(key);
         }
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty();
     }
 
     /// Flip one routine between auto-run and approve-before-run.
@@ -532,7 +575,7 @@ impl Store {
             inner.routines.toggle_mode(id)
         };
         if changed {
-            self.dirty.store(true, Ordering::Relaxed);
+            self.mark_dirty();
         }
         changed
     }
@@ -749,6 +792,19 @@ mod tests {
         assert_eq!(suggestions.len(), 1, "four separate days is a habit");
         assert_eq!(suggestions[0].name, "node_modules");
         let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn business_changes_publish_a_revision() {
+        let store = Store::in_memory();
+        let receiver = store.subscribe_changes();
+        store.update_settings(|settings| {
+            settings.language = "en".to_string();
+        });
+        let change = receiver.recv().unwrap();
+        assert_eq!(change.revision, 1);
+        assert_eq!(change.topic, "store");
+        assert_eq!(store.change_revision(), 1);
     }
 
     #[test]
