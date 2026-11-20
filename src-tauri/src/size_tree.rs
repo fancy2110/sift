@@ -237,7 +237,11 @@ pub struct ScanEntryDto {
 /// Ingest results from the scan engine: every scanned directory contributes
 /// its exact size, so a scan refreshes the shared index for all features.
 #[tauri::command]
-pub async fn scan_index_ingest(entries: Vec<ScanEntryDto>) -> Result<(), String> {
+pub async fn scan_index_ingest(
+    services: State<'_, AppServices>,
+    entries: Vec<ScanEntryDto>,
+) -> Result<(), String> {
+    let store = services.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         if entries.is_empty() {
             return;
@@ -275,6 +279,11 @@ pub async fn scan_index_ingest(entries: Vec<ScanEntryDto>) -> Result<(), String>
             recompute_ancestors(&mut data, &path);
         }
         drop(data);
+        for entry in &entries {
+            store
+                .folders()
+                .apply_size(&entry.path, entry.size, true);
+        }
         mark_dirty();
     })
     .await
@@ -300,21 +309,42 @@ pub fn record_scan_dir(path: &str, size: u64) {
 
 /// Cached totals only (no walking); used to paint instantly.
 #[tauri::command]
-pub fn dir_size_peek(paths: Vec<String>) -> Vec<DirSizeDto> {
-    // Sync command on the main thread: never block on the index.
+pub fn dir_size_peek(services: State<'_, AppServices>, paths: Vec<String>) -> Vec<DirSizeDto> {
+    // Store first: a size task fills it, so every page can reuse the value
+    // without touching the filesystem.
+    let folders = services.store.folders();
     let Ok(data) = tree().try_lock() else {
         return paths
             .into_iter()
-            .map(|path| DirSizeDto {
-                path,
-                size: 0,
-                partial: true,
+            .map(|path| {
+                let view = folders.size(&path);
+                if view.state != sift_store::ListingState::Missing {
+                    DirSizeDto {
+                        path,
+                        size: view.size.unwrap_or(0),
+                        partial: !view.exact,
+                    }
+                } else {
+                    DirSizeDto {
+                        path,
+                        size: 0,
+                        partial: true,
+                    }
+                }
             })
             .collect();
     };
     paths
         .into_iter()
         .map(|path| {
+            let view = folders.size(&path);
+            if view.state != sift_store::ListingState::Missing {
+                return DirSizeDto {
+                    path,
+                    size: view.size.unwrap_or(0),
+                    partial: !view.exact,
+                };
+            }
             let size = data.sizes.get(&path).copied().unwrap_or(0);
             let partial = !data.exact.get(&path).copied().unwrap_or(true);
             DirSizeDto {
@@ -328,7 +358,12 @@ pub fn dir_size_peek(paths: Vec<String>) -> Vec<DirSizeDto> {
 
 /// Measure missing folders (or all when `force`), updating the tree upward.
 #[tauri::command]
-pub async fn dir_sizes_tree(paths: Vec<String>, force: bool) -> Vec<DirSizeDto> {
+pub async fn dir_sizes_tree(
+    services: State<'_, AppServices>,
+    paths: Vec<String>,
+    force: bool,
+) -> Result<Vec<DirSizeDto>, String> {
+    let store = services.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut out = Vec::new();
         let mut measured = Vec::new();
@@ -371,15 +406,21 @@ pub async fn dir_sizes_tree(paths: Vec<String>, force: bool) -> Vec<DirSizeDto> 
                 });
             }
         }
+        for item in &out {
+            store
+                .folders()
+                .apply_size(&item.path, item.size, !item.partial);
+        }
         out
     })
     .await
-    .unwrap_or_default()
+    .map_err(|error| error.to_string())
 }
 
 /// Drop the whole tree (manual rescan).
 #[tauri::command]
-pub fn dir_sizes_clear(_services: State<'_, AppServices>) {
+pub fn dir_sizes_clear(services: State<'_, AppServices>) {
+    services.store.folders().clear();
     let mut data = tree().lock().unwrap();
     *data = TreeData::default();
     persist(&data);

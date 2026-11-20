@@ -44,6 +44,7 @@ import {
   onFsDeleted,
   onFoldersChanged,
   onFoldersFailed,
+  onSizesChanged,
   onMonitorEvent,
   onScheduledReady,
   onScanBatch,
@@ -441,6 +442,7 @@ class AppStore {
       onFsDeleted((event) => this.pruneIds(new Set([event.id]))),
       onFoldersChanged((change) => this.handleFoldersChanged(change)),
       onFoldersFailed((event) => this.handleFoldersFailed(event)),
+      onSizesChanged((change) => this.handleSizeChanged(change)),
       onMonitorEvent((event) => this.handleMonitorEvent(event)),
       onScheduledReady((event) => this.handleScheduledReady(event))
     ]);
@@ -757,6 +759,23 @@ class AppStore {
       return;
     }
     void this.openExplorer(this.explorerPath);
+  }
+
+  private handleSizeChanged(change: { path: string; size: number }) {
+    seedSize(change.path, change.size);
+    if (!this.explorerPath) return;
+    if (change.path === this.explorerPath) {
+      this.explorerTotal = change.size;
+      return;
+    }
+    const parent = change.path.replace(/\/[^/]+\/?$/, '') || '/';
+    if (parent !== this.explorerPath) return;
+    const entry = this.explorerRight.find((item) => item.path === change.path);
+    if (!entry) return;
+    entry.size = change.size;
+    this.sizeRevision += 1;
+    const total = this.explorerRight.reduce((sum, item) => sum + item.size, 0);
+    if (total > 0) this.explorerTotal = total;
   }
 
   private handleFoldersFailed(event: { path: string; error: string }) {

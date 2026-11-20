@@ -94,8 +94,8 @@ flowchart TD
 | 节点批次 `BatchUpdate` | Tauri 事件 `scan://batch` | `pump_events` | 前端 `handleBatch` | 每 64ms | `epoch` 不匹配即丢弃 |
 | 前端节点索引 | `nodeRecords` / `pathToId` / `childIds` | `handleBatch` | Explorer、treemap、分析列表 | 扫描批次、剪枝 | 新扫描重置；删除时剪枝 |
 | 尺寸树 | `size-tree.json` + 进程 `TREE` | 扫描 ingest、懒加载 walk、清理扣减 | `dir_size_peek`、`dir_sizes_tree` | 扫描完成、目录浏览、清理 | 手动 rescan、清理扣减、TTL 不适用（持久）；超过 64 MB 的 JSON 移到 `.oversized` 并重建 |
-| 文件夹索引 | `sift-store::FolderIndex` 进程内存 | `list_dir_entries` 读取、fetch 队列回填 | Explorer、Store 事件订阅者 | 列目录时 | 5 分钟 TTL；手动 rescan 清空；重启丢失（后续持久化） |
-| 目录抓取队列 | `FetchQueue` 进程内存 | Store miss/stale | 2 个 OS 读取 worker | 列目录 miss 时 | 按路径去重；worker 完成后回填 Store 并广播 |
+| 文件夹索引 | `sift-store::FolderIndex` 进程内存 | `list_dir_entries` 读取、Store 队列回填 | Explorer、Store 事件订阅者 | 列目录时 | 列表 5 分钟 TTL；目录大小 30 分钟 TTL；手动 rescan 清空；重启丢失（后续持久化） |
+| Store 任务队列 | `FetchQueue` 进程内存 | Store miss/stale、列表发现的子目录 | List / Size 两组 worker | 列目录 miss、发现缺失尺寸 | 按路径+类型去重；可见目录尺寸优先级 80，子目录 50，过期 10；List 永不被 Size 阻塞 |
 | 前端尺寸镜像 | `src/lib/sizeCache.ts` 内存 Map | `sizesFor` / `seedSize` | Explorer、其他页面 | 读尺寸、扫描种子、清理扣减 | 30 分钟 TTL；800 条上限；重启丢失 |
 | 判定缓存 | `verdicts.json` | `Store::record_analysis` | 下次分析 | 每次分析 | 指纹变化；容量 20k |
 | 可清理清单 | `cleanable.json` | `Store::record_analysis` | 自动清理、监控、UI | 每次分析 | 仅 `Safe`；指纹变化；容量 5k |
@@ -215,10 +215,13 @@ sequenceDiagram
 1. 向 `Store::folders().list(path)` 查询；
 2. `Fresh` → 直接返回；`Stale` → 返回旧列表并标记 `pending`；
 3. `Missing` → 返回空列表并标记 `pending`；
-4. `Stale` / `Missing` 都调用 `FetchQueue.enqueue(path)`；队列按路径去重；
-5. worker 执行 OS 读取，`FolderIndex::apply` 写入并递增 revision；
-6. Tauri 广播 `store://folders-changed { revision, path, resolved }`；
-7. 前端刷新当前目录，下一次查询命中 `Fresh`。
+4. `Stale` / `Missing` 都调用 `FetchQueue.enqueue_list(path)`；队列按路径+类型去重；
+5. List worker 只执行 `read_dir`，`FolderIndex::apply` 写入列表并递增 revision；
+6. Tauri 广播 `store://folders-changed`；前端刷新当前目录；
+7. 列表中的每个目录若 Store 没有 fresh 尺寸，则入队 `Size` 任务；
+8. Size worker 做有界 walk，`FolderIndex::apply_size` 写入并广播 `store://sizes-changed`；
+9. 前端直接更新对应行与父目录总数，不整页重载。
+10. 列表 5 分钟、尺寸 30 分钟：过期值先返回（stale），同时低优先级刷新。
 
 前端 `dirCache.listingFor` 只做并发去重；返回时把目录 `size` 归零，交给尺寸解析层填充。
 `dir_listing_clear` 已删除；手动刷新调用 `folders_clear` 清空 Store 索引。
@@ -457,6 +460,7 @@ ScanContext { apps, package_managers, projects, ... }
 | 前端节点索引 | NodeKey/path | 会话 | 批次 upsert、`pruneIds` |
 | 后端尺寸树 | path | 持久 | 扫描 ingest、走盘、扣减、手动 clear |
 | Store 文件夹索引 | requested path | 5 分钟 | 手动 refresh / `folders_clear`；miss 交给 FetchQueue |
+| Store 目录尺寸 | path | 30 分钟 | Size 任务回填；过期先返回再刷新 |
 | 前端尺寸镜像 | path | 30 分钟 | `sizesFor`、`seedSize`、`debitSizes`、`clearSizeCache` |
 | 判定缓存 | fingerprint | 持久 | 指纹变化、容量淘汰 |
 | 可清理清单 | NodeKey | 持久 | 每次分析 upsert、审批、删除 |
@@ -486,7 +490,7 @@ ScanContext { apps, package_managers, projects, ... }
 | 扫描目录无权限 | 继续扫描其余部分；`denied` 状态；总数仍计入 |
 | 前端收到旧 epoch 批次 | 丢弃 |
 | 尺寸树损坏 | 用空树重建；下次扫描/浏览填充 |
-| 尺寸索引锁不可用 | `peek` 返回 partial，`sizesFor` 走盘 |
+| 尺寸索引锁不可用 | `peek` 返回 partial；Store 有 fresh 尺寸时优先复用，否则走盘 |
 | 走盘被权限挡住 | `partial=true`，保留已知值，不冻结 |
 | Store JSON 损坏 | 归档 + 默认值 + warning |
 | 模型失败/超时 | 规则判定保留；候选变 `Review` |
