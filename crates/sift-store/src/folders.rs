@@ -5,7 +5,7 @@
 //! The I/O side (fetch queue) fills the index and publishes a revision; every
 //! consumer can subscribe and refresh from the same snapshot.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
@@ -56,6 +56,25 @@ pub struct ListingView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NodeView {
+    pub path: String,
+    pub name: String,
+    pub parent: Option<String>,
+    pub is_dir: bool,
+    pub size: Option<u64>,
+    pub exact: bool,
+    pub purpose: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NodeRecord {
+    parent: Option<String>,
+    is_dir: bool,
+    purpose: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FolderChange {
     pub revision: u64,
     pub path: String,
@@ -100,6 +119,8 @@ pub struct SizeChange {
 pub struct FolderIndex {
     listings: Mutex<HashMap<String, FolderListing>>,
     sizes: Mutex<HashMap<String, SizeRecord>>,
+    nodes: Mutex<HashMap<String, NodeRecord>>,
+    children: Mutex<HashMap<String, HashSet<String>>>,
     revision: AtomicU64,
     size_revision: AtomicU64,
     subscribers: Mutex<Vec<Sender<FolderChange>>>,
@@ -111,6 +132,8 @@ impl Default for FolderIndex {
         Self {
             listings: Mutex::new(HashMap::new()),
             sizes: Mutex::new(HashMap::new()),
+            nodes: Mutex::new(HashMap::new()),
+            children: Mutex::new(HashMap::new()),
             revision: AtomicU64::new(0),
             size_revision: AtomicU64::new(0),
             subscribers: Mutex::new(Vec::new()),
@@ -171,11 +194,12 @@ impl FolderIndex {
                 requested.to_string(),
                 FolderListing {
                     resolved: resolved.to_string(),
-                    entries,
+                    entries: entries.clone(),
                     at_ms: now_ms(),
                 },
             );
         }
+        self.register_listing(requested, &entries);
         let revision = self.revision.fetch_add(1, Ordering::AcqRel) + 1;
         let change = FolderChange {
             revision,
@@ -185,6 +209,83 @@ impl FolderIndex {
         let mut subscribers = self.subscribers.lock().unwrap();
         subscribers.retain(|sender| sender.send(change.clone()).is_ok());
         change
+    }
+
+    fn register_listing(&self, requested: &str, entries: &[FolderEntry]) {
+        let parent = std::path::Path::new(requested)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(|parent| parent.to_string_lossy().into_owned());
+        let mut nodes = self.nodes.lock().unwrap();
+        nodes.entry(requested.to_string()).or_insert(NodeRecord {
+            parent,
+            is_dir: true,
+            purpose: None,
+        });
+        for entry in entries {
+            nodes
+                .entry(entry.path.clone())
+                .and_modify(|node| node.is_dir = entry.is_dir)
+                .or_insert(NodeRecord {
+                    parent: Some(requested.to_string()),
+                    is_dir: entry.is_dir,
+                    purpose: None,
+                });
+        }
+        drop(nodes);
+        let mut children = self.children.lock().unwrap();
+        children.insert(
+            requested.to_string(),
+            entries.iter().map(|entry| entry.path.clone()).collect(),
+        );
+    }
+
+    /// One node from the Store tree, including its latest known size.
+    pub fn node(&self, path: &str) -> Option<NodeView> {
+        let nodes = self.nodes.lock().unwrap();
+        let node = nodes.get(path)?;
+        let size = self.sizes.lock().unwrap().get(path).cloned();
+        Some(NodeView {
+            path: path.to_string(),
+            name: std::path::Path::new(path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string()),
+            parent: node.parent.clone(),
+            is_dir: node.is_dir,
+            size: size.as_ref().map(|record| record.size),
+            exact: size.map(|record| record.exact).unwrap_or(false),
+            purpose: node.purpose.clone(),
+        })
+    }
+
+    /// Store the user/analysis-provided purpose for a node.
+    pub fn set_purpose(&self, path: &str, purpose: Option<String>) -> bool {
+        let mut nodes = self.nodes.lock().unwrap();
+        match nodes.get_mut(path) {
+            Some(node) => {
+                node.purpose = purpose;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Direct children recorded for a folder, sorted by name.
+    pub fn children(&self, path: &str) -> Vec<NodeView> {
+        let children = self
+            .children
+            .lock()
+            .unwrap()
+            .get(path)
+            .cloned()
+            .unwrap_or_default();
+        let mut out: Vec<NodeView> = children
+            .iter()
+            .filter_map(|child| self.node(child))
+            .collect();
+        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        out
     }
 
     /// Drop a listing so the next read is a miss. The revision is deliberately
@@ -198,11 +299,37 @@ impl FolderIndex {
     pub fn remove_path(&self, requested: &str) {
         self.listings.lock().unwrap().remove(requested);
         self.sizes.lock().unwrap().remove(requested);
+        let mut stack = vec![requested.to_string()];
+        let mut removed = HashSet::new();
+        while let Some(path) = stack.pop() {
+            if !removed.insert(path.clone()) {
+                continue;
+            }
+            if let Some(children) = self.children.lock().unwrap().remove(&path) {
+                stack.extend(children);
+            }
+            self.nodes.lock().unwrap().remove(&path);
+            self.listings.lock().unwrap().remove(&path);
+            self.sizes.lock().unwrap().remove(&path);
+        }
+        if let Some(parent) = std::path::Path::new(requested)
+            .parent()
+            .map(|parent| parent.to_string_lossy().into_owned())
+        {
+            self.children
+                .lock()
+                .unwrap()
+                .entry(parent)
+                .or_default()
+                .remove(requested);
+        }
     }
 
     pub fn clear(&self) {
         self.listings.lock().unwrap().clear();
         self.sizes.lock().unwrap().clear();
+        self.nodes.lock().unwrap().clear();
+        self.children.lock().unwrap().clear();
     }
 
     /// Read a folder total. Never performs I/O.
@@ -318,6 +445,24 @@ mod tests {
         index.apply("/x", "/x", vec![entry("a")]);
         index.invalidate("/x");
         assert_eq!(index.list("/x").state, ListingState::Missing);
+    }
+
+    #[test]
+    fn a_listing_registers_nodes_children_size_and_purpose() {
+        let index = FolderIndex::default();
+        index.apply("/x", "/x", vec![entry("a")]);
+        let children = index.children("/x");
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].path, "/x/a");
+        assert!(index.set_purpose("/x/a", Some("cache".into())));
+        index.apply_size("/x/a", 4096, true);
+        let node = index.node("/x/a").unwrap();
+        assert_eq!(node.size, Some(4096));
+        assert!(node.exact);
+        assert_eq!(node.purpose.as_deref(), Some("cache"));
+        assert_eq!(node.parent.as_deref(), Some("/x"));
+        index.remove_path("/x");
+        assert!(index.node("/x/a").is_none());
     }
 
     #[test]

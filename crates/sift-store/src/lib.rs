@@ -43,7 +43,10 @@ pub use atomic::{
     SCHEMA_VERSION,
 };
 pub use environment::{EnvironmentDoc, ENVIRONMENT_SCHEMA_VERSION};
-pub use folders::{FolderChange, FolderEntry, FolderIndex, ListingState, ListingView, LISTING_TTL_MS};
+pub use folders::{
+    FolderChange, FolderEntry, FolderIndex, ListingState, ListingView, NodeView, SizeChange,
+    SizeView, LISTING_TTL_MS, SIZE_TTL_MS,
+};
 pub use cleanable::{CleanableEntry, CleanableList, RecordSummary, Upsert, DEFAULT_CLEANABLE_CAP};
 pub use history::{CleanupHistory, HistoryEntry, DEFAULT_HISTORY_CAP};
 pub use journal_sqlite::SqliteScanJournal;
