@@ -19,7 +19,9 @@ use sift_core::{
     DirCloseStatus, ScanEvent, ScanId, ScanOutcome, ScanPolicy, ScanRequest, ScanTree,
 };
 use sift_scan::{ScanControl, ScanEngine, ScanHandle};
-use sift_store::{SqliteScanJournal, StorePaths};
+use sift_store::{ScanNode, SqliteScanJournal, StorePaths};
+
+use crate::analyze::AppServices;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Interim progress cadence, matching what the front end animates against.
@@ -407,6 +409,15 @@ pub fn resolve_permission(
 // ---- event pump ------------------------------------------------------------
 
 /// Drain engine events until the scan ends, re-emitting the legacy vocabulary.
+fn store_scan_nodes(app: &AppHandle, nodes: &[ScanNode]) {
+    if nodes.is_empty() {
+        return;
+    }
+    if let Some(services) = app.try_state::<AppServices>() {
+        services.store.folders().apply_scan_nodes(nodes);
+    }
+}
+
 fn pump_events(
     app: AppHandle,
     handle: ScanHandle,
@@ -514,16 +525,16 @@ fn pump_events(
         };
         match event {
             ScanEvent::NodesAdopted { nodes, .. } => {
-                for node in nodes {
+                for node in &nodes {
                     dir_paths.insert(node.key.clone(), node.path.clone());
                     discovered.push(NodeInfo {
-                        id: node.key,
+                        id: node.key.clone(),
                         parent_id: if node.parent_key.is_empty() {
                             None
                         } else {
-                            Some(node.parent_key)
+                            Some(node.parent_key.clone())
                         },
-                        name: node.name,
+                        name: node.name.clone(),
                         path: node.path.clone(),
                         is_dir: true,
                         size: node.size,
@@ -544,6 +555,19 @@ fn pump_events(
                         );
                     }
                 }
+                let nodes: Vec<ScanNode> = nodes
+                    .iter()
+                    .map(|node| ScanNode {
+                        path: node.path.clone(),
+                        parent: Path::new(&node.path)
+                            .parent()
+                            .map(|parent| parent.to_string_lossy().into_owned()),
+                        is_dir: true,
+                        size: (node.size > 0).then_some(node.size),
+                        exact: node.closed,
+                    })
+                    .collect();
+                store_scan_nodes(&app, &nodes);
             }
             ScanEvent::DirectoryListed { dir, .. } => {
                 dir_paths.insert(dir.key.to_string(), dir.path.clone());
@@ -584,6 +608,26 @@ fn pump_events(
                         );
                     }
                 }
+                let mut nodes = vec![ScanNode {
+                    path: dir.path.clone(),
+                    parent: Path::new(&dir.path)
+                        .parent()
+                        .map(|parent| parent.to_string_lossy().into_owned()),
+                    is_dir: true,
+                    size: (dir.size.dominant() > 0).then_some(dir.size.dominant()),
+                    exact: false,
+                }];
+                nodes.extend(dir.entries.iter().filter(|entry| entry.is_dir).map(|entry| {
+                    let path = join_path(&dir.path, &entry.name);
+                    ScanNode {
+                        path: path.clone(),
+                        parent: Some(dir.path.clone()),
+                        is_dir: true,
+                        size: (entry.size.dominant() > 0).then_some(entry.size.dominant()),
+                        exact: !entry.pending,
+                    }
+                }));
+                store_scan_nodes(&app, &nodes);
             }
             ScanEvent::DirectorySized {
                 key,
@@ -595,6 +639,12 @@ fn pump_events(
                 if !pending {
                     if let Some(path) = dir_paths.get(&key.to_string()) {
                         crate::size_tree::record_scan_dir(path, new_size.dominant());
+                        if let Some(services) = app.try_state::<AppServices>() {
+                            services
+                                .store
+                                .folders()
+                                .apply_measured_size(path, new_size.dominant(), true);
+                        }
                     }
                 }
                 sized.push(SizedInfo {
@@ -637,6 +687,14 @@ fn pump_events(
             }
             ScanEvent::Calibrated { key, size, .. } => {
                 // Exact size of a previously predicted giant directory.
+                if let Some(path) = dir_paths.get(&key.to_string()) {
+                    if let Some(services) = app.try_state::<AppServices>() {
+                        services
+                            .store
+                            .folders()
+                            .apply_measured_size(path, size.dominant(), true);
+                    }
+                }
                 sized.push(SizedInfo {
                     id: key.to_string(),
                     size: Some(size.dominant()),

@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::analyze::AppServices;
 use crate::explorer::{read_entries, recursive_size};
 
+
 pub const PRIORITY_VISIBLE: u8 = 100;
 pub const PRIORITY_ACTIVE: u8 = 80;
 pub const PRIORITY_CHILD: u8 = 50;
@@ -91,10 +92,7 @@ impl FetchQueue {
     /// Queue a folder. Returns false when the same kind is already queued.
     pub fn enqueue(&self, path: &str, kind: TaskKind, priority: u8) -> bool {
         let mut state = self.shared.state.lock().unwrap();
-        if !state
-            .queued
-            .insert((path.to_string(), kind))
-        {
+        if !state.queued.insert((path.to_string(), kind)) {
             return false;
         }
         let sequence = state

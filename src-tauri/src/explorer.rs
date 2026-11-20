@@ -103,9 +103,13 @@ pub async fn list_dir_entries(
         .into_iter()
         .map(|entry| DirEntryDto {
             name: entry.name,
-            path: entry.path,
+            path: entry.path.clone(),
             is_dir: entry.is_dir,
-            size: entry.size,
+            size: if entry.is_dir {
+                folders.size(&entry.path).size.unwrap_or(entry.size)
+            } else {
+                entry.size
+            },
             modified_ms: entry.modified_ms,
         })
         .collect();

@@ -176,6 +176,8 @@ class AppStore {
   explorerRightLoading = $state(false);
   /** A Store folder revision arrived while the listing request was in flight. */
   private folderChangedDuringLoad = false;
+  private pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingRetries = 0;
   explorerSelected = $state<DirEntry | null>(null);
   /** Recursive total of the current directory; null while it is computed. */
   explorerTotal = $state<number | null>(null);
@@ -920,6 +922,26 @@ class AppStore {
     // A pending listing is filled by the fetch queue; keep the spinner until
     // `store://folders-changed` arrives (the watchdog still bounds it).
     this.explorerRightLoading = pending;
+    if (pending) {
+      // The fetch may finish before the listener is registered (for example
+      // when the last tab is restored during startup). Poll the Store a few
+      // times instead of leaving the spinner stuck on a missed event.
+      if (this.pendingRetryTimer) clearTimeout(this.pendingRetryTimer);
+      if (this.pendingRetries < 12) {
+        this.pendingRetryTimer = setTimeout(() => {
+          this.pendingRetryTimer = null;
+          if (this.explorerPath !== resolved || !this.explorerRightLoading) return;
+          this.pendingRetries += 1;
+          void this.openExplorer(resolved);
+        }, 300);
+      }
+    } else {
+      this.pendingRetries = 0;
+      if (this.pendingRetryTimer) {
+        clearTimeout(this.pendingRetryTimer);
+        this.pendingRetryTimer = null;
+      }
+    }
 
     // Prefer the best known total; keep the previous value (instead of
     // showing "no size") while a fresh measurement is in flight.
