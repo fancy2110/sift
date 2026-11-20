@@ -299,10 +299,10 @@ impl FolderIndex {
         if nodes.is_empty() {
             return;
         }
+        // Keep lock scopes disjoint. `children()` locks children then node,
+        // while this path may run concurrently with a UI query.
         {
             let mut tree = self.nodes.lock().unwrap();
-            let mut children = self.children.lock().unwrap();
-            let mut sizes = self.sizes.lock().unwrap();
             for node in nodes {
                 tree.entry(node.path.clone())
                     .and_modify(|record| record.is_dir = node.is_dir)
@@ -311,12 +311,22 @@ impl FolderIndex {
                         is_dir: node.is_dir,
                         purpose: None,
                     });
+            }
+        }
+        {
+            let mut children = self.children.lock().unwrap();
+            for node in nodes {
                 if let Some(parent) = &node.parent {
                     children
                         .entry(parent.clone())
                         .or_default()
                         .insert(node.path.clone());
                 }
+            }
+        }
+        {
+            let mut sizes = self.sizes.lock().unwrap();
+            for node in nodes {
                 if let Some(size) = node.size {
                     sizes.insert(
                         node.path.clone(),
