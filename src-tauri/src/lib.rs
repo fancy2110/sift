@@ -103,6 +103,8 @@ pub fn run() {
             list_dir_files,
             explorer::list_dir_entries,
             explorer::folders_clear,
+            explorer::store_node,
+            explorer::store_children,
             explorer::list_files_under,
             ai_explain::ai_explain_dir,
             explorer::dir_sizes,

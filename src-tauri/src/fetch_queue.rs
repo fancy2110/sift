@@ -52,9 +52,17 @@ impl PartialOrd for Task {
 #[derive(Default)]
 struct QueueState {
     lists: BinaryHeap<Task>,
-    sizes: BinaryHeap<Task>,
+    active_sizes: BinaryHeap<Task>,
+    background_sizes: BinaryHeap<Task>,
     queued: HashSet<(String, TaskKind)>,
     sequence: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lane {
+    List,
+    ActiveSize,
+    BackgroundSize,
 }
 
 struct Shared {
@@ -100,7 +108,8 @@ impl FetchQueue {
         };
         match kind {
             TaskKind::List => state.lists.push(task),
-            TaskKind::Size => state.sizes.push(task),
+            TaskKind::Size if priority >= PRIORITY_ACTIVE => state.active_sizes.push(task),
+            TaskKind::Size => state.background_sizes.push(task),
         }
         self.shared.wake.notify_one();
         true
@@ -114,12 +123,13 @@ impl FetchQueue {
         self.enqueue(path, TaskKind::Size, priority)
     }
 
-    fn pop(&self, kind: TaskKind) -> Task {
+    fn pop(&self, lane: Lane) -> Task {
         let mut state = self.shared.state.lock().unwrap();
         loop {
-            let task = match kind {
-                TaskKind::List => state.lists.pop(),
-                TaskKind::Size => state.sizes.pop(),
+            let task = match lane {
+                Lane::List => state.lists.pop(),
+                Lane::ActiveSize => state.active_sizes.pop(),
+                Lane::BackgroundSize => state.background_sizes.pop(),
             };
             if let Some(task) = task {
                 return task;
@@ -154,16 +164,19 @@ impl FetchQueue {
 pub fn start_workers(app: AppHandle, workers: usize) {
     let queue = app.state::<FetchQueue>().inner().clone();
     let count = workers.max(1);
-    for (kind, label) in [(TaskKind::List, "list"), (TaskKind::Size, "size")] {
-        let per_kind = if kind == TaskKind::List { 1 } else { count };
-        for index in 0..per_kind {
+    for (lane, label, workers) in [
+        (Lane::List, "list", 1),
+        (Lane::ActiveSize, "size-active", 1),
+        (Lane::BackgroundSize, "size-bg", count),
+    ] {
+        for index in 0..workers {
             let app = app.clone();
             let queue = queue.clone();
             std::thread::Builder::new()
                 .name(format!("sift-store-{label}-{index}"))
                 .spawn(move || loop {
-                    let task = queue.pop(kind);
-                    match kind {
+                    let task = queue.pop(lane);
+                    match task.kind {
                         TaskKind::List => fetch_list(&app, &queue, &task.path),
                         TaskKind::Size => fetch_size(&app, &task.path),
                     }
@@ -246,7 +259,7 @@ mod tests {
         assert!(queue.enqueue_list("/a", PRIORITY_VISIBLE));
         assert!(!queue.enqueue_list("/a", PRIORITY_VISIBLE));
         assert!(queue.is_queued("/a", TaskKind::List));
-        let task = queue.pop(TaskKind::List);
+        let task = queue.pop(Lane::List);
         assert_eq!(task.path, "/a");
         assert_eq!(task.kind, TaskKind::List);
         queue.finish(&task);
@@ -258,10 +271,10 @@ mod tests {
     fn a_listing_and_a_size_for_one_path_are_distinct() {
         let queue = FetchQueue::default();
         assert!(queue.enqueue_list("/a", PRIORITY_VISIBLE));
-        assert!(queue.enqueue_size("/a", PRIORITY_CHILD));
-        let first = queue.pop(TaskKind::List);
+        assert!(queue.enqueue_size("/a", PRIORITY_ACTIVE));
+        let first = queue.pop(Lane::List);
         assert_eq!(first.kind, TaskKind::List);
-        let second = queue.pop(TaskKind::Size);
+        let second = queue.pop(Lane::ActiveSize);
         assert_eq!(second.kind, TaskKind::Size);
     }
 
@@ -270,6 +283,6 @@ mod tests {
         let queue = FetchQueue::default();
         queue.enqueue_size("/low", PRIORITY_STALE);
         queue.enqueue_list("/visible", PRIORITY_VISIBLE);
-        assert_eq!(queue.pop(TaskKind::List).path, "/visible");
+        assert_eq!(queue.pop(Lane::List).path, "/visible");
     }
 }

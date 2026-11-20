@@ -94,8 +94,8 @@ flowchart TD
 | 节点批次 `BatchUpdate` | Tauri 事件 `scan://batch` | `pump_events` | 前端 `handleBatch` | 每 64ms | `epoch` 不匹配即丢弃 |
 | 前端节点索引 | `nodeRecords` / `pathToId` / `childIds` | `handleBatch` | Explorer、treemap、分析列表 | 扫描批次、剪枝 | 新扫描重置；删除时剪枝 |
 | 尺寸树 | `size-tree.json` + 进程 `TREE` | 扫描 ingest、懒加载 walk、清理扣减 | `dir_size_peek`、`dir_sizes_tree` | 扫描完成、目录浏览、清理 | 手动 rescan、清理扣减、TTL 不适用（持久）；超过 64 MB 的 JSON 移到 `.oversized` 并重建 |
-| 文件夹索引 | `sift-store::FolderIndex` 进程内存 | `list_dir_entries` 读取、Store 队列回填 | Explorer、Store 事件订阅者 | 列目录时 | 列表 5 分钟 TTL；目录大小 30 分钟 TTL；手动 rescan 清空；重启丢失（后续持久化） |
-| Store 任务队列 | `FetchQueue` 进程内存 | Store miss/stale、列表发现的子目录 | List / Size 两组 worker | 列目录 miss、发现缺失尺寸 | 按路径+类型去重；可见目录尺寸优先级 80，子目录 50，过期 10；List 永不被 Size 阻塞 |
+| 文件夹索引 | `sift-store::FolderIndex` 进程内存 | `list_dir_entries` 读取、Store 队列回填 | Explorer、`store_node` / `store_children` 调用方 | 列目录时 | 列表 5 分钟、尺寸 30 分钟 TTL；含父子边/大小/purpose；手动 rescan 清空；重启丢失（后续持久化） |
+| Store 任务队列 | `FetchQueue` 进程内存 | Store miss/stale、列表发现的子目录 | List / ActiveSize / BackgroundSize 三个 lane | 列目录 miss、发现缺失尺寸 | 按路径+类型去重；可见列表 100、可见尺寸 80（active）、子目录 50、过期 10（background） |
 | 前端尺寸镜像 | `src/lib/sizeCache.ts` 内存 Map | `sizesFor` / `seedSize` | Explorer、其他页面 | 读尺寸、扫描种子、清理扣减 | 30 分钟 TTL；800 条上限；重启丢失 |
 | 判定缓存 | `verdicts.json` | `Store::record_analysis` | 下次分析 | 每次分析 | 指纹变化；容量 20k |
 | 可清理清单 | `cleanable.json` | `Store::record_analysis` | 自动清理、监控、UI | 每次分析 | 仅 `Safe`；指纹变化；容量 5k |

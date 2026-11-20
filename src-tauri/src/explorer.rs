@@ -132,6 +132,25 @@ pub async fn list_dir_entries(
     })
 }
 
+/// One node from the Store tree, for pages that need structure rather than a
+/// single directory listing.
+#[tauri::command]
+pub fn store_node(
+    services: State<'_, AppServices>,
+    path: String,
+) -> Option<sift_store::NodeView> {
+    services.store.folders().node(&path)
+}
+
+/// Direct children recorded in the Store tree.
+#[tauri::command]
+pub fn store_children(
+    services: State<'_, AppServices>,
+    path: String,
+) -> Vec<sift_store::NodeView> {
+    services.store.folders().children(&path)
+}
+
 /// Drop every folder listing so the next read is a miss (manual rescan).
 #[tauri::command]
 pub fn folders_clear(services: State<'_, AppServices>) {

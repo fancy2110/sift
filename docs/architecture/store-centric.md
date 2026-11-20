@@ -35,7 +35,8 @@ flowchart LR
 |---|---|---|
 | `FolderIndex` | `crates/sift-store/src/folders.rs` | Store 持有的目录列表读模型；`Fresh` / `Stale` / `Missing`，5 分钟 TTL，revision + mpsc 订阅 |
 | `Store::folders()` | `crates/sift-store/src/store.rs` | 暴露同一个 `FolderIndex` 给所有调用方 |
-| `FetchQueue` | `src-tauri/src/fetch_queue.rs` | 按路径+任务类型去重；List 与 Size 分开的 worker 池；列表先返回，尺寸后台补；emit folders/sizes 两个 revision |
+| `NodeView` / `children` / `set_purpose` | `crates/sift-store/src/folders.rs` | Store 内的父子边、节点大小和“作用”字段；`store_node` / `store_children` 供任意页面查询 |
+| `FetchQueue` | `src-tauri/src/fetch_queue.rs` | 按路径+任务类型去重；List / ActiveSize / BackgroundSize 三个 lane；列表先返回，可见目录尺寸不被后台大目录 walk 阻塞；emit folders/sizes 两个 revision |
 | `list_dir_entries` | `src-tauri/src/explorer.rs` | 只查 Store；miss/stale 入队并返回 `pending`；不再 `read_dir` |
 | `read_entries` | `src-tauri/src/explorer.rs` | 仅供抓取队列调用的原始 OS 读取 |
 | `folders_clear` | `src-tauri/src/explorer.rs` | 手动刷新时清空 Store 列表，下一次读取变 miss |
@@ -43,14 +44,14 @@ flowchart LR
 
 目录列表已从 `size_tree.rs` 移除；`size-tree.json` 只作为尺寸兼容镜像，不再存 `listings`。
 Store 自己的尺寸记录有 30 分钟 TTL：过期值先返回并标记 stale，同时以低优先级入队刷新；
-列表 5 分钟 TTL，过期值同样先返回再刷新。可见目录的尺寸任务优先级 80，列表发现的子目录 50，
-过期刷新 10，列表任务使用独立 worker，永不被长尺寸 walk 阻塞。
+列表 5 分钟 TTL，过期值同样先返回再刷新。可见目录的尺寸任务优先级 80，进入 ActiveSize lane；列表发现的子目录 50、过期刷新 10
+进入 BackgroundSize lane。List 独立 worker，ActiveSize 独立 worker，后台大目录不会占住可见目录的尺寸通道。
 
 ## 3. 尚未对齐的部分
 
 这部分是下一步，不应被当前实现掩盖：
 
-1. **`ScanTree` 仍由 `ScanManager` 独占**：扫描结果先进 `ScanTree`，再由前端 ingest 到 Store 的尺寸索引；目标应让 Store 直接持有树/列表，扫描引擎只生产批次。
+1. **`ScanTree` 仍由 `ScanManager` 独占**：Store 现在有由列表建立的父子边、大小和 purpose，但完整扫描树（含扫描状态/候选）仍先在 `ScanTree` 中；目标应让 Store 直接持有扫描树，扫描引擎只生产批次。
 2. **扫描队列还不是公共服务**：`FetchQueue` 只处理目录列表；`ScanEngine` 的 `BinaryHeap` 仍是内部队列，外部无法把“缺失子目录”作为扫描任务加入。
 3. **尺寸索引还有兼容镜像**：Store 已持有 `size/exact` 并作为读路径，但 `size-tree.json` 仍被部分旧功能写入；目标应彻底移除该镜像。
 4. **业务数据没有统一订阅**：`verdicts/cleanable/settings/history` 仍在 `Store` 内，但没有 revision/event bus；只有文件夹索引有 `FolderChange`。
