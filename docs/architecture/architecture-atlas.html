@@ -765,11 +765,11 @@
           <div class="track">
             <div class="node"><b>Store.folders</b><small>fresh · stale · missing</small></div>
             <span class="arrow">→</span>
-            <div class="node hot"><b>FetchQueue</b><small>OS read · dedupe</small></div>
+            <div class="node hot"><b>FetchQueue</b><small>list 100 · size 80</small></div>
             <span class="arrow">→</span>
-            <div class="node"><b>sizeCache</b><small>30m · 800 entries</small></div>
+            <div class="node"><b>Store.sizes</b><small>30m · stale first</small></div>
             <span class="arrow">→</span>
-            <div class="node"><b>dir_sizes_tree</b><small>walk + record</small></div>
+            <div class="node"><b>UI patch</b><small>row + total</small></div>
           </div>
         </article>
 
@@ -902,9 +902,9 @@
           <code>sift-store :: FolderIndex</code>
         </article>
         <article class="cache" style="--c: var(--ok)">
-          <div class="cache-top"><span class="cache-name">Size mirror</span><span class="cache-ttl">30 min</span></div>
-          <p>前端同步读取的目录大小；seed / debit / clear。</p>
-          <code>sizeCache · 800 entries</code>
+          <div class="cache-top"><span class="cache-name">Store sizes</span><span class="cache-ttl">30 min</span></div>
+          <p>Size 任务回填；过期先显示并低优先级刷新；前端镜像加速首屏。</p>
+          <code>FolderIndex.sizes · sizeCache</code>
         </article>
         <article class="cache" style="--c: var(--violet)">
           <div class="cache-top"><span class="cache-name">Verdicts</span><span class="cache-ttl">fingerprint</span></div>

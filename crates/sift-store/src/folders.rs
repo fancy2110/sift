@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 
 /// How long a complete listing is considered fresh.
 pub const LISTING_TTL_MS: i64 = 5 * 60 * 1000;
+/// Folder totals are more expensive to obtain than a listing and are reused
+/// longer; a visible stale value is returned immediately while a refresh runs.
+pub const SIZE_TTL_MS: i64 = 30 * 60 * 1000;
 
 /// Bound the read model; evict the least recently fetched folder.
 const MAX_LISTINGS: usize = 4096;
@@ -66,20 +69,52 @@ struct FolderListing {
     at_ms: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SizeRecord {
+    size: u64,
+    exact: bool,
+    at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SizeView {
+    pub path: String,
+    pub size: Option<u64>,
+    pub exact: bool,
+    pub state: ListingState,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SizeChange {
+    pub revision: u64,
+    pub path: String,
+    pub size: u64,
+    pub exact: bool,
+}
+
 /// In-memory, Store-owned folder read model.
 #[derive(Debug)]
 pub struct FolderIndex {
     listings: Mutex<HashMap<String, FolderListing>>,
+    sizes: Mutex<HashMap<String, SizeRecord>>,
     revision: AtomicU64,
+    size_revision: AtomicU64,
     subscribers: Mutex<Vec<Sender<FolderChange>>>,
+    size_subscribers: Mutex<Vec<Sender<SizeChange>>>,
 }
 
 impl Default for FolderIndex {
     fn default() -> Self {
         Self {
             listings: Mutex::new(HashMap::new()),
+            sizes: Mutex::new(HashMap::new()),
             revision: AtomicU64::new(0),
+            size_revision: AtomicU64::new(0),
             subscribers: Mutex::new(Vec::new()),
+            size_subscribers: Mutex::new(Vec::new()),
         }
     }
 }
@@ -158,8 +193,70 @@ impl FolderIndex {
         self.listings.lock().unwrap().remove(requested);
     }
 
+    /// A path disappeared: drop its listing and size, and publish the removal
+    /// as a zero-sized, non-exact record so views can prune immediately.
+    pub fn remove_path(&self, requested: &str) {
+        self.listings.lock().unwrap().remove(requested);
+        self.sizes.lock().unwrap().remove(requested);
+    }
+
     pub fn clear(&self) {
         self.listings.lock().unwrap().clear();
+        self.sizes.lock().unwrap().clear();
+    }
+
+    /// Read a folder total. Never performs I/O.
+    pub fn size(&self, requested: &str) -> SizeView {
+        let revision = self.size_revision.load(Ordering::Acquire);
+        let record = self.sizes.lock().unwrap().get(requested).cloned();
+        match record {
+            None => SizeView {
+                path: requested.to_string(),
+                size: None,
+                exact: false,
+                state: ListingState::Missing,
+                revision,
+            },
+            Some(record) => SizeView {
+                path: requested.to_string(),
+                size: Some(record.size),
+                exact: record.exact,
+                state: if now_ms() - record.at_ms <= SIZE_TTL_MS {
+                    ListingState::Fresh
+                } else {
+                    ListingState::Stale
+                },
+                revision,
+            },
+        }
+    }
+
+    /// Apply a measured folder total and publish the new revision.
+    pub fn apply_size(&self, path: &str, size: u64, exact: bool) -> SizeChange {
+        self.sizes.lock().unwrap().insert(
+            path.to_string(),
+            SizeRecord {
+                size,
+                exact,
+                at_ms: now_ms(),
+            },
+        );
+        let revision = self.size_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        let change = SizeChange {
+            revision,
+            path: path.to_string(),
+            size,
+            exact,
+        };
+        let mut subscribers = self.size_subscribers.lock().unwrap();
+        subscribers.retain(|sender| sender.send(change.clone()).is_ok());
+        change
+    }
+
+    pub fn subscribe_sizes(&self) -> Receiver<SizeChange> {
+        let (sender, receiver) = channel();
+        self.size_subscribers.lock().unwrap().push(sender);
+        receiver
     }
 
     pub fn revision(&self) -> u64 {
@@ -221,5 +318,27 @@ mod tests {
         index.apply("/x", "/x", vec![entry("a")]);
         index.invalidate("/x");
         assert_eq!(index.list("/x").state, ListingState::Missing);
+    }
+
+    #[test]
+    fn a_size_has_its_own_revision_and_subscribers() {
+        let index = FolderIndex::default();
+        let receiver = index.subscribe_sizes();
+        let change = index.apply_size("/x", 4096, true);
+        assert_eq!(change.revision, 1);
+        assert_eq!(receiver.recv().unwrap(), change);
+        let view = index.size("/x");
+        assert_eq!(view.size, Some(4096));
+        assert_eq!(view.state, ListingState::Fresh);
+    }
+
+    #[test]
+    fn removing_a_path_drops_both_listing_and_size() {
+        let index = FolderIndex::default();
+        index.apply("/x", "/x", vec![entry("a")]);
+        index.apply_size("/x", 1, true);
+        index.remove_path("/x");
+        assert_eq!(index.list("/x").state, ListingState::Missing);
+        assert_eq!(index.size("/x").state, ListingState::Missing);
     }
 }

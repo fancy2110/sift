@@ -211,6 +211,17 @@ export function onFoldersChanged(cb: (change: FolderChange) => void): Promise<Un
   return subscribe<FolderChange>('store://folders-changed', cb);
 }
 
+export interface SizeChange {
+  revision: number;
+  path: string;
+  size: number;
+  exact: boolean;
+}
+
+export function onSizesChanged(cb: (change: SizeChange) => void): Promise<UnlistenFn> {
+  return subscribe<SizeChange>('store://sizes-changed', cb);
+}
+
 export function onFoldersFailed(
   cb: (event: { path: string; error: string }) => void
 ): Promise<UnlistenFn> {

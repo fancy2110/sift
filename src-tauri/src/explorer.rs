@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::analyze::AppServices;
-use crate::fetch_queue::FetchQueue;
+use crate::fetch_queue::{
+    FetchQueue, TaskKind, PRIORITY_ACTIVE, PRIORITY_STALE, PRIORITY_VISIBLE,
+};
 
 /// Immediate children of one directory.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -92,11 +94,11 @@ pub async fn list_dir_entries(
     let pending = match view.state {
         sift_store::ListingState::Fresh => false,
         sift_store::ListingState::Stale | sift_store::ListingState::Missing => {
-            queue.enqueue(&requested);
+            queue.enqueue_list(&requested, PRIORITY_VISIBLE);
             true
         }
     };
-    let entries = view
+    let entries: Vec<DirEntryDto> = view
         .entries
         .into_iter()
         .map(|entry| DirEntryDto {
@@ -107,6 +109,22 @@ pub async fn list_dir_entries(
             modified_ms: entry.modified_ms,
         })
         .collect();
+    // The listing is cheap; a directory without a fresh Store total is the
+    // missing data that belongs on the size queue, not a synchronous walk.
+    for entry in &entries {
+        if !entry.is_dir {
+            continue;
+        }
+        let state = folders.size(&entry.path).state;
+        if state != sift_store::ListingState::Fresh {
+            let priority = if state == sift_store::ListingState::Missing {
+                PRIORITY_ACTIVE
+            } else {
+                PRIORITY_STALE
+            };
+            queue.enqueue(&entry.path, TaskKind::Size, priority);
+        }
+    }
     Ok(DirListingDto {
         path: view.resolved,
         entries,
@@ -212,7 +230,7 @@ pub(crate) fn size_of(path: &std::path::Path, meta: &std::fs::Metadata) -> u64 {
     meta.len()
 }
 
-fn recursive_size(path: &str) -> DirSizeDto {
+pub(crate) fn recursive_size(path: &str) -> DirSizeDto {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     let mut size = 0u64;
