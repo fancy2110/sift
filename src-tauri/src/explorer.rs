@@ -76,6 +76,28 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Overlay Store totals onto a listing. Directory rows arrive with size 0;
+/// the Store may already know the total from a scan or a size task.
+fn entries_with_store_sizes(
+    folders: &sift_store::FolderIndex,
+    entries: Vec<sift_store::FolderEntry>,
+) -> Vec<DirEntryDto> {
+    entries
+        .into_iter()
+        .map(|entry| DirEntryDto {
+            name: entry.name,
+            path: entry.path.clone(),
+            is_dir: entry.is_dir,
+            size: if entry.is_dir {
+                folders.size(&entry.path).size.unwrap_or(entry.size)
+            } else {
+                entry.size
+            },
+            modified_ms: entry.modified_ms,
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub async fn list_dir_entries(
     services: State<'_, AppServices>,
@@ -98,21 +120,7 @@ pub async fn list_dir_entries(
             true
         }
     };
-    let entries: Vec<DirEntryDto> = view
-        .entries
-        .into_iter()
-        .map(|entry| DirEntryDto {
-            name: entry.name,
-            path: entry.path.clone(),
-            is_dir: entry.is_dir,
-            size: if entry.is_dir {
-                folders.size(&entry.path).size.unwrap_or(entry.size)
-            } else {
-                entry.size
-            },
-            modified_ms: entry.modified_ms,
-        })
-        .collect();
+    let entries = entries_with_store_sizes(&folders, view.entries);
     // The listing is cheap; a directory without a fresh Store total is the
     // missing data that belongs on the size queue, not a synchronous walk.
     for entry in &entries {
@@ -457,6 +465,27 @@ mod tests {
         let view = index.list(root.to_str().unwrap());
         assert_eq!(view.state, sift_store::ListingState::Fresh);
         assert!(!view.entries.is_empty());
+    }
+
+    #[test]
+    fn a_parent_listing_overlays_child_totals_from_store() {
+        let index = sift_store::FolderIndex::default();
+        index.apply(
+            "/Users",
+            "/Users",
+            vec![sift_store::FolderEntry {
+                name: "xiaocy".into(),
+                path: "/Users/xiaocy".into(),
+                is_dir: true,
+                size: 0,
+                modified_ms: None,
+            }],
+        );
+        index.apply_size("/Users/xiaocy", 653_000, true);
+        let listing = index.list("/Users");
+        let rows = entries_with_store_sizes(&index, listing.entries);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].size, 653_000);
     }
 
     #[test]
