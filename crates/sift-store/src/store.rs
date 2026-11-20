@@ -46,7 +46,8 @@ struct Inner {
 /// A coarse-grained Store revision. Subscribers can refetch the document they
 /// care about after any business mutation; the topic is reserved for finer
 /// routing later.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StoreChange {
     pub revision: u64,
     pub topic: String,

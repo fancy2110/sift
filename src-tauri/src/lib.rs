@@ -63,6 +63,22 @@ fn startup_mark(label: String, wall_ms: i64) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Forward business Store revisions to the webview. The receiver is created
+/// after the Store is managed, so no early mutation is missed by this bridge.
+fn start_store_bridge(app: tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
+    let store = app.state::<AppServices>().store.clone();
+    let receiver = store.subscribe_changes();
+    std::thread::Builder::new()
+        .name("sift-store-events".into())
+        .spawn(move || {
+            while let Ok(change) = receiver.recv() {
+                let _ = app.emit("store://business-changed", change);
+            }
+        })
+        .ok();
+}
+
 pub fn run() {
     startup_trace::mark("run:enter");
     let services_timer = std::time::Instant::now();
@@ -176,6 +192,7 @@ pub fn run() {
             schedule::start(app.handle());
             apps::start_environment_watch(app.handle().clone());
             fetch_queue::start_workers(app.handle().clone(), 2);
+            start_store_bridge(app.handle().clone());
 
             // Closing the window keeps the app in the tray; the tray menu's
             // quit is the real exit.
