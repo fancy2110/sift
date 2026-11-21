@@ -213,9 +213,13 @@ fn fetch_list(app: &AppHandle, queue: &FetchQueue, path: &str) {
             // expensive part. Schedule only folders the Store does not have a
             // fresh total for, at a lower priority than the visible listing.
             for child in children {
-                let state = store.folders().size(&child).state;
-                if state != sift_store::ListingState::Fresh {
-                    let priority = if state == sift_store::ListingState::Missing {
+                let view = store.folders().size(&child);
+                // Derived means "sum of what we know so far", not a recursive
+                // measurement; keep it on the queue until exact.
+                if view.state != sift_store::ListingState::Fresh || !view.verified {
+                    let priority = if view.state == sift_store::ListingState::Missing
+                        || !view.verified
+                    {
                         PRIORITY_CHILD
                     } else {
                         PRIORITY_STALE

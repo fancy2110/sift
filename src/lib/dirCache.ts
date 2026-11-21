@@ -30,9 +30,7 @@ export async function listingFor(
     const listing = await listDirEntries(path, force);
     return {
       path: listing.path || path,
-      entries: listing.entries.map((entry) =>
-        entry.isDir ? { ...entry, size: 0 } : entry
-      ),
+      entries: listing.entries,
       pending: Boolean(listing.pending),
       at: Date.now()
     };

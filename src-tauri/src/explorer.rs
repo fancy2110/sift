@@ -89,7 +89,17 @@ fn entries_with_store_sizes(
             path: entry.path.clone(),
             is_dir: entry.is_dir,
             size: if entry.is_dir {
-                folders.size(&entry.path).size.unwrap_or(entry.size)
+                let store_size = folders.size(&entry.path).size.unwrap_or(entry.size);
+                // The legacy size index may have a measured total that the
+                // scan/listing path has not verified yet. Prefer the larger
+                // known value and feed it back as a derived parent total.
+                let legacy = crate::size_tree::peek_size(&entry.path).unwrap_or(0);
+                if legacy > store_size {
+                    folders.apply_derived_size(&entry.path, legacy);
+                    legacy
+                } else {
+                    store_size
+                }
             } else {
                 entry.size
             },
@@ -127,9 +137,11 @@ pub async fn list_dir_entries(
         if !entry.is_dir {
             continue;
         }
-        let state = folders.size(&entry.path).state;
-        if state != sift_store::ListingState::Fresh {
-            let priority = if state == sift_store::ListingState::Missing {
+        let view = folders.size(&entry.path);
+        // A derived total is only a partial sum (direct files + already-known
+        // children); it must still be measured recursively.
+        if view.state != sift_store::ListingState::Fresh || !view.verified {
+            let priority = if view.state == sift_store::ListingState::Missing || !view.verified {
                 PRIORITY_ACTIVE
             } else {
                 PRIORITY_STALE
@@ -471,18 +483,18 @@ mod tests {
     fn a_parent_listing_overlays_child_totals_from_store() {
         let index = sift_store::FolderIndex::default();
         index.apply(
-            "/Users",
-            "/Users",
+            "/__sift_store_test__",
+            "/__sift_store_test__",
             vec![sift_store::FolderEntry {
-                name: "xiaocy".into(),
-                path: "/Users/xiaocy".into(),
+                name: "child".into(),
+                path: "/__sift_store_test__/child".into(),
                 is_dir: true,
                 size: 0,
                 modified_ms: None,
             }],
         );
-        index.apply_size("/Users/xiaocy", 653_000, true);
-        let listing = index.list("/Users");
+        index.apply_size("/__sift_store_test__/child", 653_000, true);
+        let listing = index.list("/__sift_store_test__");
         let rows = entries_with_store_sizes(&index, listing.entries);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].size, 653_000);

@@ -308,6 +308,16 @@ pub fn record_scan_dir(path: &str, size: u64) {
 }
 
 /// Cached totals only (no walking); used to paint instantly.
+/// Read a known size without the Tauri command wrapper. Used as a fallback
+/// while Store sizes are still being verified.
+pub fn peek_size(path: &str) -> Option<u64> {
+    // This is used while building a listing, not on the scan hot path. Blocking
+    // here is preferable to silently showing a much smaller derived total;
+    // recover the lock if a previous writer panicked.
+    let data = tree().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    data.sizes.get(path).copied()
+}
+
 #[tauri::command]
 pub fn dir_size_peek(services: State<'_, AppServices>, paths: Vec<String>) -> Vec<DirSizeDto> {
     // Store first: a size task fills it, so every page can reuse the value
