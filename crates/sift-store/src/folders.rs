@@ -103,6 +103,10 @@ struct FolderListing {
 struct SizeRecord {
     size: u64,
     exact: bool,
+    /// True only when a Store size task recursively measured this path. Scan
+    /// sizes are useful immediately but must be verified before they suppress
+    /// a background measurement (a permission-limited scan can under-count).
+    verified: bool,
     at_ms: i64,
 }
 
@@ -112,6 +116,7 @@ pub struct SizeView {
     pub path: String,
     pub size: Option<u64>,
     pub exact: bool,
+    pub verified: bool,
     pub state: ListingState,
     pub revision: u64,
 }
@@ -236,7 +241,7 @@ impl FolderIndex {
             let has_known = children.iter().any(|child| sizes.contains_key(child));
             drop(sizes);
             if has_known {
-                self.apply_size(requested, known, false);
+                self.apply_derived_size(requested, known);
             }
         }
         let revision = self.revision.fetch_add(1, Ordering::AcqRel) + 1;
@@ -286,6 +291,7 @@ impl FolderIndex {
                     SizeRecord {
                         size: entry.size,
                         exact: true,
+                        verified: true,
                         at_ms: now_ms(),
                     },
                 );
@@ -333,6 +339,7 @@ impl FolderIndex {
                         SizeRecord {
                             size,
                             exact: node.exact,
+                            verified: false,
                             at_ms: now_ms(),
                         },
                     );
@@ -444,6 +451,7 @@ impl FolderIndex {
                 path: requested.to_string(),
                 size: None,
                 exact: false,
+                verified: false,
                 state: ListingState::Missing,
                 revision,
             },
@@ -451,6 +459,7 @@ impl FolderIndex {
                 path: requested.to_string(),
                 size: Some(record.size),
                 exact: record.exact,
+                verified: record.verified,
                 state: if now_ms() - record.at_ms <= SIZE_TTL_MS {
                     ListingState::Fresh
                 } else {
@@ -470,6 +479,7 @@ impl FolderIndex {
             SizeRecord {
                 size,
                 exact,
+                verified: false,
                 at_ms: now_ms(),
             },
         );
@@ -485,6 +495,34 @@ impl FolderIndex {
         change
     }
 
+    /// A parent total derived from known children. It is useful for display
+    /// but is not a recursive measurement, so it must not suppress a size task.
+    pub fn apply_derived_size(&self, path: &str, size: u64) -> SizeChange {
+        self.sizes.lock().unwrap().insert(
+            path.to_string(),
+            SizeRecord {
+                size,
+                exact: false,
+                verified: false,
+                at_ms: now_ms(),
+            },
+        );
+        let revision = self.size_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        let change = SizeChange {
+            revision,
+            path: path.to_string(),
+            size,
+            exact: false,
+        };
+        let mut changes = vec![change.clone()];
+        changes.extend(self.recompute_size_ancestors(path, revision));
+        let mut subscribers = self.size_subscribers.lock().unwrap();
+        for change in changes {
+            subscribers.retain(|sender| sender.send(change.clone()).is_ok());
+        }
+        change
+    }
+
     /// Apply a measured folder total and publish the new revision. Ancestors
     /// are recomputed from their direct children so `/Users` reflects
     /// `/Users/xiaocy` even when only the child was measured.
@@ -494,6 +532,7 @@ impl FolderIndex {
             SizeRecord {
                 size,
                 exact,
+                verified: true,
                 at_ms: now_ms(),
             },
         );
@@ -547,6 +586,7 @@ impl FolderIndex {
                 SizeRecord {
                     size: total,
                     exact: false,
+                    verified: false,
                     at_ms: now_ms(),
                 },
             );

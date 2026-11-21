@@ -909,7 +909,9 @@ class AppStore {
     for (const entry of entries) {
       if (!entry.isDir) continue;
       const size = this.knownSize(entry.path);
-      if (size !== undefined) {
+      // Never replace a larger Store/listing total with a smaller local
+      // projection; the Store may already include a verified recursive size.
+      if (size !== undefined && size > entry.size) {
         entry.size = size;
         // Mirror the scan value into the shared cache so a later navigation
         // does not depend on the scan node still being present.
@@ -947,8 +949,9 @@ class AppStore {
     // showing "no size") while a fresh measurement is in flight.
     const knownTotal = this.knownSize(resolved);
     if (knownTotal !== undefined) seedSize(resolved, knownTotal);
-    this.explorerTotal = knownTotal ?? null;
-    if (knownTotal === undefined) void this.loadExplorerTotal(resolved);
+    const rowTotal = entries.reduce((sum, entry) => sum + entry.size, 0);
+    this.explorerTotal = Math.max(knownTotal ?? 0, rowTotal) || null;
+    if (knownTotal === undefined && rowTotal === 0) void this.loadExplorerTotal(resolved);
 
     this.fillExplorerSizes(resolved, entries, () => {
       if (this.explorerRightPath === resolved) this.explorerRight = [...this.explorerRight];
