@@ -140,6 +140,29 @@ fn run(app: AppHandle) {
     }
 }
 
+/// Run every enabled cleanup rule and return `(matches, removed)`.
+/// A rule is an explicit user instruction, so this runs regardless of the
+/// findings auto-execute switch.
+fn run_enabled_cleanup_rules(
+    store: &sift_store::Store,
+    rules: &[sift_store::CleanupRule],
+) -> (usize, usize) {
+    let mut matches = 0usize;
+    let mut removed = 0usize;
+    for rule in rules.iter().filter(|rule| rule.enabled) {
+        if let Ok(preview) = crate::cleanup_rules::preview_cleanup_rule(rule.clone()) {
+            matches += preview.matched;
+        }
+        match crate::cleanup_rules::run_rule(store, rule) {
+            Ok(result) => removed += result.removed,
+            Err(error) => {
+                eprintln!("scheduled cleanup rule \"{}\" failed: {error}", rule.name)
+            }
+        }
+    }
+    (matches, removed)
+}
+
 /// Perform one scheduled scan → analyse → cleanup pass.
 fn run_daily(app: &AppHandle) -> Result<(), String> {
     let manager = app.state::<ScanManager>();
@@ -193,15 +216,7 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
     // kept for the notification; the rule's own guards still decide what is
     // actually removable.
     let rules = services.store.settings().monitor.cleanup_rules;
-    let mut rule_matches = 0usize;
-    for rule in rules.iter().filter(|rule| rule.enabled) {
-        if let Ok(preview) = crate::cleanup_rules::preview_cleanup_rule(rule.clone()) {
-            rule_matches += preview.matched;
-        }
-        if let Err(error) = crate::cleanup_rules::run_rule(&services.store, rule) {
-            eprintln!("scheduled cleanup rule \"{}\" failed: {error}", rule.name);
-        }
-    }
+    let (rule_matches, _) = run_enabled_cleanup_rules(&services.store, &rules);
 
     if auto_execute {
         let paths = select_approved_paths(
@@ -457,4 +472,31 @@ mod tests {
             .num_days_from_ce();
         assert_eq!(decide(day, 2, 4, 12, None), SchedAction::Wait);
     }
+    #[test]
+    fn enabled_rules_run_without_the_findings_auto_switch() {
+        let dir = std::env::temp_dir().join(format!("sift-rule-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("old.dmg");
+        std::fs::write(&file, b"x").unwrap();
+        let store = sift_store::Store::in_memory();
+        store.update_settings(|settings| {
+            settings.monitor.cleanup_method = "delete".into();
+            settings.monitor.scheduled_auto_execute = false;
+        });
+        let rule = sift_store::CleanupRule {
+            id: "test".into(),
+            name: "test".into(),
+            dir: dir.to_string_lossy().into_owned(),
+            pattern: r"\.dmg$".into(),
+            older_than_days: 0,
+            enabled: true,
+        };
+        let (matched, removed) = run_enabled_cleanup_rules(&store, &[rule]);
+        assert_eq!(matched, 1);
+        assert_eq!(removed, 1);
+        assert!(!file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }
