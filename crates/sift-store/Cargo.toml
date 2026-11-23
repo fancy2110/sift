@@ -15,6 +15,7 @@ sift-scan = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = "6"
+flate2 = "1.1"
 rusqlite = { version = "0.33", features = ["bundled"] }
 
 [dev-dependencies]

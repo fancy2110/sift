@@ -284,6 +284,9 @@ pub async fn scan_index_ingest(
                 .folders()
                 .apply_size(&entry.path, entry.size, true);
         }
+        // Persist the shared tree after the scan's final ingest, so a restart
+        // can restore listings/sizes without a fresh walk.
+        let _ = store.snapshot_tree(true);
         mark_dirty();
     })
     .await
