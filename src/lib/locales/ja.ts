@@ -50,6 +50,8 @@ export const ja: Record<string, string> = {
   'routines.saved': '保存済みルーチン',
   'routines.accept': '採用',
   'routines.runNow': '今すぐ実行',
+  'toast.routineRunDone': 'ルーチンを実行しました（{0} 件）',
+  'toast.routineRunning': 'ルーチンを実行中…',
   'routines.manage': '管理',
 
   'summary.safeRelease': '安全に解放可能 ',

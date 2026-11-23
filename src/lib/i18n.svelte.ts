@@ -93,6 +93,8 @@ const zh: Record<string, string> = {
   'routines.saved': '已保存的例行任务',
   'routines.accept': '采纳',
   'routines.runNow': '立即执行',
+  'toast.routineRunDone': '已执行 {0} 项',
+  'toast.routineRunning': '正在执行例行任务…',
   'routines.manage': '管理',
 
   'summary.safeRelease': '可安全释放 ',
@@ -655,6 +657,8 @@ const en: Record<string, string> = {
   'routines.saved': 'Saved routines',
   'routines.accept': 'Accept',
   'routines.runNow': 'Run now',
+  'toast.routineRunDone': 'Routine ran: {0} item(s)',
+  'toast.routineRunning': 'Running routine…',
   'routines.manage': 'Manage',
 
   'summary.safeRelease': 'Safe to free ',

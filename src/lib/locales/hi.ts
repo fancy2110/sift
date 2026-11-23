@@ -50,6 +50,8 @@ export const hi: Record<string, string> = {
   'routines.saved': 'सहेजी गई दिनचर्याएँ',
   'routines.accept': 'स्वीकारें',
   'routines.runNow': 'अभी चलाएँ',
+  'toast.routineRunDone': 'रूटीन चलाया: {0} आइटम',
+  'toast.routineRunning': 'रूटीन चल रहा है…',
   'routines.manage': 'प्रबंधित करें',
 
   'summary.safeRelease': 'मुक्त करने हेतु सुरक्षित ',

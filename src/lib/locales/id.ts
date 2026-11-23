@@ -50,6 +50,8 @@ export const id: Record<string, string> = {
   'routines.saved': 'Rutinitas tersimpan',
   'routines.accept': 'Terima',
   'routines.runNow': 'Jalankan sekarang',
+  'toast.routineRunDone': 'Rutinitas dijalankan: {0} item',
+  'toast.routineRunning': 'Menjalankan rutinitas…',
   'routines.manage': 'Kelola',
 
   'summary.safeRelease': 'Aman dibebaskan ',

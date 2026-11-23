@@ -50,6 +50,8 @@ export const ru: Record<string, string> = {
   'routines.saved': 'Сохранённые рутины',
   'routines.accept': 'Принять',
   'routines.runNow': 'Запустить',
+  'toast.routineRunDone': 'Задача выполнена: {0}',
+  'toast.routineRunning': 'Выполняется задача…',
   'routines.manage': 'Управление',
 
   'summary.safeRelease': 'Можно освободить ',
