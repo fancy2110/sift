@@ -50,6 +50,8 @@ export const zhTW: Record<string, string> = {
   'routines.saved': '已儲存的例行任務',
   'routines.accept': '採納',
   'routines.runNow': '立即執行',
+  'toast.routineRunDone': '已執行 {0} 項',
+  'toast.routineRunning': '正在執行例行任務…',
   'routines.manage': '管理',
 
   'summary.safeRelease': '可安全釋放 ',

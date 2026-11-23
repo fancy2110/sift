@@ -50,6 +50,8 @@ export const ko: Record<string, string> = {
   'routines.saved': '저장된 루틴',
   'routines.accept': '수락',
   'routines.runNow': '지금 실행',
+  'toast.routineRunDone': '루틴 실행 완료: {0}개',
+  'toast.routineRunning': '루틴 실행 중…',
   'routines.manage': '관리',
 
   'summary.safeRelease': '안전하게 확보 가능 ',

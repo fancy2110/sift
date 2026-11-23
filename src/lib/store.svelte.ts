@@ -1890,9 +1890,19 @@ class AppStore {
 
   async runSavedRoutine(id: string) {
     try {
-      await runRoutine(id);
+      this.toast(t('toast.routineRunning'), 'info');
+      const results = await runRoutine(id);
       await this.loadHistory();
       await this.loadRoutines();
+      const removed = results.filter((item) => item.ok && !item.cancelled).length;
+      if (removed === 0) {
+        this.toast(t('toast.noKindSafe'), 'info');
+      } else {
+        this.toast(t('toast.routineRunDone', [String(removed)]));
+      }
+      if (results.some((item) => !item.ok && !item.cancelled)) {
+        this.toastError(t('toast.settingsFailed', [results.find((item) => item.error)?.error ?? '']));
+      }
     } catch (error) {
       this.toastError(t('toast.settingsFailed', [String(error)]));
     }
