@@ -189,12 +189,18 @@ impl Store {
                 change_subscribers: Mutex::new(Vec::new()),
             };
         if let Some(paths) = &store.paths {
-            if let Err(error) = store.folders.restore_from(&paths.tree_snapshot()) {
-                eprintln!("tree snapshot restore failed: {error}");
+            match store.folders.restore_from(&paths.tree_snapshot()) {
+                Ok(true) => {
+                    // The compact snapshot supersedes the legacy monolithic
+                    // JSON; remove the old file only after a successful restore.
+                    let _ = std::fs::remove_file(paths.root().join("size-tree.json"));
+                }
+                Ok(false) => {
+                    // First run after upgrading: keep the legacy file as a
+                    // fallback until a scan writes the new snapshot.
+                }
+                Err(error) => eprintln!("tree snapshot restore failed: {error}"),
             }
-            // Drop the legacy monolithic index even if no caller touches
-            // size_tree on this run; tree.snapshot.gz is the durable store.
-            let _ = std::fs::remove_file(paths.root().join("size-tree.json"));
         }
         (store, warnings)
     }
@@ -593,7 +599,13 @@ impl Store {
         let Some(paths) = &self.paths else {
             return Ok(false);
         };
-        self.folders.snapshot_if_dirty(&paths.tree_snapshot(), force)
+        let written = self
+            .folders
+            .snapshot_if_dirty(&paths.tree_snapshot(), force)?;
+        if written {
+            let _ = std::fs::remove_file(paths.root().join("size-tree.json"));
+        }
+        Ok(written)
     }
 
     // ---- persistence -------------------------------------------------------
@@ -813,13 +825,26 @@ mod tests {
     }
 
     #[test]
-    fn opening_the_store_removes_the_legacy_size_json() {
-        let paths = temp_paths("legacy-size-remove");
+    fn opening_the_store_keeps_legacy_json_until_a_snapshot_exists() {
+        let paths = temp_paths("legacy-size-keep");
         std::fs::create_dir_all(paths.root()).unwrap();
         let legacy = paths.root().join("size-tree.json");
         std::fs::write(&legacy, b"{}").unwrap();
-        let _ = Store::open(paths);
-        assert!(!legacy.exists());
+        let (store, _) = Store::open(paths.clone());
+        assert!(legacy.exists(), "no snapshot yet: keep the migration fallback");
+        store.folders().apply(
+            "/migrate",
+            "/migrate",
+            vec![crate::FolderEntry {
+                name: "x".into(),
+                path: "/migrate/x".into(),
+                is_dir: false,
+                size: 1,
+                modified_ms: None,
+            }],
+        );
+        assert!(store.snapshot_tree(true).unwrap());
+        assert!(!legacy.exists(), "snapshot written: drop the fallback");
     }
 
     #[test]
