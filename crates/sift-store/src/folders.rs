@@ -1059,6 +1059,29 @@ mod tests {
     }
 
     #[test]
+    fn files_in_a_listing_are_persisted_and_summed() {
+        let index = FolderIndex::default();
+        index.apply(
+            "/x",
+            "/x",
+            vec![
+                FolderEntry {
+                    name: "file.bin".into(),
+                    path: "/x/file.bin".into(),
+                    is_dir: false,
+                    size: 100,
+                    modified_ms: Some(1),
+                },
+                entry("dir"),
+            ],
+        );
+        index.apply_size("/x/dir", 50, true);
+        assert_eq!(index.node("/x/file.bin").unwrap().size, Some(100));
+        assert_eq!(index.list("/x").entries.len(), 2);
+        assert_eq!(index.size("/x").size, Some(150));
+    }
+
+    #[test]
     fn a_parent_listing_uses_a_child_size_that_arrived_first() {
         let index = FolderIndex::default();
         index.apply_size("/Users/xiaocy", 653_000, true);
