@@ -110,5 +110,5 @@ cargo run -p sift-store --release --example tree_snapshot_bench
 
 1. 快照是全量重写，不是增量 WAL；更适合“扫描后恢复”，不适合每秒持久化。
 2. 快照不保存订阅者/前端状态；恢复后 revision 从 0 开始。
-3. `size-tree.json` 仍作为旧功能的兼容镜像存在；后续应停止写入并删除。
+3. `size-tree.json` 已停止写入；启动时删除旧文件，模块只保留为进程内兼容索引。Store 快照是唯一持久事实。
 4. 文件名/列表都在内存中；超大磁盘（千万级文件）仍需分片/按需淘汰策略。

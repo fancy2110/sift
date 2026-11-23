@@ -57,7 +57,7 @@ Store 自己的尺寸记录有 30 分钟 TTL：过期值先返回并标记 stale
 2. **扫描队列还不是公共服务**：`FetchQueue` 只处理目录列表；`ScanEngine` 的 `BinaryHeap` 仍是内部队列，外部无法把“缺失子目录”作为扫描任务加入。
 3. **尺寸索引还有兼容镜像**：Store 已持有 `size/exact` 并作为读路径，但 `size-tree.json` 仍被部分旧功能写入；目标应彻底移除该镜像。
 4. **业务订阅只有 Rust 接口**：`Store::subscribe_changes` 已覆盖业务文档变化，但还没有按 topic 细分，也没有通过 Tauri 事件暴露给前端。
-5. **快照已落地，但仍是全量**：`tree.snapshot.gz` 在扫描完成/节流/退出时写入，重启恢复；还没有增量 WAL，崩溃最多丢失约 30 秒的树变更。
+5. **快照已落地，但仍是全量**：`tree.snapshot.gz` 在扫描完成/节流/退出时写入，重启恢复；`size-tree.json` 已停止写入并删除，避免双份磁盘。还没有增量 WAL，崩溃最多丢失约 30 秒的树变更。
 6. **外部删除只失效了文件夹索引**：`fs://deleted` 现在会 invalidate Store 的对应目录列表，但 `size-tree` 的 `sizes` 仍未同步。
 7. **大 `size-tree.json` 的边界**：超过 64 MB 会移到 `.oversized` 并重建，避免 677 MB JSON 在首屏阻塞；长期应迁移到 SQLite/分片索引。
 
