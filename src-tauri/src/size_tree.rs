@@ -53,14 +53,28 @@ fn tree_path() -> Option<std::path::PathBuf> {
     dirs::data_dir().map(|dir| dir.join("Sift").join("size-tree.json"))
 }
 
-/// The legacy JSON index is no longer the storage of record: Store's compact
-/// `tree.snapshot.gz` is. Remove any old file once and keep this module as an
-/// in-memory compatibility index for the remaining callers.
+/// The compact Store snapshot is the storage of record. Once it exists, drop
+/// the legacy JSON; before that, read it once so an upgrade does not lose
+/// already-measured sizes.
 fn load_from_disk() -> TreeData {
-    if let Some(path) = tree_path() {
+    let Some(path) = tree_path() else {
+        return TreeData::default();
+    };
+    let snapshot = dirs::data_dir()
+        .map(|dir| dir.join("Sift").join("tree.snapshot.gz"))
+        .filter(|snapshot| snapshot.exists());
+    if snapshot.is_some() {
         let _ = std::fs::remove_file(path);
+        return TreeData::default();
     }
-    TreeData::default()
+    const MAX_LOAD_BYTES: u64 = 64 * 1024 * 1024;
+    match std::fs::metadata(&path) {
+        Ok(meta) if meta.len() <= MAX_LOAD_BYTES => std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default(),
+        _ => TreeData::default(),
+    }
 }
 
 fn tree() -> &'static Mutex<TreeData> {
