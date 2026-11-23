@@ -53,48 +53,23 @@ fn tree_path() -> Option<std::path::PathBuf> {
     dirs::data_dir().map(|dir| dir.join("Sift").join("size-tree.json"))
 }
 
-/// A monolithic JSON index above this size is not worth a blocking parse on
-/// startup; it is moved aside and rebuilt incrementally.
-const MAX_LOAD_BYTES: u64 = 64 * 1024 * 1024;
-
+/// The legacy JSON index is no longer the storage of record: Store's compact
+/// `tree.snapshot.gz` is. Remove any old file once and keep this module as an
+/// in-memory compatibility index for the remaining callers.
 fn load_from_disk() -> TreeData {
-    let Some(path) = tree_path() else {
-        return TreeData::default();
-    };
-    match std::fs::metadata(&path) {
-        Ok(meta) if meta.len() > MAX_LOAD_BYTES => {
-            let oversized = path.with_extension("json.oversized");
-            let _ = std::fs::rename(&path, &oversized);
-            return TreeData::default();
-        }
-        Ok(_) => {}
-        Err(_) => return TreeData::default(),
+    if let Some(path) = tree_path() {
+        let _ = std::fs::remove_file(path);
     }
-    std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    TreeData::default()
 }
 
 fn tree() -> &'static Mutex<TreeData> {
     TREE.get_or_init(|| Mutex::new(load_from_disk()))
 }
 
-fn persist(data: &TreeData) {
-    let Some(path) = tree_path() else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(bytes) = serde_json::to_vec(data) {
-        // Keep persistence bounded: an unbounded JSON rewrite blocks the
-        // writer thread and grows into hundreds of megabytes.
-        if bytes.len() as u64 > MAX_LOAD_BYTES {
-            return;
-        }
-        let _ = std::fs::write(&path, bytes);
-    }
+fn persist(_data: &TreeData) {
+    // Intentionally not writing the legacy JSON. Store::snapshot_tree owns
+    // persistence, and keeping this file would double disk usage.
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
