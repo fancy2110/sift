@@ -192,6 +192,9 @@ impl Store {
             if let Err(error) = store.folders.restore_from(&paths.tree_snapshot()) {
                 eprintln!("tree snapshot restore failed: {error}");
             }
+            // Drop the legacy monolithic index even if no caller touches
+            // size_tree on this run; tree.snapshot.gz is the durable store.
+            let _ = std::fs::remove_file(paths.root().join("size-tree.json"));
         }
         (store, warnings)
     }
@@ -807,6 +810,16 @@ mod tests {
         assert_eq!(suggestions.len(), 1, "four separate days is a habit");
         assert_eq!(suggestions[0].name, "node_modules");
         let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn opening_the_store_removes_the_legacy_size_json() {
+        let paths = temp_paths("legacy-size-remove");
+        std::fs::create_dir_all(paths.root()).unwrap();
+        let legacy = paths.root().join("size-tree.json");
+        std::fs::write(&legacy, b"{}").unwrap();
+        let _ = Store::open(paths);
+        assert!(!legacy.exists());
     }
 
     #[test]
