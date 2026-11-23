@@ -3949,6 +3949,7 @@ name = "sift-store"
 version = "0.5.3"
 dependencies = [
  "dirs 6.0.0",
+ "flate2",
  "rusqlite",
  "serde",
  "serde_json",

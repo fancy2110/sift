@@ -6,10 +6,15 @@
 //! consumer can subscribe and refresh from the same snapshot.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use std::io::{Read, Write};
 
 use serde::{Deserialize, Serialize};
 
@@ -141,6 +146,8 @@ pub struct FolderIndex {
     size_revision: AtomicU64,
     subscribers: Mutex<Vec<Sender<FolderChange>>>,
     size_subscribers: Mutex<Vec<Sender<SizeChange>>>,
+    snapshot_dirty: AtomicBool,
+    last_snapshot_ms: AtomicU64,
 }
 
 impl Default for FolderIndex {
@@ -154,6 +161,8 @@ impl Default for FolderIndex {
             size_revision: AtomicU64::new(0),
             subscribers: Mutex::new(Vec::new()),
             size_subscribers: Mutex::new(Vec::new()),
+            snapshot_dirty: AtomicBool::new(false),
+            last_snapshot_ms: AtomicU64::new(0),
         }
     }
 }
@@ -216,6 +225,7 @@ impl FolderIndex {
             );
         }
         self.register_listing(requested, &entries);
+        self.snapshot_dirty.store(true, Ordering::Relaxed);
         // A parent's total is the sum of its direct children (including
         // direct files). Recompute it as soon as the listing supplies edges.
         let exact_parent = self
@@ -348,6 +358,7 @@ impl FolderIndex {
         }
         self.revision.fetch_add(1, Ordering::AcqRel);
         self.size_revision.fetch_add(1, Ordering::AcqRel);
+        self.snapshot_dirty.store(true, Ordering::Relaxed);
     }
 
     /// One node from the Store tree, including its latest known size.
@@ -375,6 +386,7 @@ impl FolderIndex {
         match nodes.get_mut(path) {
             Some(node) => {
                 node.purpose = purpose;
+                self.snapshot_dirty.store(true, Ordering::Relaxed);
                 true
             }
             None => false,
@@ -402,11 +414,13 @@ impl FolderIndex {
     /// unchanged: invalidation is not a content update.
     pub fn invalidate(&self, requested: &str) {
         self.listings.lock().unwrap().remove(requested);
+        self.snapshot_dirty.store(true, Ordering::Relaxed);
     }
 
     /// A path disappeared: drop its listing and size, and publish the removal
     /// as a zero-sized, non-exact record so views can prune immediately.
     pub fn remove_path(&self, requested: &str) {
+        self.snapshot_dirty.store(true, Ordering::Relaxed);
         self.listings.lock().unwrap().remove(requested);
         self.sizes.lock().unwrap().remove(requested);
         let mut stack = vec![requested.to_string()];
@@ -436,6 +450,7 @@ impl FolderIndex {
     }
 
     pub fn clear(&self) {
+        self.snapshot_dirty.store(true, Ordering::Relaxed);
         self.listings.lock().unwrap().clear();
         self.sizes.lock().unwrap().clear();
         self.nodes.lock().unwrap().clear();
@@ -492,6 +507,7 @@ impl FolderIndex {
         };
         let mut subscribers = self.size_subscribers.lock().unwrap();
         subscribers.retain(|sender| sender.send(change.clone()).is_ok());
+        self.snapshot_dirty.store(true, Ordering::Relaxed);
         change
     }
 
@@ -520,6 +536,7 @@ impl FolderIndex {
         for change in changes {
             subscribers.retain(|sender| sender.send(change.clone()).is_ok());
         }
+        self.snapshot_dirty.store(true, Ordering::Relaxed);
         change
     }
 
@@ -549,6 +566,7 @@ impl FolderIndex {
         for change in changes {
             subscribers.retain(|sender| sender.send(change.clone()).is_ok());
         }
+        self.snapshot_dirty.store(true, Ordering::Relaxed);
         change
     }
 
@@ -556,7 +574,9 @@ impl FolderIndex {
     /// its children and is left untouched; a missing/derived ancestor becomes
     /// the sum of all currently known direct children.
     fn recompute_size_ancestors(&self, path: &str, revision: u64) -> Vec<SizeChange> {
-        let children = self.children.lock().unwrap().clone();
+        // Hold both maps for the short upward walk. Cloning `children` here
+        // would make every size update O(number of directories).
+        let children = self.children.lock().unwrap();
         let mut sizes = self.sizes.lock().unwrap();
         let mut out = Vec::new();
         let mut current = path.to_string();
@@ -616,13 +636,292 @@ impl FolderIndex {
         self.subscribers.lock().unwrap().push(sender);
         receiver
     }
+    // ---- compact snapshot -------------------------------------------------
+
+    /// Serialize the read model into a compressed, path-deduplicating binary
+    /// snapshot. Listings store names, not full child paths; sizes/purposes
+    /// are stored once. A 150k-directory index is a few MB instead of the
+    /// tens-of-MB JSON document it replaces.
+    pub fn snapshot_bytes(&self) -> Result<Vec<u8>, String> {
+        let listings = self.listings.lock().unwrap().clone();
+        let sizes = self.sizes.lock().unwrap().clone();
+        let nodes = self.nodes.lock().unwrap().clone();
+        let mut raw = Vec::with_capacity(1024 * 1024);
+        raw.extend_from_slice(b"SFTREE02");
+        write_u32(&mut raw, listings.len() as u32);
+        let mut ordered: Vec<(&String, &FolderListing)> = listings.iter().collect();
+        ordered.sort_by(|a, b| a.0.cmp(b.0));
+        for (path, listing) in ordered {
+            write_str(&mut raw, path)?;
+            write_str(&mut raw, &listing.resolved)?;
+            write_i64(&mut raw, listing.at_ms);
+            write_u32(&mut raw, listing.entries.len() as u32);
+            for entry in &listing.entries {
+                write_str(&mut raw, &entry.name)?;
+                raw.push(entry.is_dir as u8);
+                write_u64(&mut raw, entry.size);
+                match entry.modified_ms {
+                    Some(value) => {
+                        raw.push(1);
+                        write_i64(&mut raw, value);
+                    }
+                    None => raw.push(0),
+                }
+            }
+        }
+        let mut sizes_ordered: Vec<(&String, &SizeRecord)> = sizes.iter().collect();
+        sizes_ordered.sort_by(|a, b| a.0.cmp(b.0));
+        write_u32(&mut raw, sizes_ordered.len() as u32);
+        for (path, record) in sizes_ordered {
+            write_str(&mut raw, path)?;
+            write_u64(&mut raw, record.size);
+            raw.push(record.exact as u8);
+            raw.push(record.verified as u8);
+            write_i64(&mut raw, record.at_ms);
+        }
+        let purposes: Vec<(&String, &String)> = nodes
+            .iter()
+            .filter_map(|(path, node)| node.purpose.as_ref().map(|purpose| (path, purpose)))
+            .collect();
+        write_u32(&mut raw, purposes.len() as u32);
+        for (path, purpose) in purposes {
+            write_str(&mut raw, path)?;
+            write_str(&mut raw, purpose)?;
+        }
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&raw).map_err(|error| error.to_string())?;
+        encoder.finish().map_err(|error| error.to_string())
+    }
+
+    /// Restore a snapshot produced by [`snapshot_bytes`]. All current in-memory
+    /// state is replaced atomically only after the snapshot decodes.
+    pub fn restore_bytes(&self, bytes: &[u8]) -> Result<(), String> {
+        let mut decoder = GzDecoder::new(bytes);
+        let mut raw = Vec::new();
+        decoder.read_to_end(&mut raw).map_err(|error| error.to_string())?;
+        if raw.len() < 8 || &raw[..8] != b"SFTREE02" {
+            return Err("tree snapshot: bad magic".into());
+        }
+        let mut cursor = 8usize;
+        let listing_count = read_u32(&raw, &mut cursor)? as usize;
+        let mut listings = HashMap::with_capacity(listing_count);
+        for _ in 0..listing_count {
+            let path = read_str(&raw, &mut cursor)?;
+            let resolved = read_str(&raw, &mut cursor)?;
+            let at_ms = read_i64(&raw, &mut cursor)?;
+            let entry_count = read_u32(&raw, &mut cursor)? as usize;
+            let mut entries = Vec::with_capacity(entry_count);
+            for _ in 0..entry_count {
+                let name = read_str(&raw, &mut cursor)?;
+                let is_dir = read_u8(&raw, &mut cursor)? != 0;
+                let size = read_u64(&raw, &mut cursor)?;
+                let modified_ms = if read_u8(&raw, &mut cursor)? != 0 {
+                    Some(read_i64(&raw, &mut cursor)?)
+                } else {
+                    None
+                };
+                let child = child_path(&path, &name);
+                entries.push(FolderEntry {
+                    name,
+                    path: child,
+                    is_dir,
+                    size,
+                    modified_ms,
+                });
+            }
+            listings.insert(
+                path.clone(),
+                FolderListing {
+                    resolved,
+                    entries,
+                    at_ms,
+                },
+            );
+        }
+        let size_count = read_u32(&raw, &mut cursor)? as usize;
+        let mut sizes = HashMap::with_capacity(size_count);
+        for _ in 0..size_count {
+            let path = read_str(&raw, &mut cursor)?;
+            sizes.insert(
+                path,
+                SizeRecord {
+                    size: read_u64(&raw, &mut cursor)?,
+                    exact: read_u8(&raw, &mut cursor)? != 0,
+                    verified: read_u8(&raw, &mut cursor)? != 0,
+                    at_ms: read_i64(&raw, &mut cursor)?,
+                },
+            );
+        }
+        let purpose_count = read_u32(&raw, &mut cursor)? as usize;
+        let mut purposes = HashMap::with_capacity(purpose_count);
+        for _ in 0..purpose_count {
+            purposes.insert(
+                read_str(&raw, &mut cursor)?,
+                read_str(&raw, &mut cursor)?,
+            );
+        }
+
+        // Build the tree edges from the restored listings.
+        let mut nodes: HashMap<String, NodeRecord> = HashMap::new();
+        let mut children: HashMap<String, HashSet<String>> = HashMap::new();
+        for (path, listing) in &listings {
+            let parent = std::path::Path::new(path)
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(|parent| parent.to_string_lossy().into_owned());
+            nodes.entry(path.clone()).or_insert(NodeRecord {
+                parent,
+                is_dir: true,
+                purpose: purposes.get(path).cloned(),
+            });
+            let mut set = HashSet::with_capacity(listing.entries.len());
+            for entry in &listing.entries {
+                nodes.entry(entry.path.clone()).or_insert(NodeRecord {
+                    parent: Some(path.clone()),
+                    is_dir: entry.is_dir,
+                    purpose: purposes.get(&entry.path).cloned(),
+                });
+                set.insert(entry.path.clone());
+            }
+            children.insert(path.clone(), set);
+        }
+        for (path, purpose) in purposes {
+            nodes.entry(path.clone()).or_insert(NodeRecord {
+                parent: std::path::Path::new(&path)
+                    .parent()
+                    .map(|parent| parent.to_string_lossy().into_owned()),
+                is_dir: true,
+                purpose: Some(purpose),
+            });
+        }
+
+        *self.listings.lock().unwrap() = listings;
+        *self.nodes.lock().unwrap() = nodes;
+        *self.children.lock().unwrap() = children;
+        *self.sizes.lock().unwrap() = sizes;
+        self.revision.store(0, Ordering::Release);
+        self.size_revision.store(0, Ordering::Release);
+        self.snapshot_dirty.store(false, Ordering::Relaxed);
+        self.last_snapshot_ms.store(now_ms() as u64, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Atomic snapshot write to `path` (temp file + rename).
+    pub fn snapshot_to(&self, path: &std::path::Path) -> std::io::Result<bool> {
+        let bytes = self
+            .snapshot_bytes()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temp = path.with_extension("tmp");
+        std::fs::write(&temp, bytes)?;
+        std::fs::rename(&temp, path)?;
+        self.snapshot_dirty.store(false, Ordering::Relaxed);
+        self.last_snapshot_ms.store(now_ms() as u64, Ordering::Relaxed);
+        Ok(true)
+    }
+
+    /// Restore if the snapshot exists. An absent file is not an error.
+    pub fn restore_from(&self, path: &std::path::Path) -> std::io::Result<bool> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        self.restore_bytes(&bytes)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        Ok(true)
+    }
+
+    /// Write at most once per 30 seconds unless `force`.
+    pub fn snapshot_if_dirty(&self, path: &std::path::Path, force: bool) -> std::io::Result<bool> {
+        if !self.snapshot_dirty.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        let now = now_ms() as u64;
+        if !force && now.saturating_sub(self.last_snapshot_ms.load(Ordering::Relaxed)) < 30_000 {
+            return Ok(false);
+        }
+        self.snapshot_to(path)
+    }
+
+    pub fn snapshot_dirty(&self) -> bool {
+        self.snapshot_dirty.load(Ordering::Relaxed)
+    }
+
 }
+
 
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or(0)
+}
+
+
+fn child_path(parent: &str, name: &str) -> String {
+    if parent == "/" {
+        format!("/{name}")
+    } else {
+        format!("{}/{name}", parent.trim_end_matches('/'))
+    }
+}
+
+fn write_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+fn write_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+fn write_i64(out: &mut Vec<u8>, value: i64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+fn write_str(out: &mut Vec<u8>, value: &str) -> Result<(), String> {
+    let bytes = value.as_bytes();
+    let len = u32::try_from(bytes.len()).map_err(|_| "tree snapshot: string too long")?;
+    write_u32(out, len);
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+fn read_u8(raw: &[u8], cursor: &mut usize) -> Result<u8, String> {
+    let value = *raw.get(*cursor).ok_or("tree snapshot: truncated")?;
+    *cursor += 1;
+    Ok(value)
+}
+fn read_u32(raw: &[u8], cursor: &mut usize) -> Result<u32, String> {
+    let end = cursor.checked_add(4).ok_or("tree snapshot: overflow")?;
+    let bytes: [u8; 4] = raw
+        .get(*cursor..end)
+        .ok_or("tree snapshot: truncated")?
+        .try_into()
+        .map_err(|_| "tree snapshot: truncated")?;
+    *cursor = end;
+    Ok(u32::from_le_bytes(bytes))
+}
+fn read_u64(raw: &[u8], cursor: &mut usize) -> Result<u64, String> {
+    let end = cursor.checked_add(8).ok_or("tree snapshot: overflow")?;
+    let bytes: [u8; 8] = raw
+        .get(*cursor..end)
+        .ok_or("tree snapshot: truncated")?
+        .try_into()
+        .map_err(|_| "tree snapshot: truncated")?;
+    *cursor = end;
+    Ok(u64::from_le_bytes(bytes))
+}
+fn read_i64(raw: &[u8], cursor: &mut usize) -> Result<i64, String> {
+    read_u64(raw, cursor).map(|value| value as i64)
+}
+fn read_str(raw: &[u8], cursor: &mut usize) -> Result<String, String> {
+    let len = read_u32(raw, cursor)? as usize;
+    if len > 1024 * 1024 {
+        return Err("tree snapshot: string too long".into());
+    }
+    let end = cursor.checked_add(len).ok_or("tree snapshot: overflow")?;
+    let bytes = raw.get(*cursor..end).ok_or("tree snapshot: truncated")?;
+    *cursor = end;
+    String::from_utf8(bytes.to_vec()).map_err(|_| "tree snapshot: invalid utf8".into())
 }
 
 #[cfg(test)]
@@ -684,6 +983,21 @@ mod tests {
         assert_eq!(node.parent.as_deref(), Some("/x"));
         index.remove_path("/x");
         assert!(index.node("/x/a").is_none());
+    }
+
+    #[test]
+    fn a_snapshot_round_trips_listings_sizes_and_purpose() {
+        let index = FolderIndex::default();
+        index.apply("/x", "/x", vec![entry("a")]);
+        index.apply_size("/x/a", 4096, true);
+        index.set_purpose("/x/a", Some("cache".into()));
+        let bytes = index.snapshot_bytes().unwrap();
+        let restored = FolderIndex::default();
+        restored.restore_bytes(&bytes).unwrap();
+        assert_eq!(restored.list("/x").entries[0].name, "a");
+        assert_eq!(restored.size("/x/a").size, Some(4096));
+        assert_eq!(restored.node("/x/a").unwrap().purpose.as_deref(), Some("cache"));
+        assert!(!restored.snapshot_dirty());
     }
 
     #[test]

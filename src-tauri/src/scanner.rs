@@ -608,26 +608,26 @@ fn pump_events(
                         );
                     }
                 }
-                let mut nodes = vec![ScanNode {
-                    path: dir.path.clone(),
-                    parent: Path::new(&dir.path)
-                        .parent()
-                        .map(|parent| parent.to_string_lossy().into_owned()),
-                    is_dir: true,
-                    size: (dir.size.dominant() > 0).then_some(dir.size.dominant()),
-                    exact: false,
-                }];
-                nodes.extend(dir.entries.iter().filter(|entry| entry.is_dir).map(|entry| {
-                    let path = join_path(&dir.path, &entry.name);
-                    ScanNode {
-                        path: path.clone(),
-                        parent: Some(dir.path.clone()),
-                        is_dir: true,
-                        size: (entry.size.dominant() > 0).then_some(entry.size.dominant()),
-                        exact: !entry.pending,
-                    }
-                }));
-                store_scan_nodes(&app, &nodes);
+                // Persist the complete directory listing, including files.
+                // After a scan every directory can be served from Store without
+                // another read_dir; the compact snapshot keeps the names cheap.
+                let entries: Vec<sift_store::FolderEntry> = dir
+                    .entries
+                    .iter()
+                    .map(|entry| sift_store::FolderEntry {
+                        name: entry.name.clone(),
+                        path: join_path(&dir.path, &entry.name),
+                        is_dir: entry.is_dir,
+                        size: entry.size.dominant(),
+                        modified_ms: Some(entry.mtime_ms).filter(|value| *value != 0),
+                    })
+                    .collect();
+                if let Some(services) = app.try_state::<AppServices>() {
+                    services
+                        .store
+                        .folders()
+                        .apply(&dir.path, &dir.path, entries);
+                }
             }
             ScanEvent::DirectorySized {
                 key,

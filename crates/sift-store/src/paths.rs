@@ -77,6 +77,11 @@ impl StorePaths {
     pub fn scan_journal(&self) -> PathBuf {
         self.root.join("scan-journal.sqlite")
     }
+
+    /// Compact, compressed snapshot of the Store’s file tree/listings/sizes.
+    pub fn tree_snapshot(&self) -> PathBuf {
+        self.root.join("tree.snapshot.gz")
+    }
 }
 
 #[cfg(test)]

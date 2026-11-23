@@ -171,8 +171,7 @@ impl Store {
             }
         };
 
-        (
-            Self {
+        let store = Self {
                 paths: Some(paths),
                 inner: Mutex::new(Inner {
                     verdicts,
@@ -188,9 +187,13 @@ impl Store {
                 folders: Arc::new(FolderIndex::default()),
                 change_revision: AtomicU64::new(0),
                 change_subscribers: Mutex::new(Vec::new()),
-            },
-            warnings,
-        )
+            };
+        if let Some(paths) = &store.paths {
+            if let Err(error) = store.folders.restore_from(&paths.tree_snapshot()) {
+                eprintln!("tree snapshot restore failed: {error}");
+            }
+        }
+        (store, warnings)
     }
 
     /// A store that keeps everything in memory. Used by tests, by `--no-config`
@@ -581,6 +584,15 @@ impl Store {
         changed
     }
 
+    /// Persist the in-memory tree/listings/sizes. `force` bypasses the 30s
+    /// debounce; call it after a scan or on exit.
+    pub fn snapshot_tree(&self, force: bool) -> std::io::Result<bool> {
+        let Some(paths) = &self.paths else {
+            return Ok(false);
+        };
+        self.folders.snapshot_if_dirty(&paths.tree_snapshot(), force)
+    }
+
     // ---- persistence -------------------------------------------------------
 
     /// Write every document. Atomic per file, so a partial failure leaves the
@@ -615,6 +627,7 @@ impl Store {
         write_document(&paths.history(), &history)?;
         write_document(&paths.routines(), &routines)?;
         write_document(&paths.environment(), &environment)?;
+        let _ = self.snapshot_tree(false);
 
         self.dirty.store(false, Ordering::Relaxed);
         Ok(())
@@ -662,6 +675,7 @@ impl Drop for Store {
         if self.is_dirty() {
             let _ = self.save();
         }
+        let _ = self.snapshot_tree(true);
     }
 }
 
@@ -793,6 +807,30 @@ mod tests {
         assert_eq!(suggestions.len(), 1, "four separate days is a habit");
         assert_eq!(suggestions[0].name, "node_modules");
         let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn tree_snapshot_survives_reopen() {
+        let paths = temp_paths("tree-snapshot");
+        {
+            let (store, _) = Store::open(paths.clone());
+            store.folders().apply(
+                "/snap",
+                "/snap",
+                vec![crate::FolderEntry {
+                    name: "child".into(),
+                    path: "/snap/child".into(),
+                    is_dir: true,
+                    size: 0,
+                    modified_ms: None,
+                }],
+            );
+            store.folders().apply_size("/snap/child", 1234, true);
+            assert!(store.snapshot_tree(true).unwrap());
+        }
+        let (store, _) = Store::open(paths);
+        assert_eq!(store.folders().list("/snap").entries.len(), 1);
+        assert_eq!(store.folders().size("/snap/child").size, Some(1234));
     }
 
     #[test]
