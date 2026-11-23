@@ -187,13 +187,19 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
         .filter(|entry| sift_monitor::policy::resolved_inside_home(&entry.path, home.as_deref()))
         .count();
 
-    // Rules are previewed, not executed: the matches are part of the pending
-    // review, and running a rule stays an explicit user action.
+    // An enabled cleanup rule is itself the user's explicit instruction:
+    // "clean files matching this rule". Run it on every scheduled pass,
+    // independently of the findings auto-execute switch. The preview count is
+    // kept for the notification; the rule's own guards still decide what is
+    // actually removable.
     let rules = services.store.settings().monitor.cleanup_rules;
     let mut rule_matches = 0usize;
     for rule in rules.iter().filter(|rule| rule.enabled) {
         if let Ok(preview) = crate::cleanup_rules::preview_cleanup_rule(rule.clone()) {
             rule_matches += preview.matched;
+        }
+        if let Err(error) = crate::cleanup_rules::run_rule(&services.store, rule) {
+            eprintln!("scheduled cleanup rule \"{}\" failed: {error}", rule.name);
         }
     }
 
@@ -204,12 +210,6 @@ fn run_daily(app: &AppHandle) -> Result<(), String> {
         );
         if !paths.is_empty() {
             crate::analyze::perform_cleanup(&services, &paths, true);
-        }
-        let rules = services.store.settings().monitor.cleanup_rules;
-        for rule in rules.iter().filter(|rule| rule.enabled) {
-            if let Err(error) = crate::cleanup_rules::run_rule(&services.store, rule) {
-                eprintln!("scheduled cleanup rule \"{}\" failed: {error}", rule.name);
-            }
         }
         return Ok(());
     }
