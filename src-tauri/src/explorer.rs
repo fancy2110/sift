@@ -95,6 +95,9 @@ fn entries_with_store_sizes(
 ) -> Vec<DirEntryDto> {
     entries
         .into_iter()
+        // Data is a separate volume/root. Do not show it as an ordinary child
+        // of /System/Volumes, otherwise its bytes appear twice in the UI.
+        .filter(|entry| !sift_store::is_special_volume(&entry.path))
         .map(|entry| DirEntryDto {
             name: entry.name,
             path: entry.path.clone(),
@@ -497,6 +500,25 @@ mod tests {
         let view = index.list(root.to_str().unwrap());
         assert_eq!(view.state, sift_store::ListingState::Fresh);
         assert!(!view.entries.is_empty());
+    }
+
+    #[test]
+    fn the_data_volume_is_not_listed_as_a_volumes_child() {
+        let index = sift_store::FolderIndex::default();
+        index.apply(
+            "/System/Volumes",
+            "/System/Volumes",
+            vec![sift_store::FolderEntry {
+                name: "Data".into(),
+                path: "/System/Volumes/Data".into(),
+                is_dir: true,
+                size: 0,
+                modified_ms: None,
+            }],
+        );
+        let listing = index.list("/System/Volumes");
+        let rows = entries_with_store_sizes(&index, listing.entries);
+        assert!(rows.is_empty());
     }
 
     #[test]

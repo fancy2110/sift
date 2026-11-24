@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-24
+
+### Added
+
+- Store now owns the file tree, directory listings, sizes and purpose; all views read the same in-memory tree.
+- Compact `tree.snapshot.gz` persistence: 20k directories / 200k entries measured at 0.6 MiB; cold restore 28 ms, warm list+size 42 µs for 200 queries.
+- `tree_validate` audit tool checks listing edges and parent/child size consistency.
+- Store business revisions (`store://business-changed`) and directory/size revisions for subscribers.
+- Manual routine execution now reports running / empty / success / partial failure.
+
+### Changed
+
+- Browsing paints the directory listing first, then loads all missing child sizes in one parallel batch (up to 4 walkers).
+- Parent totals are always the sum of their direct children, including files; a scan ingest recomputes the whole tree.
+- Directory sizes are marked verified/unverified; scan/derived values no longer suppress a recursive measurement.
+- Size walks skip `/System/Volumes/Data` as an independent volume; it is never counted under `/System` or `/System/Volumes` and is hidden from the Volumes child list to avoid duplication.
+
+### Fixed
+
+- `/System` and `/Users` no longer show a parent total that disagrees with the visible rows.
+- Opening a folder no longer blocks on legacy `size-tree.json` parsing.
+- Enabled cleanup rules run on every daily scheduled pass, independent of the findings auto-execute switch.
+- Removed the legacy `size-tree.json` write path and delete the old file after a valid snapshot exists.
+
+
 ## [0.5.3] - 2026-11-17
 
 ### Fixed
