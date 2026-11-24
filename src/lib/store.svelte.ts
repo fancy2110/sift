@@ -956,6 +956,9 @@ class AppStore {
     this.fillExplorerSizes(resolved, entries, () => {
       if (this.explorerRightPath === resolved) this.explorerRight = [...this.explorerRight];
     });
+    if (entries.every((entry) => !entry.isDir || entry.size > 0) && rowTotal > 0) {
+      this.explorerTotal = rowTotal;
+    }
   }
 
   /** Scan the selected directory itself for its recursive total. */
@@ -964,8 +967,8 @@ class AppStore {
       const sizes = await cachedSizes([path]);
       if (this.explorerPath === path) {
         const size = sizes.get(path);
-        if (size !== undefined) {
-          this.explorerTotal = Math.max(this.explorerTotal ?? 0, size);
+        if (size !== undefined && !this.explorerTotal) {
+          this.explorerTotal = size;
         }
       }
     } catch {
@@ -1089,27 +1092,31 @@ class AppStore {
       return;
     }
     this.explorerSizesSettled = false;
-    let left = dirs.length;
-    // The list is already on screen; each child measures itself and the
-    // parent total is recomputed from the rows as answers arrive.
-    for (const dir of dirs) {
-      void cachedSizes([dir])
-        .then((sizes) => {
+    // The list is already on screen. Ask for all missing child totals in one
+    // batch so the backend can run them in parallel instead of issuing one
+    // IPC round-trip per row.
+    void cachedSizes(dirs)
+      .then((sizes) => {
+        if (this.explorerRightPath !== path) return;
+        for (const dir of dirs) {
           const size = sizes.get(dir);
-          if (!size || this.explorerRightPath !== path) return;
+          if (size === undefined) continue;
           const entry = this.explorerRight.find((item) => item.path === dir);
-          if (!entry) return;
+          if (!entry) continue;
           entry.size = size;
-          this.sizeRevision += 1;
+        }
+        this.sizeRevision += 1;
+        // Only replace the header with the row sum once every requested
+        // child answered; otherwise a partial sum looks like a count mismatch.
+        if (dirs.every((dir) => sizes.has(dir))) {
           const total = this.explorerRight.reduce((sum, item) => sum + item.size, 0);
           if (total > 0) this.explorerTotal = total;
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          left -= 1;
-          if (left === 0) this.explorerSizesSettled = true;
-        });
-    }
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.explorerSizesSettled = true;
+      });
   }
 
   private async refreshCurrentFiles() {

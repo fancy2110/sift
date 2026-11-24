@@ -90,6 +90,18 @@ cargo run -p sift-store --release --example tree_snapshot_bench
 
 外推 1M 条目约 3–4 MiB 快照，仍远低于旧的 67 MB JSON；恢复远低于 300 ms。实际文件数/名字长度会改变压缩率，因此应以真实目录重跑 benchmark。
 
+## 6.1 浏览页加载顺序
+
+1. `openExplorer` 只等待一次 Store 列表查询；列表命令不再解析旧 `size-tree`，也不做任何尺寸 walk。
+2. `explorerRight`/`explorerRightPath` 一次赋值，列表开始渲染。
+3. 渲染后，`fillExplorerSizes` 把所有缺失目录作为 **一个批次** 交给 `sizesFor`：
+   - 先 `dirSizePeek` 从 Store 批量取已知值；
+   - 仍缺失的路径一次 `dirSizesTree`，后端用最多 4 个 worker 并行 walk。
+4. 每批尺寸返回后直接更新行，最后用完整行和替换头部总数；不会出现“部分子项已更新但总数还是旧值”的跳变。
+5. 尺寸加载失败不阻塞列表；列表始终先可用。
+
+这满足“先展示列表 + 并行加载尺寸”，而不是等所有目录 walk 完才显示。
+
 ## 7. 写入时机
 
 - `scan_index_ingest` 完成后：`Store::snapshot_tree(true)`；

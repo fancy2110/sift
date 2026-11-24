@@ -5,9 +5,9 @@
 //! recomputes each ancestor as the sum of its children, and the tree is
 //! persisted so the numbers survive a relaunch. Views only read it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -215,6 +215,38 @@ fn walk(path: &str) -> (u64, bool) {
     (size, !partial)
 }
 
+/// Measure independent directories on a small worker pool. Explorer asks for
+/// all missing child totals in one batch; doing those walks serially made the
+/// first paint wait on the largest child.
+fn measure_paths(paths: Vec<String>) -> Vec<(String, u64, bool)> {
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1)
+        .clamp(1, 4)
+        .min(paths.len());
+    let queue = Arc::new(Mutex::new(VecDeque::from(paths)));
+    let results = Arc::new(Mutex::new(Vec::new()));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let queue = Arc::clone(&queue);
+            let results = Arc::clone(&results);
+            scope.spawn(move || loop {
+                let path = queue.lock().unwrap().pop_front();
+                let Some(path) = path else { break };
+                let (size, full) = walk(&path);
+                results.lock().unwrap().push((path, size, full));
+            });
+        }
+    });
+    Arc::try_unwrap(results)
+        .ok()
+        .and_then(|mutex| mutex.into_inner().ok())
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanEntryDto {
@@ -300,16 +332,6 @@ pub fn record_scan_dir(path: &str, size: u64) {
 }
 
 /// Cached totals only (no walking); used to paint instantly.
-/// Read a known size without the Tauri command wrapper. Used as a fallback
-/// while Store sizes are still being verified.
-pub fn peek_size(path: &str) -> Option<u64> {
-    // This is used while building a listing, not on the scan hot path. Blocking
-    // here is preferable to silently showing a much smaller derived total;
-    // recover the lock if a previous writer panicked.
-    let data = tree().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    data.sizes.get(path).copied()
-}
-
 #[tauri::command]
 pub fn dir_size_peek(services: State<'_, AppServices>, paths: Vec<String>) -> Vec<DirSizeDto> {
     // Store first: a size task fills it, so every page can reuse the value
@@ -387,13 +409,7 @@ pub async fn dir_sizes_tree(
                 }
             }
         }
-        let results: Vec<(String, u64, bool)> = measured
-            .into_iter()
-            .map(|path| {
-                let (size, full) = walk(&path);
-                (path, size, full)
-            })
-            .collect();
+        let results = measure_paths(measured);
         {
             let mut data = tree().lock().unwrap();
             for (path, size, full) in &results {
@@ -442,6 +458,28 @@ mod tests {
                 .insert(child.to_string());
         }
         data
+    }
+
+    #[test]
+    fn measures_independent_directories_in_one_batch() {
+        let base = std::env::temp_dir().join(format!("sift-measure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let a = base.join("a");
+        let b = base.join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("one.bin"), vec![0u8; 11]).unwrap();
+        std::fs::write(b.join("two.bin"), vec![0u8; 7]).unwrap();
+        let mut results = measure_paths(vec![
+            a.to_string_lossy().into_owned(),
+            b.to_string_lossy().into_owned(),
+        ]);
+        results.sort_by(|left, right| left.0.cmp(&right.0));
+        assert!(results[0].1 >= 11);
+        assert!(results[0].2);
+        assert!(results[1].1 >= 7);
+        assert!(results[1].2);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
