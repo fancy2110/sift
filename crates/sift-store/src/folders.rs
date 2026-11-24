@@ -227,32 +227,24 @@ impl FolderIndex {
         self.register_listing(requested, &entries);
         self.snapshot_dirty.store(true, Ordering::Relaxed);
         // A parent's total is the sum of its direct children (including
-        // direct files). Recompute it as soon as the listing supplies edges.
-        let exact_parent = self
-            .sizes
+        // direct files). Recompute it as soon as the listing supplies edges;
+        // no exact-parent exception, because the UI must agree with the rows.
+        let children = self
+            .children
             .lock()
             .unwrap()
             .get(requested)
-            .map(|record| record.exact)
-            .unwrap_or(false);
-        if !exact_parent {
-            let children = self
-                .children
-                .lock()
-                .unwrap()
-                .get(requested)
-                .cloned()
-                .unwrap_or_default();
-            let sizes = self.sizes.lock().unwrap();
-            let known = children
-                .iter()
-                .filter_map(|child| sizes.get(child).map(|record| record.size))
-                .sum::<u64>();
-            let has_known = children.iter().any(|child| sizes.contains_key(child));
-            drop(sizes);
-            if has_known {
-                self.apply_derived_size(requested, known);
-            }
+            .cloned()
+            .unwrap_or_default();
+        let sizes = self.sizes.lock().unwrap();
+        let known = children
+            .iter()
+            .filter_map(|child| sizes.get(child).map(|record| record.size))
+            .sum::<u64>();
+        let has_known = children.iter().any(|child| sizes.contains_key(child));
+        drop(sizes);
+        if has_known {
+            self.apply_derived_size(requested, known);
         }
         let revision = self.revision.fetch_add(1, Ordering::AcqRel) + 1;
         let change = FolderChange {
@@ -587,13 +579,6 @@ impl FolderIndex {
             if parent.is_empty() || parent == current {
                 break;
             }
-            if sizes
-                .get(&parent)
-                .map(|record| record.exact)
-                .unwrap_or(false)
-            {
-                break;
-            }
             let Some(kids) = children.get(&parent) else {
                 break;
             };
@@ -619,6 +604,67 @@ impl FolderIndex {
             current = parent;
         }
         out
+    }
+
+    /// Rebuild every directory total from its direct children. Called after a
+    /// scan ingest so a full scan's exact parent numbers cannot disagree with
+    /// the child rows; the UI wants parent = sum(children), not a mixed source.
+    pub fn recompute_all_sizes(&self) -> usize {
+        let children = self.children.lock().unwrap().clone();
+        let mut parents: Vec<(usize, String)> = children
+            .keys()
+            .map(|path| (path.matches('/').count(), path.clone()))
+            .collect();
+        parents.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut sizes = self.sizes.lock().unwrap();
+        let mut changes = Vec::new();
+        for (_, parent) in parents {
+            let Some(kids) = children.get(&parent) else {
+                continue;
+            };
+            if !kids.iter().any(|child| sizes.contains_key(child)) {
+                continue;
+            }
+            let total: u64 = kids
+                .iter()
+                .filter_map(|child| sizes.get(child).map(|record| record.size))
+                .sum();
+            let changed = sizes
+                .get(&parent)
+                .map(|record| record.size != total || record.exact)
+                .unwrap_or(true);
+            sizes.insert(
+                parent.clone(),
+                SizeRecord {
+                    size: total,
+                    exact: false,
+                    verified: false,
+                    at_ms: now_ms(),
+                },
+            );
+            if changed {
+                changes.push(parent);
+            }
+        }
+        if !changes.is_empty() {
+            let revision = self.size_revision.fetch_add(1, Ordering::AcqRel) + 1;
+            let mut subscribers = self.size_subscribers.lock().unwrap();
+            for path in &changes {
+                let size = sizes.get(path).map(|record| record.size).unwrap_or(0);
+                subscribers.retain(|sender| {
+                    sender
+                        .send(SizeChange {
+                            revision,
+                            path: path.clone(),
+                            size,
+                            exact: false,
+                        })
+                        .is_ok()
+                });
+            }
+            self.snapshot_dirty.store(true, Ordering::Relaxed);
+        }
+        changes.len()
     }
 
     pub fn subscribe_sizes(&self) -> Receiver<SizeChange> {
@@ -998,6 +1044,65 @@ mod tests {
         assert_eq!(restored.size("/x/a").size, Some(4096));
         assert_eq!(restored.node("/x/a").unwrap().purpose.as_deref(), Some("cache"));
         assert!(!restored.snapshot_dirty());
+    }
+
+    #[test]
+    fn a_parent_is_the_sum_of_its_children_even_after_an_exact_total() {
+        let index = FolderIndex::default();
+        index.apply(
+            "/sum",
+            "/sum",
+            vec![
+                FolderEntry {
+                    name: "file".into(),
+                    path: "/sum/file".into(),
+                    is_dir: false,
+                    size: 10,
+                    modified_ms: None,
+                },
+                FolderEntry {
+                    name: "dir".into(),
+                    path: "/sum/dir".into(),
+                    is_dir: true,
+                    size: 0,
+                    modified_ms: None,
+                },
+            ],
+        );
+        index.apply_size("/sum", 1000, true);
+        index.apply_size("/sum/dir", 5, true);
+        assert_eq!(index.size("/sum").size, Some(15));
+        assert!(!index.size("/sum").exact);
+    }
+
+    #[test]
+    fn recompute_all_overwrites_exact_parents_with_child_sums() {
+        let index = FolderIndex::default();
+        index.apply(
+            "/sum",
+            "/sum",
+            vec![
+                FolderEntry {
+                    name: "file".into(),
+                    path: "/sum/file".into(),
+                    is_dir: false,
+                    size: 10,
+                    modified_ms: None,
+                },
+                FolderEntry {
+                    name: "dir".into(),
+                    path: "/sum/dir".into(),
+                    is_dir: true,
+                    size: 0,
+                    modified_ms: None,
+                },
+            ],
+        );
+        index.apply_size("/sum/dir", 5, true);
+        index.apply_size("/sum", 1000, true);
+        assert_eq!(index.size("/sum").size, Some(1000));
+        index.recompute_all_sizes();
+        assert_eq!(index.size("/sum").size, Some(15));
     }
 
     #[test]

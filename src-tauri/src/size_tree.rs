@@ -311,6 +311,10 @@ pub async fn scan_index_ingest(
                 .folders()
                 .apply_size(&entry.path, entry.size, true);
         }
+        // Make every parent equal its current direct-child sum. A full scan
+        // may report an exact parent total from a different boundary; the UI
+        // must still agree with the child rows.
+        store.folders().recompute_all_sizes();
         // Persist the shared tree after the scan's final ingest, so a restart
         // can restore listings/sizes without a fresh walk.
         let _ = store.snapshot_tree(true);
