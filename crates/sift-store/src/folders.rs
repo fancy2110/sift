@@ -721,7 +721,7 @@ impl FolderIndex {
                 }
             }
             let stored = sizes.get(parent).map(|record| record.size);
-            if stored != Some(child_sum) {
+            if stored != Some(child_sum) || missing > 0 {
                 report.size_mismatches.push(SizeMismatch {
                     path: parent.clone(),
                     stored,
