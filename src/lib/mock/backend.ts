@@ -631,7 +631,8 @@ export function createMockBackend(bus: EventBus): MockBackend {
             paths.map((path) => ({
               path,
               size: 1_210_000,
-              partial: false
+              partial: false,
+              verified: true
             })) as unknown as T
           );
           break;
@@ -642,7 +643,8 @@ export function createMockBackend(bus: EventBus): MockBackend {
             paths.map((path) => ({
               path,
               size: 1_200_000 + path.length * 1000,
-              partial: false
+              partial: false,
+              verified: true
             })) as unknown as T
           );
           break;
