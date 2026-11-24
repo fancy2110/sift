@@ -89,17 +89,10 @@ fn entries_with_store_sizes(
             path: entry.path.clone(),
             is_dir: entry.is_dir,
             size: if entry.is_dir {
-                let store_size = folders.size(&entry.path).size.unwrap_or(entry.size);
-                // The legacy size index may have a measured total that the
-                // scan/listing path has not verified yet. Prefer the larger
-                // known value and feed it back as a derived parent total.
-                let legacy = crate::size_tree::peek_size(&entry.path).unwrap_or(0);
-                if legacy > store_size {
-                    folders.apply_derived_size(&entry.path, legacy);
-                    legacy
-                } else {
-                    store_size
-                }
+                // Keep listing construction bounded: never parse the legacy
+                // size index here. A missing/derived total is filled by the
+                // parallel size pass after the list is painted.
+                folders.size(&entry.path).size.unwrap_or(entry.size)
             } else {
                 entry.size
             },
