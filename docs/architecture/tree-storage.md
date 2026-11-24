@@ -124,3 +124,4 @@ cargo run -p sift-store --release --example tree_snapshot_bench
 2. 快照不保存订阅者/前端状态；恢复后 revision 从 0 开始。
 3. `size-tree.json` 已停止写入；启动时删除旧文件，模块只保留为进程内兼容索引。Store 快照是唯一持久事实。
 4. 文件名/列表都在内存中；超大磁盘（千万级文件）仍需分片/按需淘汰策略。
+5. 尺寸 walk 不跨挂载点（`is_same_volume`），避免 `/System/Volumes/Data` 被算进系统卷子目录后与父级/行显示不一致。

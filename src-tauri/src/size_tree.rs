@@ -180,6 +180,7 @@ fn record(data: &mut TreeData, path: &str, size: u64, exact: bool) {
 fn walk(path: &str) -> (u64, bool) {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
+    let root = std::path::Path::new(path);
     let mut size = 0u64;
     let mut visited = 0u64;
     let mut partial = false;
@@ -202,7 +203,12 @@ fn walk(path: &str) -> (u64, bool) {
                 continue;
             };
             if meta.is_dir() {
-                stack.push(item.path());
+                // Do not cross a mount point: /System/Volumes/Data is another
+                // volume, and including it makes the child row disagree with
+                // the parent total.
+                if sift_platform::is_same_volume(root, &item.path()) {
+                    stack.push(item.path());
+                }
             } else if meta.is_file() {
                 #[cfg(unix)]
                 if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {

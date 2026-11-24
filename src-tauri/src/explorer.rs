@@ -276,6 +276,7 @@ pub(crate) fn recursive_size(path: &str) -> DirSizeDto {
     // once. Only multi-link files need tracking, which keeps this small.
     #[cfg(unix)]
     let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+    let root = Path::new(path);
     let mut stack: Vec<PathBuf> = vec![Path::new(path).to_path_buf()];
 
     while let Some(dir) = stack.pop() {
@@ -296,7 +297,9 @@ pub(crate) fn recursive_size(path: &str) -> DirSizeDto {
                 continue;
             }
             if meta.is_dir() {
-                stack.push(item.path());
+                if sift_platform::is_same_volume(root, &item.path()) {
+                    stack.push(item.path());
+                }
             } else {
                 #[cfg(unix)]
                 if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
