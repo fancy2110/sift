@@ -198,6 +198,9 @@
             <span class="fx-file-name">{entry.name}</span>
             <span class="fx-file-dir">
               {entry.isDir ? t('explorer.folderBadge') : ''}
+              {#if entry.special}
+                · {t('explorer.independentVolume')}
+              {/if}
               {#if entry.isDir && (ageDays(entry) ?? 0) >= 180}
                 · {t('explorer.unusedDays', [String(ageDays(entry) ?? 0)])}
               {/if}

@@ -154,3 +154,4 @@ cargo run -p sift-store --release --example tree_validate --   "$HOME/Library/Ap
 4. 文件名/列表都在内存中；超大磁盘（千万级文件）仍需分片/按需淘汰策略。
 5. 尺寸 walk 会跟随挂载卷（例如 `/System/Volumes/Data`），与 Finder/du 的递归口径一致；父目录始终按子项之和计算。
 6. 如果卷权限导致子目录只能部分测量，`exact=false` 会保留已知值，不应把 partial 当成最终值。
+7. `/System/Volumes/Data` 是特殊独立卷：可单独测量/展示，但不计入 `/System` 或 `/System/Volumes` 的父级总和；行上标记为“独立卷”。

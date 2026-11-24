@@ -29,6 +29,9 @@ pub struct DirEntryDto {
     /// derived partial sum).
     #[serde(default)]
     pub size_verified: bool,
+    /// Independent volume embedded in the tree; excluded from parent sums.
+    #[serde(default)]
+    pub special: bool,
 }
 
 /// One file below a directory (recursive listing for the right pane).
@@ -105,6 +108,7 @@ fn entries_with_store_sizes(
                 entry.size
             },
             size_verified: !entry.is_dir || folders.size(&entry.path).verified,
+            special: entry.is_dir && sift_store::is_special_volume(&entry.path),
             modified_ms: entry.modified_ms,
         })
         .collect()
@@ -220,6 +224,7 @@ pub(crate) fn read_entries(path: &str) -> Result<DirListingDto, String> {
             size,
             modified_ms,
             size_verified: !is_dir,
+            special: is_dir && sift_store::is_special_volume(&entry_path.to_string_lossy()),
         });
     }
     entries.sort_by(|a, b| {
@@ -313,9 +318,11 @@ pub(crate) fn recursive_size(path: &str) -> DirSizeDto {
                 continue;
             }
             if meta.is_dir() {
-                // Include mounted volumes: Finder/du count them in the
-                // recursive total of their enclosing directory.
-                stack.push(item.path());
+                // The data volume is an independent root; never fold it into
+                // the enclosing system-volume total.
+                if !sift_store::is_special_volume(&item.path().to_string_lossy()) {
+                    stack.push(item.path());
+                }
             } else {
                 #[cfg(unix)]
                 if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {

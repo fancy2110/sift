@@ -202,9 +202,12 @@ fn walk(path: &str) -> (u64, bool) {
                 continue;
             };
             if meta.is_dir() {
-                // Follow mounted volumes: /System/Volumes/Data is part of the
-                // recursive total that du/Finder reports for /System.
-                stack.push(item.path());
+                // /System/Volumes/Data is an independent volume. Do not fold
+                // it into the system-volume total; it is measured directly
+                // when the user opens it.
+                if !sift_store::is_special_volume(&item.path().to_string_lossy()) {
+                    stack.push(item.path());
+                }
             } else if meta.is_file() {
                 #[cfg(unix)]
                 if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {

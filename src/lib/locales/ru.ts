@@ -510,6 +510,7 @@ export const ru: Record<string, string> = {
   'explorer.filesEmpty': 'В этой папке нет файлов',
   'explorer.pickFolder': 'Выберите папку слева, чтобы увидеть файлы',
   'explorer.folderBadge': 'Папка',
+  'explorer.independentVolume': 'независимый том',
   'explorer.aiReading': 'Читаю…',
   'explorer.verdictSafe': 'Можно удалить',
   'explorer.verdictCaution': 'Осторожно',

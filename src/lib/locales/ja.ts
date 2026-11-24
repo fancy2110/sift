@@ -506,6 +506,7 @@ export const ja: Record<string, string> = {
   'explorer.filesEmpty': 'このフォルダにファイルはありません',
   'explorer.pickFolder': '左側のフォルダを選ぶとファイルが表示されます',
   'explorer.folderBadge': 'フォルダ',
+  'explorer.independentVolume': '独立ボリューム',
   'explorer.aiReading': '解説中…',
   'explorer.verdictSafe': '削除可',
   'explorer.verdictCaution': '注意',

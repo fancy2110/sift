@@ -776,7 +776,9 @@ class AppStore {
     if (!entry) return;
     entry.size = change.size;
     this.sizeRevision += 1;
-    const total = this.explorerRight.reduce((sum, item) => sum + item.size, 0);
+    const total = this.explorerRight
+      .filter((item) => !item.special)
+      .reduce((sum, item) => sum + item.size, 0);
     if (total > 0) this.explorerTotal = total;
   }
 
@@ -949,7 +951,9 @@ class AppStore {
     // showing "no size") while a fresh measurement is in flight.
     const knownTotal = this.knownSize(resolved);
     if (knownTotal !== undefined) seedSize(resolved, knownTotal);
-    const rowTotal = entries.reduce((sum, entry) => sum + entry.size, 0);
+    const rowTotal = entries
+      .filter((entry) => !entry.special)
+      .reduce((sum, entry) => sum + entry.size, 0);
     this.explorerTotal = Math.max(knownTotal ?? 0, rowTotal) || null;
     if (knownTotal === undefined && rowTotal === 0) void this.loadExplorerTotal(resolved);
 
@@ -1112,7 +1116,9 @@ class AppStore {
         // Only replace the header with the row sum once every requested
         // child answered; otherwise a partial sum looks like a count mismatch.
         if (dirs.every((dir) => sizes.has(dir))) {
-          const total = this.explorerRight.reduce((sum, item) => sum + item.size, 0);
+          const total = this.explorerRight
+            .filter((item) => !item.special)
+            .reduce((sum, item) => sum + item.size, 0);
           if (total > 0) this.explorerTotal = total;
         }
       })
