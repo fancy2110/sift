@@ -1086,7 +1086,9 @@ class AppStore {
     entries: DirEntry[],
     _apply: () => void
   ) {
-    const dirs = entries.filter((entry) => entry.isDir && entry.size === 0).map((entry) => entry.path);
+    const dirs = entries
+      .filter((entry) => entry.isDir && (!entry.sizeVerified || entry.size === 0))
+      .map((entry) => entry.path);
     if (dirs.length === 0) {
       this.explorerSizesSettled = true;
       return;
@@ -1104,6 +1106,7 @@ class AppStore {
           const entry = this.explorerRight.find((item) => item.path === dir);
           if (!entry) continue;
           entry.size = size;
+          entry.sizeVerified = true;
         }
         this.sizeRevision += 1;
         // Only replace the header with the row sum once every requested

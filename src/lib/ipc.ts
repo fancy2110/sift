@@ -135,12 +135,16 @@ export interface DirEntry {
   size: number;
   /** Last modification time (Unix ms) when readable. */
   modifiedMs?: number | null;
+  /** Directory total is recursively verified, not a derived partial sum. */
+  sizeVerified?: boolean;
 }
 
 export interface DirSize {
   path: string;
   size: number;
   partial: boolean;
+  /** Recursive Store measurement; false for derived/scan values. */
+  verified?: boolean;
 }
 
 export interface FileEntry {

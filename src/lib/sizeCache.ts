@@ -11,6 +11,7 @@ interface CachedSize {
   /** true when the value came from a full walk of this path; derived sums
    * are false so an exact walk is never double-counted. */
   exact?: boolean;
+  verified?: boolean;
 }
 
 /** Totals older than this are recomputed; anything younger is reused. */
@@ -58,7 +59,7 @@ export async function sizesFor(
   const misses: string[] = [];
   for (const path of paths) {
     const hit = map.get(path);
-    if (!force && hit && now - hit.at < TTL_MS) out.set(path, hit.size);
+    if (!force && hit && hit.verified && now - hit.at < TTL_MS) out.set(path, hit.size);
     else misses.push(path);
   }
   // Hydrate from the backend's authoritative tree first; only walk what it
@@ -69,8 +70,13 @@ export async function sizesFor(
       // The backend's derived totals (sum of measured children) are good
       // enough to render immediately; exact=false lets a later walk improve
       // them without discarding an already known number.
-      if (size.size > 0 || !size.partial) {
-        map.set(size.path, { size: size.size, at: now, exact: !size.partial });
+      if (size.verified) {
+        map.set(size.path, {
+          size: size.size,
+          at: now,
+          exact: !size.partial,
+          verified: true
+        });
         out.set(size.path, size.size);
       }
     }
@@ -78,10 +84,15 @@ export async function sizesFor(
   const pending = misses.filter((path) => inflight.has(path) && !out.has(path));
   const fresh = misses.filter((path) => !inflight.has(path) && !out.has(path));
   if (fresh.length > 0) {
-    const request = dirSizesTree(fresh).then((sizes: Awaited<ReturnType<typeof dirSizesTree>>) => {
+    const request = dirSizesTree(fresh, true).then((sizes: Awaited<ReturnType<typeof dirSizesTree>>) => {
       for (const size of sizes) {
-        map.set(size.path, { size: size.size, at: now, exact: true });
-        out.set(size.path, size.size);
+        map.set(size.path, {
+          size: size.size,
+          at: now,
+          exact: !size.partial,
+          verified: !size.partial
+        });
+        if (!size.partial) out.set(size.path, size.size);
       }
     });
     for (const path of fresh) {
@@ -106,7 +117,7 @@ export async function sizesFor(
 /** Record a size that is already known (e.g. a volume's used bytes) without
  * walking the subtree. */
 export function seedSize(path: string, size: number): void {
-  load().set(path, { size, at: Date.now(), exact: true });
+  load().set(path, { size, at: Date.now(), exact: true, verified: true });
   scheduleFlush();
 }
 

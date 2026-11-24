@@ -135,6 +135,32 @@ pub struct SizeChange {
     pub exact: bool,
 }
 
+/// One directory whose stored total differs from the sum of its direct
+/// children, or whose listing disagrees with the tree edges.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SizeMismatch {
+    pub path: String,
+    pub stored: Option<u64>,
+    pub child_sum: u64,
+    pub children: usize,
+    pub missing_child_sizes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeValidation {
+    pub directories: usize,
+    pub listing_mismatches: usize,
+    pub size_mismatches: Vec<SizeMismatch>,
+}
+
+impl TreeValidation {
+    pub fn is_consistent(&self) -> bool {
+        self.listing_mismatches == 0 && self.size_mismatches.is_empty()
+    }
+}
+
 /// In-memory, Store-owned folder read model.
 #[derive(Debug)]
 pub struct FolderIndex {
@@ -667,6 +693,47 @@ impl FolderIndex {
         changes.len()
     }
 
+    /// Audit the read model against its own tree edges. This is deliberately
+    /// read-only; use `recompute_all_sizes` to heal size mismatches.
+    pub fn validate(&self) -> TreeValidation {
+        let children = self.children.lock().unwrap().clone();
+        let listings = self.listings.lock().unwrap().clone();
+        let sizes = self.sizes.lock().unwrap().clone();
+        let mut report = TreeValidation {
+            directories: children.len(),
+            listing_mismatches: 0,
+            size_mismatches: Vec::new(),
+        };
+        for (parent, kids) in &children {
+            if let Some(listing) = listings.get(parent) {
+                let listed: HashSet<&str> = listing.entries.iter().map(|entry| entry.path.as_str()).collect();
+                let child_set: HashSet<&str> = kids.iter().map(String::as_str).collect();
+                if listed != child_set {
+                    report.listing_mismatches += 1;
+                }
+            }
+            let mut child_sum = 0u64;
+            let mut missing = 0usize;
+            for child in kids {
+                match sizes.get(child) {
+                    Some(record) => child_sum = child_sum.saturating_add(record.size),
+                    None => missing += 1,
+                }
+            }
+            let stored = sizes.get(parent).map(|record| record.size);
+            if stored != Some(child_sum) {
+                report.size_mismatches.push(SizeMismatch {
+                    path: parent.clone(),
+                    stored,
+                    child_sum,
+                    children: kids.len(),
+                    missing_child_sizes: missing,
+                });
+            }
+        }
+        report
+    }
+
     pub fn subscribe_sizes(&self) -> Receiver<SizeChange> {
         let (sender, receiver) = channel();
         self.size_subscribers.lock().unwrap().push(sender);
@@ -847,6 +914,9 @@ impl FolderIndex {
         *self.sizes.lock().unwrap() = sizes;
         self.revision.store(0, Ordering::Release);
         self.size_revision.store(0, Ordering::Release);
+        // Snapshots from older builds may carry exact parent totals. Rebuild
+        // them from the restored children so the invariant is true after open.
+        self.recompute_all_sizes();
         self.snapshot_dirty.store(false, Ordering::Relaxed);
         self.last_snapshot_ms.store(now_ms() as u64, Ordering::Relaxed);
         Ok(())
@@ -1161,6 +1231,28 @@ mod tests {
         assert!(!parent.exact);
         assert!(receiver.try_recv().is_ok());
         assert!(receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn validation_detects_and_recompute_heals_a_parent_sum_mismatch() {
+        let index = FolderIndex::default();
+        index.apply(
+            "/check",
+            "/check",
+            vec![FolderEntry {
+                name: "file".into(),
+                path: "/check/file".into(),
+                is_dir: false,
+                size: 10,
+                modified_ms: None,
+            }],
+        );
+        index.apply_size("/check", 99, true);
+        let report = index.validate();
+        assert!(!report.is_consistent());
+        assert_eq!(report.size_mismatches.len(), 1);
+        index.recompute_all_sizes();
+        assert!(index.validate().is_consistent());
     }
 
     #[test]
