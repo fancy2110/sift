@@ -125,6 +125,20 @@ cargo run -p sift-store --release --example tree_snapshot_bench
 
 这保证扫描结果落盘，同时避免每次浏览都重写整个快照。崩溃最多丢失最近 30 秒的树变更；对“可重新扫描/可恢复”的磁盘事实可接受。
 
+## 7.1 自检
+
+```bash
+cargo run -p sift-store --release --example tree_validate --   "$HOME/Library/Application Support/Sift/tree.snapshot.gz"
+```
+
+输出：
+
+- `directories`
+- `listingMismatches`：列表条目和 children 边不一致的目录数
+- `sizeMismatches`：父目录记录值 ≠ 直接子项之和的列表
+
+任何 mismatch 都会返回非零退出码。扫描 ingest 后会先 `recompute_all_sizes` 再写快照，因此正常快照应通过校验。
+
 ## 8. 集成
 
 - `scanner.rs`：`DirectoryListed` 直接把目录的完整列表（含文件）写入 Store；`DirectorySized` 写大小。
@@ -138,4 +152,5 @@ cargo run -p sift-store --release --example tree_snapshot_bench
 2. 快照不保存订阅者/前端状态；恢复后 revision 从 0 开始。
 3. `size-tree.json` 已停止写入；启动时删除旧文件，模块只保留为进程内兼容索引。Store 快照是唯一持久事实。
 4. 文件名/列表都在内存中；超大磁盘（千万级文件）仍需分片/按需淘汰策略。
-5. 尺寸 walk 不跨挂载点（`is_same_volume`），避免 `/System/Volumes/Data` 被算进系统卷子目录后与父级/行显示不一致。
+5. 尺寸 walk 会跟随挂载卷（例如 `/System/Volumes/Data`），与 Finder/du 的递归口径一致；父目录始终按子项之和计算。
+6. 如果卷权限导致子目录只能部分测量，`exact=false` 会保留已知值，不应把 partial 当成最终值。

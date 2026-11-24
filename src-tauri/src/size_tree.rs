@@ -180,7 +180,6 @@ fn record(data: &mut TreeData, path: &str, size: u64, exact: bool) {
 fn walk(path: &str) -> (u64, bool) {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
-    let root = std::path::Path::new(path);
     let mut size = 0u64;
     let mut visited = 0u64;
     let mut partial = false;
@@ -203,12 +202,9 @@ fn walk(path: &str) -> (u64, bool) {
                 continue;
             };
             if meta.is_dir() {
-                // Do not cross a mount point: /System/Volumes/Data is another
-                // volume, and including it makes the child row disagree with
-                // the parent total.
-                if sift_platform::is_same_volume(root, &item.path()) {
-                    stack.push(item.path());
-                }
+                // Follow mounted volumes: /System/Volumes/Data is part of the
+                // recursive total that du/Finder reports for /System.
+                stack.push(item.path());
             } else if meta.is_file() {
                 #[cfg(unix)]
                 if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
@@ -307,9 +303,12 @@ pub async fn scan_index_ingest(
         }
         drop(data);
         for entry in &entries {
+            // Scan totals are useful immediately, but a scan can stop at a
+            // mount/permission boundary. Mark them unverified so Explorer's
+            // size pass can obtain the recursive value before trusting them.
             store
                 .folders()
-                .apply_size(&entry.path, entry.size, true);
+                .apply_measured_size(&entry.path, entry.size, true);
         }
         // Make every parent equal its current direct-child sum. A full scan
         // may report an exact parent total from a different boundary; the UI
@@ -357,12 +356,14 @@ pub fn dir_size_peek(services: State<'_, AppServices>, paths: Vec<String>) -> Ve
                         path,
                         size: view.size.unwrap_or(0),
                         partial: !view.exact,
+                        verified: view.verified,
                     }
                 } else {
                     DirSizeDto {
                         path,
                         size: 0,
                         partial: true,
+                        verified: false,
                     }
                 }
             })
@@ -377,6 +378,7 @@ pub fn dir_size_peek(services: State<'_, AppServices>, paths: Vec<String>) -> Ve
                     path,
                     size: view.size.unwrap_or(0),
                     partial: !view.exact,
+                    verified: view.verified,
                 };
             }
             let size = data.sizes.get(&path).copied().unwrap_or(0);
@@ -385,6 +387,7 @@ pub fn dir_size_peek(services: State<'_, AppServices>, paths: Vec<String>) -> Ve
                 path,
                 size,
                 partial,
+                verified: false,
             }
         })
         .collect()
@@ -413,6 +416,7 @@ pub async fn dir_sizes_tree(
                         path: path.clone(),
                         size: known,
                         partial: !data.exact.get(path).copied().unwrap_or(false),
+                        verified: data.exact.get(path).copied().unwrap_or(false),
                     });
                 } else {
                     measured.push(path.clone());
@@ -431,6 +435,7 @@ pub async fn dir_sizes_tree(
                     path: path.clone(),
                     size: data.sizes.get(path).copied().unwrap_or(0),
                     partial: !data.exact.get(path).copied().unwrap_or(false),
+                    verified: data.exact.get(path).copied().unwrap_or(false),
                 });
             }
         }

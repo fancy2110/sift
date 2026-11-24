@@ -25,6 +25,10 @@ pub struct DirEntryDto {
     pub size: u64,
     /// Last modification time in Unix ms; `None` when unavailable.
     pub modified_ms: Option<i64>,
+    /// True when this directory's size was recursively verified (not a
+    /// derived partial sum).
+    #[serde(default)]
+    pub size_verified: bool,
 }
 
 /// One file below a directory (recursive listing for the right pane).
@@ -58,6 +62,10 @@ pub struct DirSizeDto {
     pub size: u64,
     /// True when the walk hit the per-directory cap.
     pub partial: bool,
+    /// True only for a recursive Store measurement; derived/scan values are
+    /// useful for immediate display but must not suppress a walk.
+    #[serde(default)]
+    pub verified: bool,
 }
 
 /// Upper bound on entries visited per directory during a size walk.
@@ -96,6 +104,7 @@ fn entries_with_store_sizes(
             } else {
                 entry.size
             },
+            size_verified: !entry.is_dir || folders.size(&entry.path).verified,
             modified_ms: entry.modified_ms,
         })
         .collect()
@@ -147,6 +156,13 @@ pub async fn list_dir_entries(
         entries,
         pending,
     })
+}
+
+/// Audit the Store tree against its listings and parent sums. Read-only; a
+/// mismatch is repaired by the next recompute/scan.
+#[tauri::command]
+pub fn store_validate(services: State<'_, AppServices>) -> sift_store::TreeValidation {
+    services.store.folders().validate()
 }
 
 /// One node from the Store tree, for pages that need structure rather than a
@@ -203,6 +219,7 @@ pub(crate) fn read_entries(path: &str) -> Result<DirListingDto, String> {
             is_dir,
             size,
             modified_ms,
+            size_verified: !is_dir,
         });
     }
     entries.sort_by(|a, b| {
@@ -276,7 +293,6 @@ pub(crate) fn recursive_size(path: &str) -> DirSizeDto {
     // once. Only multi-link files need tracking, which keeps this small.
     #[cfg(unix)]
     let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
-    let root = Path::new(path);
     let mut stack: Vec<PathBuf> = vec![Path::new(path).to_path_buf()];
 
     while let Some(dir) = stack.pop() {
@@ -297,9 +313,9 @@ pub(crate) fn recursive_size(path: &str) -> DirSizeDto {
                 continue;
             }
             if meta.is_dir() {
-                if sift_platform::is_same_volume(root, &item.path()) {
-                    stack.push(item.path());
-                }
+                // Include mounted volumes: Finder/du count them in the
+                // recursive total of their enclosing directory.
+                stack.push(item.path());
             } else {
                 #[cfg(unix)]
                 if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
@@ -317,6 +333,7 @@ pub(crate) fn recursive_size(path: &str) -> DirSizeDto {
         path: path.to_string(),
         size,
         partial,
+        verified: !partial,
     }
 }
 
