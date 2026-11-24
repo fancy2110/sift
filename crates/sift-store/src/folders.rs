@@ -31,8 +31,7 @@ const MAX_LISTINGS: usize = 4096;
 /// separate volume and must not be folded into /System or /System/Volumes
 /// totals; it is measured independently when opened directly.
 pub fn is_special_volume(path: &str) -> bool {
-    let path = path.trim_end_matches('/');
-    path == "/System/Volumes/Data" || path.starts_with("/System/Volumes/Data/")
+    path.trim_end_matches('/') == "/System/Volumes/Data"
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1277,6 +1276,17 @@ mod tests {
                     modified_ms: None,
                 },
             ],
+        );
+        index.apply(
+            "/System/Volumes/Data",
+            "/System/Volumes/Data",
+            vec![FolderEntry {
+                name: "file.bin".into(),
+                path: "/System/Volumes/Data/file.bin".into(),
+                is_dir: false,
+                size: 1_000,
+                modified_ms: None,
+            }],
         );
         index.apply_size("/System/Volumes/Data", 1_000, true);
         index.apply_size("/System/Volumes/Preboot", 10, true);
