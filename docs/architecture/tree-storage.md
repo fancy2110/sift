@@ -102,6 +102,20 @@ cargo run -p sift-store --release --example tree_snapshot_bench
 
 这满足“先展示列表 + 并行加载尺寸”，而不是等所有目录 walk 完才显示。
 
+## 6.2 浏览页实测（debug 构建）
+
+在 debug App 中启动后自动打开 `/System`，用 `performance.now()` 记录：
+
+| 阶段 | 结果 |
+|---|---|
+| Store/Tauri 列表 IPC 返回（pending） | **2 ms** |
+| 列表首次可见 | **4 ms** |
+| 所有子目录尺寸 batch 完成 | **1069 ms** |
+| 第二次打开 `/System` | **1 ms** |
+| 子项行合计 | **3.9 GB** |
+
+列表在 4 ms 内先出现，尺寸在后台 batch 加载；第二次打开命中的是 Store/尺寸缓存。尺寸 batch 仍受大目录 walk 影响，符合“列表优先、尺寸后补”的预期。
+
 ## 7. 写入时机
 
 - `scan_index_ingest` 完成后：`Store::snapshot_tree(true)`；
