@@ -46,6 +46,7 @@ pub use environment::{EnvironmentDoc, ENVIRONMENT_SCHEMA_VERSION};
 pub use folders::{
     FolderChange, FolderEntry, FolderIndex, ListingState, ListingView, NodeView, ScanNode,
     SizeChange, SizeMismatch, SizeView, TreeValidation, LISTING_TTL_MS, SIZE_TTL_MS,
+    is_special_volume,
 };
 pub use cleanable::{CleanableEntry, CleanableList, RecordSummary, Upsert, DEFAULT_CLEANABLE_CAP};
 pub use history::{CleanupHistory, HistoryEntry, DEFAULT_HISTORY_CAP};

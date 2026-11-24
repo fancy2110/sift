@@ -27,6 +27,14 @@ pub const SIZE_TTL_MS: i64 = 30 * 60 * 1000;
 /// Bound the read model; evict the least recently fetched folder.
 const MAX_LISTINGS: usize = 4096;
 
+/// macOS exposes the data volume inside the system volume tree. It is a
+/// separate volume and must not be folded into /System or /System/Volumes
+/// totals; it is measured independently when opened directly.
+pub fn is_special_volume(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    path == "/System/Volumes/Data" || path.starts_with("/System/Volumes/Data/")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderEntry {
@@ -265,9 +273,15 @@ impl FolderIndex {
         let sizes = self.sizes.lock().unwrap();
         let known = children
             .iter()
-            .filter_map(|child| sizes.get(child).map(|record| record.size))
+            .filter_map(|child| {
+                (!is_special_volume(child))
+                    .then(|| sizes.get(child).map(|record| record.size))
+                    .flatten()
+            })
             .sum::<u64>();
-        let has_known = children.iter().any(|child| sizes.contains_key(child));
+        let has_known = children
+            .iter()
+            .any(|child| !is_special_volume(child) && sizes.contains_key(child));
         drop(sizes);
         if has_known {
             self.apply_derived_size(requested, known);
@@ -610,6 +624,7 @@ impl FolderIndex {
             };
             let total: u64 = kids
                 .iter()
+                .filter(|child| !is_special_volume(child))
                 .filter_map(|child| sizes.get(child).map(|record| record.size))
                 .sum();
             sizes.insert(
@@ -648,11 +663,15 @@ impl FolderIndex {
             let Some(kids) = children.get(&parent) else {
                 continue;
             };
-            if !kids.iter().any(|child| sizes.contains_key(child)) {
+            if !kids
+                .iter()
+                .any(|child| !is_special_volume(child) && sizes.contains_key(child))
+            {
                 continue;
             }
             let total: u64 = kids
                 .iter()
+                .filter(|child| !is_special_volume(child))
                 .filter_map(|child| sizes.get(child).map(|record| record.size))
                 .sum();
             let changed = sizes
@@ -715,6 +734,9 @@ impl FolderIndex {
             let mut child_sum = 0u64;
             let mut missing = 0usize;
             for child in kids {
+                if is_special_volume(child) {
+                    continue;
+                }
                 match sizes.get(child) {
                     Some(record) => child_sum = child_sum.saturating_add(record.size),
                     None => missing += 1,
@@ -1231,6 +1253,36 @@ mod tests {
         assert!(!parent.exact);
         assert!(receiver.try_recv().is_ok());
         assert!(receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn the_data_volume_is_excluded_from_parent_sums() {
+        let index = FolderIndex::default();
+        index.apply(
+            "/System/Volumes",
+            "/System/Volumes",
+            vec![
+                FolderEntry {
+                    name: "Data".into(),
+                    path: "/System/Volumes/Data".into(),
+                    is_dir: true,
+                    size: 0,
+                    modified_ms: None,
+                },
+                FolderEntry {
+                    name: "Preboot".into(),
+                    path: "/System/Volumes/Preboot".into(),
+                    is_dir: true,
+                    size: 0,
+                    modified_ms: None,
+                },
+            ],
+        );
+        index.apply_size("/System/Volumes/Data", 1_000, true);
+        index.apply_size("/System/Volumes/Preboot", 10, true);
+        assert_eq!(index.size("/System/Volumes").size, Some(10));
+        assert_eq!(index.size("/System/Volumes/Data").size, Some(1_000));
+        assert!(index.validate().is_consistent());
     }
 
     #[test]

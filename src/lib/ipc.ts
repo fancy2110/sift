@@ -137,6 +137,8 @@ export interface DirEntry {
   modifiedMs?: number | null;
   /** Directory total is recursively verified, not a derived partial sum. */
   sizeVerified?: boolean;
+  /** Embedded independent volume; excluded from parent totals. */
+  special?: boolean;
 }
 
 export interface DirSize {

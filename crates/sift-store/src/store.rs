@@ -191,6 +191,15 @@ impl Store {
         if let Some(paths) = &store.paths {
             match store.folders.restore_from(&paths.tree_snapshot()) {
                 Ok(true) => {
+                    let report = store.folders.validate();
+                    if !report.is_consistent() {
+                        eprintln!(
+                            "tree snapshot inconsistent: {} listing mismatch(es), {} size mismatch(es); recomputing",
+                            report.listing_mismatches,
+                            report.size_mismatches.len()
+                        );
+                        store.folders.recompute_all_sizes();
+                    }
                     // The compact snapshot supersedes the legacy monolithic
                     // JSON; remove the old file only after a successful restore.
                     let _ = std::fs::remove_file(paths.root().join("size-tree.json"));

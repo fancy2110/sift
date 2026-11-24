@@ -497,6 +497,7 @@ export const hi: Record<string, string> = {
   'explorer.filesEmpty': 'इस फ़ोल्डर में कोई फ़ाइल नहीं',
   'explorer.pickFolder': 'फ़ाइलें देखने के लिए बाएँ से फ़ोल्डर चुनें',
   'explorer.folderBadge': 'फ़ोल्डर',
+  'explorer.independentVolume': 'स्वतंत्र वॉल्यूम',
   'explorer.aiReading': 'पढ़ा जा रहा है…',
   'explorer.verdictSafe': 'हटा सकते हैं',
   'explorer.verdictCaution': 'सावधान',
