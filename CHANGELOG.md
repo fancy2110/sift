@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-26
+
+### Added
+
+- Routine editing: the composer prefills title, cadence and paths, and saving now updates the routine in place under the same id instead of creating a duplicate row. The id, source prefix (`custom:` / `ai:` / `default:`), enabled state, run mode and `average_bytes` size history are all preserved; kind-based routines without paths can only change title and cadence.
+- `save_routine_draft` accepts an optional `id` for the in-place update, with the edit logic extracted into pure `hits_protected` / `apply_routine_edit` helpers.
+- The browser mock backend mirrors the same-id update semantics, keeping enabled state, mode, kind and size history and rejecting unknown ids with `err.routineNotFound`.
+- Two new `ai_routine` unit tests cover state/size-history retention on edit and kind-based routine edits keeping their family.
+
+### Changed
+
+- Routine and cleanup-rule row "more" menus now render through one shared `TaskMoreMenu` component with identical items, order, icons and disabled states: Run now / Edit / Delete, with Delete kept in the danger style. When `enabled=false`, "Run now" is disabled on both rows.
+- Behavior change: the routine row menu no longer shows the "switch auto/confirm mode" entry so both menus expose the exact same item set. The backend `toggle_routine_mode` command, store method and i18n keys are retained; Auto mode is still not consumed by any scheduler.
+
+### Accessibility
+
+- The menu popover now exposes `menu` / `menuitem` roles, `aria-disabled`, `tabindex`, focus on open and Escape dismissal.
+- The rule card outer `role="button"` div is now a real `<button>`, fixing the switch and the menu being swallowed as accessibility children of the card.
+
+### Known limitations
+
+- The IPC layering difference is unchanged: `run_routine` rejects disabled routines with `err.routineDisabled`, while `run_cleanup_rule` does not check `enabled`; only the front end gates "Run now" for rules.
+- Pre-existing behavior preserved: editing a rule through the composer still persists `enabled: true`, so a disabled rule is re-enabled when it is edited.
+
 ## [0.6.0] - 2026-11-24
 
 ### Added
