@@ -98,6 +98,20 @@ impl AppServices {
             .map(|handle| handle.is_running())
             .unwrap_or(false)
     }
+
+    /// Test-only construction over an explicit store (typically
+    /// [`Store::in_memory`]), so tests never open the platform data directory.
+    #[cfg(test)]
+    pub(crate) fn with_store_for_test(store: Arc<Store>) -> Self {
+        Self {
+            store,
+            monitor: Mutex::new(None),
+            warnings: Mutex::new(Vec::new()),
+            environment_dirty: Arc::new(AtomicBool::new(false)),
+            last_report: Mutex::new(HashMap::new()),
+            cleanup_cancel: Mutex::new(None),
+        }
+    }
 }
 
 impl Default for AppServices {
