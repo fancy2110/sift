@@ -9,13 +9,20 @@
   import { store } from '../store.svelte';
   import { t } from '../i18n.svelte';
   import { pickDirectory } from '../dialog';
-  import type { AiRoutineDraft } from '../types';
+  import type { AiRoutineDraft, Routine } from '../types';
   import type { CleanupRule } from '../ipc';
+
+  /**
+   * What the composer is editing. `hadPaths` remembers whether the original
+   * routine owned explicit paths: kind-based routines have none, so their
+   * edit must not force the path picker or silently convert their family.
+   */
+  type EditTarget = { kind: 'rule' | 'routine'; id: string; hadPaths: boolean };
 
   let open = $state(false);
   let mode = $state<'manual' | 'ai'>('manual');
   let busy = $state(false);
-  let editingRuleId = $state('');
+  let editing = $state<EditTarget | null>(null);
 
   let title = $state('');
   let cadence = $state('routine.cadence.weekly');
@@ -44,16 +51,43 @@
     return t(value.startsWith('routine.') ? value : `routine.${value}`);
   }
 
+  /** Map a stored cadence (legacy `cadence.*` included) to a select option. */
+  function cadenceSelectValue(value: string): string {
+    const normalized = value.startsWith('routine.') ? value : `routine.${value}`;
+    return [
+      'routine.cadence.daily',
+      'routine.cadence.weekly',
+      'routine.cadence.monthly'
+    ].includes(normalized)
+      ? normalized
+      : 'routine.cadence.weekly';
+  }
+
   /** Pre-fill the form with an existing rule and switch to update mode. */
   export function editRule(rule: CleanupRule) {
     mode = 'manual';
     busy = false;
-    editingRuleId = rule.id;
+    editing = { kind: 'rule', id: rule.id, hadPaths: true };
     title = rule.name;
     cadence = 'routine.cadence.daily';
     pattern = rule.pattern;
     olderThanDays = rule.olderThanDays;
     manualPaths = [rule.dir];
+    pathInput = '';
+    draft = null;
+    open = true;
+  }
+
+  /** Pre-fill the form with an existing routine; saving updates the same id. */
+  export function editRoutine(routine: Routine) {
+    mode = 'manual';
+    busy = false;
+    editing = { kind: 'routine', id: routine.id, hadPaths: routine.paths.length > 0 };
+    title = routine.title;
+    cadence = cadenceSelectValue(routine.cadence);
+    pattern = '';
+    olderThanDays = 0;
+    manualPaths = [...routine.paths];
     pathInput = '';
     draft = null;
     open = true;
@@ -66,19 +100,31 @@
       editRule(store.editRuleRequest);
       store.editRuleRequest = null;
     }
+    if (store.editRoutineRequest) {
+      editRoutine(store.editRoutineRequest);
+      store.editRoutineRequest = null;
+    }
   });
 
   onMount(() => {
-    const handler = (event: Event) => {
+    const ruleHandler = (event: Event) => {
       const rule = (event as CustomEvent<CleanupRule>).detail;
       if (rule) editRule(rule);
     };
-    window.addEventListener('sift:edit-rule', handler);
-    return () => window.removeEventListener('sift:edit-rule', handler);
+    const routineHandler = (event: Event) => {
+      const routine = (event as CustomEvent<Routine>).detail;
+      if (routine) editRoutine(routine);
+    };
+    window.addEventListener('sift:edit-rule', ruleHandler);
+    window.addEventListener('sift:edit-routine', routineHandler);
+    return () => {
+      window.removeEventListener('sift:edit-rule', ruleHandler);
+      window.removeEventListener('sift:edit-routine', routineHandler);
+    };
   });
 
   function openDialog() {
-    editingRuleId = '';
+    editing = null;
     mode = 'manual';
     busy = false;
     title = '';
@@ -113,7 +159,9 @@
   }
 
   /** With a pattern the entry becomes a rule (daily, directory + regex);
-   *  without one it is a path routine with the chosen cadence. */
+   *  without one it is a path routine with the chosen cadence. While editing,
+   *  the id of the entity being edited is passed through so the backend
+   *  updates the same row instead of creating a duplicate. */
   async function persist(
     titleValue: string,
     cadenceValue: string,
@@ -123,7 +171,7 @@
   ) {
     if (patternValue.trim()) {
       return store.saveCleanupRuleDraft({
-        id: editingRuleId,
+        id: editing?.kind === 'rule' ? editing.id : '',
         name: titleValue,
         dir: paths[0],
         pattern: patternValue.trim(),
@@ -131,11 +179,19 @@
         enabled: true
       });
     }
-    return store.saveRoutineDraft({ title: titleValue, cadence: cadenceValue, paths });
+    return store.saveRoutineDraft({
+      id: editing?.kind === 'routine' ? editing.id : null,
+      title: titleValue,
+      cadence: cadenceValue,
+      paths
+    });
   }
 
+  /** Kind-based routines own no paths; only their edit may save with none. */
+  const needsPaths = $derived(editing?.kind !== 'routine' || editing.hadPaths);
+
   async function saveManual() {
-    if (busy || !title.trim() || manualPaths.length === 0) return;
+    if (busy || !title.trim() || (needsPaths && manualPaths.length === 0)) return;
     busy = true;
     const saved = await persist(title.trim(), cadence, manualPaths);
     busy = false;
@@ -153,11 +209,14 @@
   async function saveDraft() {
     if (!draft || busy) return;
     busy = true;
+    // A routine edit must stay a routine: never let a generated pattern turn
+    // the save into a separate rule row.
+    const patternValue = editing?.kind === 'routine' ? '' : draft.pattern;
     const saved = await persist(
       draft.title,
       draft.cadence,
       draft.paths,
-      draft.pattern,
+      patternValue,
       draft.olderThanDays
     );
     busy = false;
@@ -169,7 +228,7 @@
   <Icon name="play" size={10} /> {t('routines.addTask')}
 </button>
 
-{#if open || store.editRuleRequest}
+{#if open || store.editRuleRequest || store.editRoutineRequest}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="rc-overlay" role="presentation" use:portal onclick={close}>
     <div
@@ -182,7 +241,7 @@
     >
       <div class="rc-head">
         <h3 class="rc-title">
-          {editingRuleId ? t('settings.edit') : t('routines.addTask')}
+          {editing ? t('settings.edit') : t('routines.addTask')}
         </h3>
         <button type="button" class="rc-icon" aria-label={t('settings.ruleCancel')} onclick={close}>
           <Icon name="x" size={13} />
@@ -228,14 +287,18 @@
           </select>
         </label>
 
-        <label class="rc-field">
-          <span>{t('settings.rulePattern')} — {t('routines.optional')}</span>
-          <input class="rc-input" bind:value={pattern} placeholder={t('settings.rulePatternPh')} spellcheck="false" />
-        </label>
-        <label class="rc-field rc-field-inline">
-          <span>{t('settings.ruleDaysLabel')}</span>
-          <input type="number" min="0" max="3650" bind:value={olderThanDays} />
-        </label>
+        {#if editing?.kind !== 'routine'}
+          <!-- Rules own the regex filter; routines have no pattern, so it is
+               hidden while editing one to keep the save on the same entity. -->
+          <label class="rc-field">
+            <span>{t('settings.rulePattern')} — {t('routines.optional')}</span>
+            <input class="rc-input" bind:value={pattern} placeholder={t('settings.rulePatternPh')} spellcheck="false" />
+          </label>
+          <label class="rc-field rc-field-inline">
+            <span>{t('settings.ruleDaysLabel')}</span>
+            <input type="number" min="0" max="3650" bind:value={olderThanDays} />
+          </label>
+        {/if}
 
         <p class="rc-label">{t('routines.pathsLabel')}</p>
         <div class="rc-paths">
@@ -283,7 +346,7 @@
           <button
             type="button"
             class="rc-btn rc-primary"
-            disabled={busy || !title.trim() || manualPaths.length === 0}
+            disabled={busy || !title.trim() || (needsPaths && manualPaths.length === 0)}
             onclick={saveManual}
           >
             {t('routines.saveTask')}

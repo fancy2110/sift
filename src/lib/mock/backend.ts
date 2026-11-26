@@ -1020,6 +1020,24 @@ export function createMockBackend(bus: EventBus): MockBackend {
           const title = String(args.title ?? '');
           const cadence = String(args.cadence ?? 'cadence.weekly');
           const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
+          const editId = typeof args.id === 'string' && args.id ? args.id : null;
+          if (editId) {
+            // Mirror the Tauri backend: update the same row, keeping id,
+            // enabled state, run mode, kind and size history untouched.
+            const existing = state.routines.find((r) => r.id === editId);
+            if (!existing) {
+              reject(new Error('err.routineNotFound'));
+              break;
+            }
+            if (paths.length > 0) {
+              existing.paths = paths;
+              existing.kind = 'customPath';
+            }
+            existing.title = title;
+            existing.cadence = cadence;
+            resolve(undefined as T);
+            break;
+          }
           state.routines = [
             ...state.routines,
             {

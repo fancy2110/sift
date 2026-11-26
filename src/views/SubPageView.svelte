@@ -2,32 +2,33 @@
   import Icon from '../lib/components/Icon.svelte';
   import LocationPicker from '../lib/components/LocationPicker.svelte';
   import RoutineComposer from '../lib/components/RoutineComposer.svelte';
+  import TaskMoreMenu from '../lib/components/TaskMoreMenu.svelte';
   import ExplorerColumns from '../lib/components/ExplorerColumns.svelte';
   import { store } from '../lib/store.svelte';
   import { formatSize } from '../lib/format';
-  import type { Node } from '../lib/types';
+  import type { Node, Routine } from '../lib/types';
   import type { CleanupRule } from '../lib/ipc';
   type SubTab = 'smart' | 'explorer' | 'history' | 'routines';
   import { onMount } from 'svelte';
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { t, tr } from '../lib/i18n.svelte';
-  import { clickOutside } from '../lib/actions';
   import { kindTitle, reasonText, impactText, cleanupMethodText, cleanupCommandText } from '../lib/reasons';
 
   onMount(() => {
     void store.loadCleanupRules();
   });
 
-  let composerRef = $state<{ editRule: (rule: CleanupRule) => void } | null>(null);
-  /** Routine id whose "more" menu is open. */
-  let openMenu = $state<string | null>(null);
-
   /** One entry point for editing a rule, used by the menu and the card. */
   function openRuleEditor(rule: CleanupRule) {
-    openMenu = null;
     store.requestEditRule(rule);
     window.dispatchEvent(new CustomEvent('sift:edit-rule', { detail: rule }));
+  }
+
+  /** One entry point for editing a routine; the composer prefills every field. */
+  function openRoutineEditor(routine: Routine) {
+    store.requestEditRoutine(routine);
+    window.dispatchEvent(new CustomEvent('sift:edit-routine', { detail: routine }));
   }
 
   function selectAllSmart() {
@@ -357,7 +358,7 @@
             <div class="rt-block-head">
               <h3 class="rt-block-title">{t('routines.tasksTitle')}</h3>
               <span class="rt-count chip">{store.routines.length + store.cleanupRules.length}</span>
-              <RoutineComposer bind:this={composerRef} />
+              <RoutineComposer />
             </div>
             {#each store.routines as r, i (r.id)}
               <article class="rt-card" class:rt-card-off={!r.enabled} in:listIn={{ index: i }}>
@@ -391,93 +392,38 @@
                   >
                     <span class="switch-knob"></span>
                   </button>
-                  <div class="rt-more" use:clickOutside={() => (openMenu = null)}>
-                    <button
-                      type="button"
-                      class="rt-btn"
-                      aria-haspopup="menu"
-                      aria-expanded={openMenu === r.id}
-                      aria-label={t('routines.moreAria', [r.title])}
-                      title={t('routines.more')}
-                      onclick={() => (openMenu = openMenu === r.id ? null : r.id)}
-                    >
-                      <Icon name="sliders" size={12} /> {t('routines.more')}
-                    </button>
-                    {#if openMenu === r.id}
-                      <div class="rt-menu" role="menu">
-                        <button
-                          type="button"
-                          role="menuitem"
-                          class="rt-menu-item"
-                          disabled={!r.enabled}
-                          onclick={() => {
-                            openMenu = null;
-                            void store.runSavedRoutine(r.id);
-                          }}
-                        >
-                          <Icon name="play" size={11} /> {t('routines.runNow')}
-                        </button>
-                        {#if !r.paths.length}
-                          <button
-                            type="button"
-                            role="menuitem"
-                            class="rt-menu-item"
-                            onclick={() => {
-                              openMenu = null;
-                              void store.toggleSavedRoutineMode(r.id);
-                            }}
-                          >
-                            <Icon name="refresh" size={11} /> {t('settings.toggleMode')}
-                          </button>
-                        {/if}
-                        <button
-                          type="button"
-                          role="menuitem"
-                          class="rt-menu-item rt-menu-danger"
-                          onclick={() => {
-                            openMenu = null;
-                            void store.deleteSavedRoutine(r.id);
-                          }}
-                        >
-                          <Icon name="trash" size={11} /> {t('settings.delete')}
-                        </button>
-                      </div>
-                    {/if}
-                  </div>
+                  <TaskMoreMenu
+                    entityTitle={r.title}
+                    enabled={r.enabled}
+                    onRun={() => void store.runSavedRoutine(r.id)}
+                    onEdit={() => openRoutineEditor(r)}
+                    onDelete={() => void store.deleteSavedRoutine(r.id)}
+                  />
                 </div>
               </article>
             {/each}
 
             {#each store.cleanupRules as rule (rule.id)}
-              <div
-                class="rt-card"
-                class:rt-card-off={!rule.enabled}
-                role="button"
-                tabindex="0"
-                title={t('settings.edit')}
-                onclick={(event) => {
-                  if ((event.target as HTMLElement).closest('.switch, .rt-more')) return;
-                  openRuleEditor(rule);
-                }}
-                onkeydown={(event) => {
-                  if (event.key === 'Enter') openRuleEditor(rule);
-                }}
-              >
-                <span class="rt-card-icon">
-                  <Icon name="filter" size={14} />
-                </span>
-                <div class="rt-card-body">
-                  <div class="rt-card-top">
-                    <p class="rt-card-name">{rule.name}</p>
-                    <span class="rt-chip">{t('routines.ruleBadge')}</span>
+              <div class="rt-card" class:rt-card-off={!rule.enabled}>
+                <!-- A real button (not role="button" on the card) so the switch
+                     and menu stay independent accessibility nodes. -->
+                <button type="button" class="rt-card-main" title={t('settings.edit')} onclick={() => openRuleEditor(rule)}>
+                  <span class="rt-card-icon">
+                    <Icon name="filter" size={14} />
+                  </span>
+                  <div class="rt-card-body">
+                    <div class="rt-card-top">
+                      <p class="rt-card-name">{rule.name}</p>
+                      <span class="rt-chip">{t('routines.ruleBadge')}</span>
+                    </div>
+                    <p class="rt-card-meta" title={`${rule.dir} · ${rule.pattern}`}>
+                      {rule.dir} · <code>{rule.pattern}</code>
+                      {#if rule.olderThanDays > 0}
+                        · {t('settings.ruleDays', [String(rule.olderThanDays)])}
+                      {/if}
+                    </p>
                   </div>
-                  <p class="rt-card-meta" title={`${rule.dir} · ${rule.pattern}`}>
-                    {rule.dir} · <code>{rule.pattern}</code>
-                    {#if rule.olderThanDays > 0}
-                      · {t('settings.ruleDays', [String(rule.olderThanDays)])}
-                    {/if}
-                  </p>
-                </div>
+                </button>
                 <div class="rt-card-actions">
                   <button
                     type="button"
@@ -491,57 +437,13 @@
                   >
                     <span class="switch-knob"></span>
                   </button>
-                  <div class="rt-more" use:clickOutside={() => (openMenu = null)}>
-                    <button
-                      type="button"
-                      class="rt-btn"
-                      aria-haspopup="menu"
-                      aria-expanded={openMenu === `rule:${rule.id}`}
-                      aria-label={t('routines.moreAria', [rule.name])}
-                      title={t('routines.more')}
-                      onclick={() =>
-                        (openMenu = openMenu === `rule:${rule.id}` ? null : `rule:${rule.id}`)}
-                    >
-                      <Icon name="sliders" size={12} /> {t('routines.more')}
-                    </button>
-                    {#if openMenu === `rule:${rule.id}`}
-                      <div class="rt-menu" role="menu">
-                        <button
-                          type="button"
-                          role="menuitem"
-                          class="rt-menu-item"
-                          disabled={!rule.enabled}
-                          onclick={() => {
-                            openMenu = null;
-                            void store.runCleanupRule(rule);
-                          }}
-                        >
-                          <Icon name="play" size={11} /> {t('routines.runNow')}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          class="rt-menu-item"
-                          onclick={() => {
-                            openRuleEditor(rule);
-                          }}
-                        >
-                          <Icon name="sliders" size={11} /> {t('settings.edit')}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          class="rt-menu-item rt-menu-danger"
-                          onclick={() => {
-                            openMenu = null;
-                            void store.removeCleanupRule(rule.id);
-                          }}
-                        >
-                          <Icon name="trash" size={11} /> {t('settings.delete')}
-                        </button>
-                      </div>
-                    {/if}
-                  </div>
+                  <TaskMoreMenu
+                    entityTitle={rule.name}
+                    enabled={rule.enabled}
+                    onRun={() => void store.runCleanupRule(rule)}
+                    onEdit={() => openRuleEditor(rule)}
+                    onDelete={() => void store.removeCleanupRule(rule.id)}
+                  />
                 </div>
               </div>
             {/each}
@@ -1100,47 +1002,6 @@
   .switch-on .switch-knob {
     transform: translateX(14px);
   }
-  .rt-more {
-    position: relative;
-  }
-  .rt-menu {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 6px);
-    z-index: 20;
-    min-width: 150px;
-    padding: 5px;
-    border-radius: 10px;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    box-shadow: 0 14px 30px -14px rgb(0 0 0 / 0.45);
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .rt-menu-item {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 6px 8px;
-    border: none;
-    border-radius: 7px;
-    background: transparent;
-    color: var(--color-fg);
-    font-size: 12px;
-    text-align: left;
-    cursor: pointer;
-  }
-  .rt-menu-item:hover:not(:disabled) {
-    background: color-mix(in oklch, var(--color-surface-2) 70%, transparent);
-  }
-  .rt-menu-item:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-  .rt-menu-danger {
-    color: var(--color-danger);
-  }
   .rt-card-off {
     opacity: 0.55;
   }
@@ -1157,6 +1018,27 @@
       color-mix(in oklch, var(--color-surface) 96%, var(--color-sheen) 1%),
       color-mix(in oklch, var(--color-surface) 98%, var(--color-shadow) 4%)
     );
+  }
+  /* Clickable rule-card body: a real button so nested controls stay their
+     own accessibility nodes (the old role="button" wrapper swallowed them). */
+  .rt-card-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .rt-card-main:focus-visible {
+    outline: 2px solid var(--color-violet);
+    outline-offset: 3px;
+    border-radius: 8px;
   }
   .rt-card-icon {
     display: inline-flex;
@@ -1230,25 +1112,6 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-  }
-  .rt-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 27px;
-    padding: 0 10px;
-    border-radius: 8px;
-    border: 1px solid var(--color-border-strong);
-    background: transparent;
-    color: var(--color-muted);
-    font-size: 11px;
-    font-weight: 560;
-    cursor: default;
-    white-space: nowrap;
-  }
-  .rt-btn:hover {
-    color: var(--color-fg);
-    border-color: var(--color-faint);
   }
   .rt-empty {
     margin: 6px 0 10px;
