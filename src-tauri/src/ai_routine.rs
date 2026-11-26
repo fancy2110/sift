@@ -275,39 +275,95 @@ fn ai_routine_blocking(
     }
 }
 
-/// Save a confirmed draft (manual or AI-generated). Always approve-before-run.
+/// Whether any `path` equals or sits inside a protected root.
+fn hits_protected(protected: &[String], paths: &[String]) -> bool {
+    paths.iter().any(|path| {
+        protected.iter().any(|root| {
+            let root = root.trim_end_matches('/');
+            path == root || path.starts_with(&format!("{root}/"))
+        })
+    })
+}
+
+/// Apply a composer edit to an existing routine. The row id (with its
+/// `custom:`/`ai:`/`default:` source prefix), enabled state, run mode and
+/// size history stay untouched — only the user-visible configuration moves.
+/// Kind-based routines own no paths; an empty path list leaves their family
+/// token and targets intact so their edit can only change title and cadence.
+fn apply_routine_edit(
+    entry: &mut sift_store::RoutineEntry,
+    title: &str,
+    cadence: &str,
+    paths: Vec<String>,
+) {
+    entry.title = title.to_string();
+    entry.cadence = normalize_cadence(cadence);
+    if !paths.is_empty() {
+        entry.paths = paths;
+        entry.kind = crate::analyze::CUSTOM_PATH_KIND.to_string();
+    }
+}
+
+/// Save a confirmed draft (manual or AI-generated). New rows always start
+/// approve-before-run. With an `id` the command updates the existing routine
+/// in place instead of creating a row, preserving its id/source prefix,
+/// enabled state and run mode.
 #[tauri::command]
 pub fn save_routine_draft(
     services: State<'_, AppServices>,
     title: String,
     paths: Vec<String>,
     cadence: String,
+    id: Option<String>,
 ) -> Result<(), String> {
-    let paths = validated_paths(&paths);
-    if paths.is_empty() {
-        return Err("err.aiRoutineNoPaths".into());
-    }
     let title = title.trim();
     if title.is_empty() {
         return Err("err.aiRoutineTitle".into());
     }
+
+    if let Some(id) = id.as_deref().filter(|id| !id.is_empty()) {
+        let mut entry = services
+            .store
+            .routines()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| "err.routineNotFound".to_string())?;
+        let validated = validated_paths(&paths);
+        if validated.is_empty() {
+            // Kind-based routines have no editable paths; only title/cadence move.
+            if entry.paths.is_empty() {
+                apply_routine_edit(&mut entry, title, &cadence, Vec::new());
+                services.store.upsert_routine(entry);
+                let _ = services.store.flush_if_dirty();
+                return Ok(());
+            }
+            return Err("err.aiRoutineNoPaths".into());
+        }
+        let protected = services.store.settings().monitor.protected_paths.clone();
+        if hits_protected(&protected, &validated) {
+            return Err("err.protectedPath".to_string());
+        }
+        apply_routine_edit(&mut entry, title, &cadence, validated);
+        services.store.upsert_routine(entry);
+        let _ = services.store.flush_if_dirty();
+        return Ok(());
+    }
+
+    let paths = validated_paths(&paths);
+    if paths.is_empty() {
+        return Err("err.aiRoutineNoPaths".into());
+    }
     let protected = services.store.settings().monitor.protected_paths.clone();
-    let hits_protected = paths.iter().any(|path| {
-        protected.iter().any(|root| {
-            let root = root.trim_end_matches('/');
-            path == root || path.starts_with(&format!("{root}/"))
-        })
-    });
-    if hits_protected {
+    if hits_protected(&protected, &paths) {
         return Err("err.protectedPath".to_string());
     }
-    let id = format!(
+    let new_id = format!(
         "ai:{}",
         sift_core::NodeKey::from_path(Path::new(&paths[0]))
     );
     services.store.upsert_routine(sift_store::RoutineEntry {
         enabled: true,
-        id,
+        id: new_id,
         title: title.to_string(),
         kind: crate::analyze::CUSTOM_PATH_KIND.to_string(),
         cadence: normalize_cadence(&cadence),
@@ -416,6 +472,57 @@ mod tests {
     #[test]
     fn rejects_a_reply_without_json() {
         assert!(parse_draft("sorry, I cannot", "prompt").is_err());
+    }
+
+    #[test]
+    fn routine_edit_keeps_id_state_and_size_history() {
+        let mut entry = sift_store::RoutineEntry {
+            id: "default:downloads".to_string(),
+            title: "Downloads".to_string(),
+            kind: crate::analyze::CUSTOM_PATH_KIND.to_string(),
+            cadence: "routine.cadence.weekly".to_string(),
+            average_bytes: 4_242,
+            mode: sift_store::RoutineMode::Auto,
+            paths: vec!["/old/path".to_string()],
+            enabled: false,
+        };
+        apply_routine_edit(
+            &mut entry,
+            "Renamed",
+            "cadence.daily",
+            vec!["/new/path".to_string()],
+        );
+        // Identity and everything the composer does not edit are preserved.
+        assert_eq!(entry.id, "default:downloads");
+        assert!(!entry.enabled);
+        assert_eq!(entry.mode, sift_store::RoutineMode::Auto);
+        assert_eq!(entry.average_bytes, 4_242);
+        // The editable configuration moved.
+        assert_eq!(entry.title, "Renamed");
+        assert_eq!(entry.cadence, "routine.cadence.daily");
+        assert_eq!(entry.paths, vec!["/new/path".to_string()]);
+        assert_eq!(entry.kind, crate::analyze::CUSTOM_PATH_KIND);
+    }
+
+    #[test]
+    fn kind_based_routine_edit_without_paths_keeps_family() {
+        let mut entry = sift_store::RoutineEntry {
+            id: "packageInstaller:setup".to_string(),
+            title: "Installers".to_string(),
+            kind: "packageInstaller".to_string(),
+            cadence: "routine.cadence.weekly".to_string(),
+            average_bytes: 99,
+            mode: sift_store::RoutineMode::Approve,
+            paths: Vec::new(),
+            enabled: true,
+        };
+        apply_routine_edit(&mut entry, "Renamed", "monthly", Vec::new());
+        assert_eq!(entry.id, "packageInstaller:setup");
+        assert_eq!(entry.kind, "packageInstaller");
+        assert!(entry.paths.is_empty());
+        assert_eq!(entry.title, "Renamed");
+        assert_eq!(entry.cadence, "routine.cadence.monthly");
+        assert!(entry.enabled);
     }
 
     #[test]

@@ -233,6 +233,8 @@ class AppStore {
   cleanupRules = $state<CleanupRule[]>([]);
   /** Set by any view to open the composer on an existing rule. */
   editRuleRequest = $state<CleanupRule | null>(null);
+  /** Set by any view to open the composer on an existing routine. */
+  editRoutineRequest = $state<Routine | null>(null);
 
   /** Analyzed candidates from the backend. */
   findings = $state<Finding[]>([]);
@@ -1384,6 +1386,11 @@ class AppStore {
     this.editRuleRequest = rule;
   }
 
+  /** Ask the composer to open for editing one routine; the component clears it. */
+  requestEditRoutine(routine: Routine) {
+    this.editRoutineRequest = routine;
+  }
+
   async toggleCleanupRule(rule: CleanupRule) {
     await this.saveCleanupRuleDraft({ ...rule, enabled: !rule.enabled });
   }
@@ -1837,6 +1844,7 @@ class AppStore {
   }
 
   async saveRoutineDraft(draft: {
+    id?: string | null;
     title: string;
     cadence: string;
     paths: string[];

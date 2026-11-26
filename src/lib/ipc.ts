@@ -552,13 +552,19 @@ export function aiRoutine(prompt: string): Promise<AiRoutineDraft> {
   return call<AiRoutineDraft>('ai_routine', { prompt });
 }
 
-/** Save a confirmed draft (manual or AI); always starts in approve mode. */
+/**
+ * Save a confirmed draft (manual or AI); new rows always start in approve
+ * mode. With an `id` the backend updates that routine in place, preserving
+ * its id/source prefix, enabled state and run mode.
+ */
 export function saveRoutineDraft(draft: {
+  id?: string | null;
   title: string;
   cadence: string;
   paths: string[];
 }): Promise<void> {
   return call<void>('save_routine_draft', {
+    id: draft.id ?? null,
     title: draft.title,
     cadence: draft.cadence,
     paths: draft.paths
