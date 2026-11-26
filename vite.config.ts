@@ -20,6 +20,10 @@ export default defineConfig({
       ignored: ['**/src-tauri/**']
     }
   },
+  preview: {
+    port: Number(process.env.VITE_PREVIEW_PORT ?? 5177),
+    strictPort: true
+  },
   // Produce reasonable bundles across platforms.
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
   build: {

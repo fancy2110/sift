@@ -9,16 +9,24 @@ export default defineConfig({
   plugins: [tailwindcss(), svelte()],
   clearScreen: false,
   server: {
-    port: 5173,
+    port: Number(process.env.VITE_PORT ?? 5175),
     strictPort: true,
     host: host || false,
     hmr: host
-      ? { protocol: 'ws', host, port: 5174 }
+      ? {
+          protocol: 'ws',
+          host,
+          port: Number(process.env.VITE_HMR_PORT ?? 5176)
+        }
       : undefined,
     watch: {
       // Don't watch the Rust backend.
       ignored: ['**/src-tauri/**']
     }
+  },
+  preview: {
+    port: Number(process.env.VITE_PREVIEW_PORT ?? 5178),
+    strictPort: true
   },
   // Produce reasonable bundles across platforms.
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
